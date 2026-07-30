@@ -41,14 +41,26 @@ data/               gitignored: snapshots, sqlite db
 venv\Scripts\python -m pytest         # tests
 venv\Scripts\python -m ruff check .   # lint
 venv\Scripts\python -m ruff format .  # format
-venv\Scripts\python -m optscan        # boot the app
+venv\Scripts\python -m optscan status # market state, watchlist, recent captures
 ```
+
+## Conventions worth knowing before editing
+- None means unknown, 0.0 means the vendor said zero. Never collapse the two.
+- Timestamps are timezone aware UTC everywhere. Naive datetimes are rejected, not guessed.
+- The session a capture belongs to comes from the market calendar, never from the
+  machine's date.
+- Tests never touch the network. `tests/fixtures/spy_chain_snapshot.json` is a real
+  captured chain, and `FakeProvider` in conftest drives the job offline.
 
 ## Non-goals
 - No auto-execution of trades. This tool ranks and displays, it does not place orders.
 - No claims of predictive accuracy that have not been validated in Phase 8.
 
 ## Current phase
-Phase 0 complete. Phase 1 (data layer) is next: providers/base.py and the pydantic
-models first, reviewed by hand before any implementation. Do not start work on a
-later phase without asking.
+Phase 1 complete: provider interface, yfinance adapter, models, parquet snapshot
+storage, sqlite watchlist and run manifest, daily snapshot job.
+
+Phase 2 (analytics core) is next, and it is the hardest correctness work in the
+project. Tests with hand verified expected values come before implementations, and
+greeks get validated against a public BSM calculator to four decimals. Do not start
+work on a later phase without asking.

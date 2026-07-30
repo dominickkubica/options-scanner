@@ -11,6 +11,12 @@ dependencies = [
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
     "structlog>=24.1",
+    # Phase 1: data layer
+    "yfinance>=0.2.40",
+    "pandas>=2.2",
+    "pyarrow>=16.0",
+    "duckdb>=1.0",
+    "pandas-market-calendars>=4.4",
 ]
 
 [project.optional-dependencies]
@@ -50,8 +56,15 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["PLR2004"]                       # magic values are the point of a test
+"tests/*" = [
+    "PLR2004",  # magic values are the point of a test
+    "PLC0415",  # a local import keeps a test's setup next to the assertion it serves
+]
 "src/optscan/providers/*" = ["TID251"]        # the one place vendor SDKs are allowed
+# Deferred imports, deliberately: the CLI stays fast to start and a broker SDK is only
+# imported by someone who configured that broker.
+"src/optscan/cli.py" = ["PLC0415"]
+"src/optscan/providers/__init__.py" = ["PLC0415"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "yfinance".msg = "Market data vendors are only imported inside optscan.providers."

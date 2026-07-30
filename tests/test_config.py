@@ -59,6 +59,14 @@ def test_absurd_risk_free_rate_fails_loudly(clean_env: None) -> None:
         Settings(_env_file=None, risk_free_rate=4.3)  # 430 percent, almost certainly a typo
 
 
+def test_blank_credentials_count_as_unset(clean_env: None) -> None:
+    """.env.example ships these keys empty, and empty must not read as configured."""
+    settings = Settings(_env_file=None, tradier_token="", schwab_client_id="   ")
+    assert settings.tradier_token is None
+    assert settings.schwab_client_id is None
+    assert settings.safe_summary()["credentials_set"] == []
+
+
 def test_safe_summary_never_contains_a_secret(clean_env: None) -> None:
     settings = Settings(_env_file=None, tradier_token="super-secret-value")
     summary = settings.safe_summary()

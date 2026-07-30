@@ -6,14 +6,18 @@ outside this one reads os.environ directly, and no module hardcodes a threshold.
 
 from __future__ import annotations
 
+from datetime import time
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, SecretStr, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+HOURS_PER_DAY = 24
+MINUTES_PER_HOUR = 60
 
 ProviderName = Literal["yfinance", "schwab", "tradier"]
 LogFormat = Literal["console", "json"]
@@ -50,6 +54,32 @@ class Settings(BaseSettings):
     risk_free_rate: float = Field(default=0.043, ge=0.0, le=0.25)
     trading_days_per_year: int = Field(default=252, gt=0)
 
+    # Market calendar. Everything time related resolves through this.
+    market_calendar: str = "NYSE"
+    market_timezone: str = "America/New_York"
+
+    # Daily snapshot job. The capture time is the load bearing choice here: IV rank
+    # compares today against history, so history has to be sampled at a consistent
+    # time of day. 15:45 local is late enough to be a real mark and early enough to
+    # avoid the closing auction, when quotes widen and the tape gets noisy.
+    snapshot_time_local: str = "15:45"
+    snapshot_max_dte: int = Field(default=400, gt=0)
+    snapshot_max_expiries: int = Field(default=16, gt=0)
+    snapshot_history_days: int = Field(default=400, gt=0)
+
+    # Default watchlist, seeded into sqlite the first time the database is created.
+    # After that the database is the source of truth and this is ignored.
+    # NoDecode because pydantic-settings would otherwise try to JSON parse the env var,
+    # and SPY,QQQ is what a person actually writes in a .env file.
+    default_watchlist: Annotated[tuple[str, ...], NoDecode] = (
+        "SPY",
+        "QQQ",
+        "IWM",
+        "AAPL",
+        "MSFT",
+        "NVDA",
+    )
+
     # Credentials. Never logged, never committed. Optional until Phase 5.
     tradier_token: SecretStr | None = None
     schwab_client_id: SecretStr | None = None
@@ -67,6 +97,45 @@ class Settings(BaseSettings):
         if level not in allowed:
             raise ValueError(f"log_level must be one of {sorted(allowed)}, got {value!r}")
         return level
+
+    @field_validator("snapshot_time_local")
+    @classmethod
+    def _valid_clock_time(cls, value: str) -> str:
+        """Parsed here so a typo fails at startup, not at 15:45 with nobody watching."""
+        try:
+            hour, minute = (int(part) for part in value.split(":", 1))
+        except ValueError as exc:
+            raise ValueError(f"snapshot_time_local must look like HH:MM, got {value!r}") from exc
+        if not (0 <= hour < HOURS_PER_DAY and 0 <= minute < MINUTES_PER_HOUR):
+            raise ValueError(f"snapshot_time_local is not a real time of day: {value!r}")
+        return f"{hour:02d}:{minute:02d}"
+
+    @field_validator("tradier_token", "schwab_client_id", "schwab_client_secret", mode="before")
+    @classmethod
+    def _blank_secret_is_unset(cls, value: object) -> object:
+        """An empty .env entry means unset, not set to the empty string.
+
+        .env.example ships these keys blank, so without this every fresh install
+        reports three configured credentials and Phase 5 would fail authentication
+        while the startup log insists the token is there.
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("default_watchlist", mode="before")
+    @classmethod
+    def _split_watchlist(cls, value: object) -> object:
+        """Accept a comma separated string so the .env form stays readable."""
+        if isinstance(value, str):
+            return tuple(part.strip().upper() for part in value.split(",") if part.strip())
+        return value
+
+    @property
+    def snapshot_time(self) -> time:
+        """Configured capture time as a time object, in market local time."""
+        hour, minute = (int(part) for part in self.snapshot_time_local.split(":", 1))
+        return time(hour=hour, minute=minute)
 
     @property
     def data_path(self) -> Path:
