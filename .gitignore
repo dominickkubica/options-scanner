@@ -1,0 +1,34 @@
+# Secrets
+.env
+*.pem
+*.token
+tokens/
+
+# Data: snapshots, sqlite, anything the jobs write.
+# data/* rather than data/ so the negation below can still re-include the placeholder.
+data/*
+!data/.gitkeep
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# Frontend
+node_modules/
+frontend/dist/
+
+# Editors and OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
