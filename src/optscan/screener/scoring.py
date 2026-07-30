@@ -198,6 +198,7 @@ def score_candidate(
         max_profit=candidate.profile.max_profit,
         max_loss=candidate.profile.max_loss,
         capital=candidate.profile.capital,
+        commission=candidate.profile.commission,
         return_on_capital=candidate.profile.return_on_capital,
         annualized_return=candidate.profile.annualized_return,
         probability_of_profit=candidate.probability_of_profit,

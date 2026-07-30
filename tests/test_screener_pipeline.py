@@ -370,18 +370,26 @@ class TestRankingIsStable:
         assert top.symbol == "SPY"
         assert top.strategy is Strategy.CALL_CREDIT_SPREAD
         assert top.expiry == date(2026, 8, 7)
-        assert [leg.strike for leg in top.legs] == [754.0, 755.0]
-        assert top.score == pytest.approx(0.97524, abs=5e-5)
+        assert [leg.strike for leg in top.legs] == [751.0, 756.0]
+        assert top.score == pytest.approx(0.94570, abs=5e-5)
+
+    def test_the_top_candidate_is_worth_the_ticket(self, frozen_snapshot, wide_config) -> None:
+        """The min_max_profit floor exists because a one wide spread can annualize at
+        400 percent and clear 18 dollars. The top row must be a real trade."""
+        top = scan_snapshot(frozen_snapshot, wide_config, rate=RATE).opportunities[0]
+        assert top.max_profit == pytest.approx(109.9, abs=0.05)
+        assert top.capital == pytest.approx(387.5, abs=0.05)
+        assert top.commission == pytest.approx(2.60, abs=0.01)
 
     def test_the_ordering_is_a_strict_ranking(self, frozen_snapshot, wide_config) -> None:
         """Second place is meaningfully behind first, so the ordering is not a
         coin flip between saturated scores."""
         result = scan_snapshot(frozen_snapshot, wide_config, rate=RATE)
-        assert result.opportunities[1].score == pytest.approx(0.95440, abs=5e-5)
+        assert result.opportunities[1].score == pytest.approx(0.94237, abs=5e-5)
         assert result.opportunities[0].score > result.opportunities[1].score
 
     def test_candidate_count_is_pinned(self, frozen_snapshot, wide_config) -> None:
         result = scan_snapshot(frozen_snapshot, wide_config, rate=RATE)
         assert result.tally.considered == 524
-        assert result.tally.passed == 83
-        assert len(result.opportunities) == 83
+        assert result.tally.passed == 74
+        assert len(result.opportunities) == 74

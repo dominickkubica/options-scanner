@@ -125,6 +125,7 @@ class Opportunity(Record):
     max_profit: float
     max_loss: float | None = None
     capital: float | None = None
+    commission: float = Field(default=0.0, ge=0.0)
     return_on_capital: float | None = None
     annualized_return: float | None = None
 

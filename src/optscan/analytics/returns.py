@@ -37,6 +37,40 @@ CONTRACT_SIZE = 100
 
 
 @dataclass(frozen=True, slots=True)
+class Commissions:
+    """What the broker takes, per contract and per leg.
+
+    Modelled because ignoring it flatters exactly the trades that look best. A one
+    point wide credit spread taking 0.21 has 21 dollars of maximum profit, and two
+    legs in and two legs out at 0.65 is 2.60 of that, an eighth of the trade. The same
+    2.60 against a cash secured put earning 500 dollars is noise. Leaving commissions
+    out therefore does not shift every candidate equally, it systematically promotes
+    the narrow ones.
+
+    assume_closing_trade is on by default because managing winners early is the whole
+    mechanic this tool is built around, and a position closed at 50 percent pays to
+    get out. Turn it off to model holding to expiration, where most brokers charge
+    nothing for an option that expires worthless.
+    """
+
+    per_contract: float = 0.65
+    per_trade: float = 0.0
+    assume_closing_trade: bool = True
+
+    def cost(self, legs: int, contracts: int = 1) -> float:
+        """Total dollars for opening, and closing if that is assumed."""
+        if legs < 1 or contracts < 1:
+            raise ValueError("a position has at least one leg and one contract")
+        opening = legs * contracts * self.per_contract + self.per_trade
+        return opening * (2.0 if self.assume_closing_trade else 1.0)
+
+
+#: No commissions. The explicit default, so a caller that wants gross figures asks
+#: for them rather than getting them by omission.
+NO_COMMISSIONS = Commissions(per_contract=0.0, per_trade=0.0, assume_closing_trade=False)
+
+
+@dataclass(frozen=True, slots=True)
 class ReturnProfile:
     """What a position pays, against what it risks, over how long."""
 
@@ -45,6 +79,12 @@ class ReturnProfile:
     max_loss: float | None
     capital: float | None
     dte: int
+    commission: float = 0.0
+
+    @property
+    def gross_max_profit(self) -> float:
+        """Max profit before the broker takes its cut. Kept so the cut is visible."""
+        return self.max_profit + self.commission
 
     @property
     def return_on_capital(self) -> float | None:
@@ -98,19 +138,26 @@ def iron_condor_capital(put_width: float, call_width: float, credit: float) -> f
     return vertical_spread_capital(max(put_width, call_width), credit)
 
 
-def short_put_profile(strike: float, credit: float, dte: int) -> ReturnProfile:
+def short_put_profile(
+    strike: float,
+    credit: float,
+    dte: int,
+    commissions: Commissions | None = None,
+) -> ReturnProfile:
     """Cash secured put.
 
     Max loss assumes the underlying goes to zero, which is the true bound and is worth
     stating rather than quietly using a percentage move.
     """
     _validate_credit(credit)
+    cost = (commissions or NO_COMMISSIONS).cost(legs=1)
     return ReturnProfile(
         credit=credit,
-        max_profit=credit * CONTRACT_SIZE,
-        max_loss=(strike - credit) * CONTRACT_SIZE,
+        max_profit=credit * CONTRACT_SIZE - cost,
+        max_loss=(strike - credit) * CONTRACT_SIZE + cost,
         capital=cash_secured_put_capital(strike, credit),
         dte=dte,
+        commission=cost,
     )
 
 
@@ -119,6 +166,7 @@ def covered_call_profile(
     credit: float,
     cost_basis: float,
     dte: int,
+    commissions: Commissions | None = None,
 ) -> ReturnProfile:
     """Covered call against shares held at `cost_basis`.
 
@@ -130,12 +178,14 @@ def covered_call_profile(
     if cost_basis <= 0:
         raise ValueError("cost_basis must be positive")
     appreciation = max(strike - cost_basis, 0.0)
+    cost = (commissions or NO_COMMISSIONS).cost(legs=1)
     return ReturnProfile(
         credit=credit,
-        max_profit=(credit + appreciation) * CONTRACT_SIZE,
-        max_loss=(cost_basis - credit) * CONTRACT_SIZE,
+        max_profit=(credit + appreciation) * CONTRACT_SIZE - cost,
+        max_loss=(cost_basis - credit) * CONTRACT_SIZE + cost,
         capital=cost_basis * CONTRACT_SIZE,
         dte=dte,
+        commission=cost,
     )
 
 
@@ -144,16 +194,19 @@ def credit_spread_profile(
     long_strike: float,
     credit: float,
     dte: int,
+    commissions: Commissions | None = None,
 ) -> ReturnProfile:
     """Vertical credit spread, either side. Width comes from the strikes."""
     _validate_credit(credit)
     width = abs(short_strike - long_strike)
+    cost = (commissions or NO_COMMISSIONS).cost(legs=2)
     return ReturnProfile(
         credit=credit,
-        max_profit=credit * CONTRACT_SIZE,
-        max_loss=(width - credit) * CONTRACT_SIZE,
+        max_profit=credit * CONTRACT_SIZE - cost,
+        max_loss=(width - credit) * CONTRACT_SIZE + cost,
         capital=vertical_spread_capital(width, credit),
         dte=dte,
+        commission=cost,
     )
 
 
@@ -164,18 +217,21 @@ def iron_condor_profile(
     call_long: float,
     credit: float,
     dte: int,
+    commissions: Commissions | None = None,
 ) -> ReturnProfile:
     """Iron condor. Capital and max loss both come from the wider wing."""
     _validate_credit(credit)
     put_width = abs(put_short - put_long)
     call_width = abs(call_short - call_long)
     width = max(put_width, call_width)
+    cost = (commissions or NO_COMMISSIONS).cost(legs=4)
     return ReturnProfile(
         credit=credit,
-        max_profit=credit * CONTRACT_SIZE,
-        max_loss=(width - credit) * CONTRACT_SIZE,
+        max_profit=credit * CONTRACT_SIZE - cost,
+        max_loss=(width - credit) * CONTRACT_SIZE + cost,
         capital=iron_condor_capital(put_width, call_width, credit),
         dte=dte,
+        commission=cost,
     )
 
 

@@ -280,14 +280,47 @@ large fraction of a liquid chain is describing the market, not finding anomalies
 not because anything says they are right. That is the same answer as Phase 2's open
 question, and it still needs history.
 
-**Open questions for Phase 4:**
+---
 
-- The term structure backwardation warning fires on nearly every SPY row, because the
-  front expiry is 0DTE and very short dated vol is mechanically elevated. Probably the
-  same constant offset mistake a fourth time. Excluding expiries under about a week
-  from the inversion check is the likely fix, and it changes Phase 2 code and tests.
-- Ranking is dominated by narrow call credit spreads, because a 1 wide spread ties up
-  79 dollars and so annualizes enormously. The premium ramp saturates at 25 percent so
-  the absurd figures do not distort the ordering, but commissions are not modelled and
-  they would eat a 21 dollar max profit. Either model commissions or floor the credit
-  by strategy.
+## 2026-07-30: closing out the Phase 3 loose ends
+
+Both open questions from the Phase 3 entry are now fixed, and both turned out to be
+the same constant offset mistake for the fourth and fifth time.
+
+**Term structure comparisons now start a week out.** The backwardation flag fired on
+five of six watchlist symbols. The cause was the front of the curve: as time to expiry
+goes to zero the diffusive part of a move shrinks with sqrt(t) while the jump part does
+not, so very short dated ATM vol is mechanically elevated. Real SPY numbers on the day:
+0DTE at 26.9 percent, 4 days at 11.4, 22 days at 14.1, with nothing happening.
+Comparing a back month against that reports every index as permanently inverted.
+
+`TermStructure.slope` and `is_backwardated` now take a `min_dte` defaulting to 7 and
+ignore anything nearer. The flag went from five of six symbols to two, AAPL and MSFT,
+which were the two with earnings that week. `slope` became a method rather than a
+property in the process, which is a small API break in Phase 2 code and was worth it.
+
+**Commissions are modelled.** 0.65 per contract per leg by default, charged both
+opening and closing, all configurable under `costs`. This is not a rounding detail: a
+fixed fee is an eighth of a one point wide spread's maximum profit and noise against a
+cash secured put's, so leaving it out does not shift candidates equally, it
+systematically promotes the narrow ones. `ReturnProfile` keeps `gross_max_profit` so
+the cut stays inspectable rather than merely applied.
+
+**A minimum absolute profit, because a percentage does not say whether a trade is worth
+doing.** A one point wide spread taking 0.21 annualizes at over 400 percent and clears
+18 dollars after commissions. `min_max_profit` defaults to 25 dollars net. The scan
+table now prints profit and capital in dollars next to the percentage, so a spectacular
+return on a tiny base is visible rather than inferred.
+
+Combined effect on the live watchlist: the top rows moved from one point wide spreads
+paying 21 dollars to five and ten point spreads paying 98 to 213 dollars on 390 to 800
+dollars of capital, and the 454 percent headline numbers went with them.
+
+**Also done:** removed the empty `screener/rules/` package left over from the Phase 0
+scaffold, since the filters and config ended up one level up. Coverage went from 83 to
+91 percent, with `jobs/load.py`, `jobs/scan.py`, and the scan CLI now tested, and the
+disabled vertical gap detector tested in its disabled state and its enabled one.
+
+**Still open, and genuinely blocked rather than deferred:** every gap threshold, and
+the vertical mispricing baseline. Both need snapshot history to calibrate against, and
+the history is one day old. Phase 8 is where that gets settled.

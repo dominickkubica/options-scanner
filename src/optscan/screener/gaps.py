@@ -252,12 +252,16 @@ def find_term_inversions(analysis: SymbolAnalysis, config: GapsConfig) -> list[G
 
     An inversion with a known earnings date inside the front expiry is not a gap, it
     is the market working correctly, so it is not reported.
+
+    Measured from a week out. See SHORT_DATED_DTE in analytics.surface: the front of
+    the curve is structurally elevated and comparing against it flags everything.
     """
     term = analysis.term
-    if len(term.points) < MIN_TERM_POINTS:
+    points = term.comparable_points()
+    if len(points) < MIN_TERM_POINTS:
         return []
 
-    front, back = term.points[0], term.points[-1]
+    front, back = points[0], points[-1]
     inversion = front.iv - back.iv
     if inversion < config.min_term_inversion:
         return []

@@ -15,7 +15,7 @@ from pydantic import ValidationError
 
 from optscan.analytics.events import EventWindow
 from optscan.analytics.ivrank import Confidence, IVRank
-from optscan.analytics.returns import short_put_profile
+from optscan.analytics.returns import NO_COMMISSIONS, Commissions, short_put_profile
 from optscan.models import Action, Leg, Right, Strategy
 from optscan.screener.config import ScreenConfig
 from optscan.screener.filters import (
@@ -60,11 +60,14 @@ def candidate(**overrides) -> Candidate:
     # the default 10 percent floor. Deliberately not borderline.
     credit = overrides.pop("credit", 5.00)
     dte = overrides.pop("dte", 22)
+    # Commissions are applied when a strategy builds the profile, not when a filter
+    # reads it, so they are part of the fixture rather than of the config under test.
+    commissions = overrides.pop("commissions", Commissions())
     defaults = dict(
         strategy=Strategy.CASH_SECURED_PUT,
         legs=legs,
         credit=credit,
-        profile=short_put_profile(legs[0].strike, credit, dte),
+        profile=short_put_profile(legs[0].strike, credit, dte, commissions),
         short_delta=legs[0].delta,
         short_iv=legs[0].iv,
         probability_of_profit=0.80,
@@ -208,11 +211,38 @@ class TestFilters:
         assert check_premium(candidate(width=None), config).passed
 
     def test_annualized_return_floor(self) -> None:
-        """0.15 on a 730 strike over 60 days is 0.12 percent annualized."""
+        """0.60 on a 730 strike over 60 days clears the profit floor at 58.70 and
+        still annualizes to half a percent."""
         config = ScreenConfig()
-        assert check_premium(candidate(credit=0.15, dte=60), config).reason is (
+        assert check_premium(candidate(credit=0.60, dte=60), config).reason is (
             Rejection.RETURN_TOO_LOW
         )
+
+    def test_absolute_profit_floor(self) -> None:
+        """A percentage says nothing about whether a trade is worth the ticket.
+
+        0.15 of credit is 15 dollars gross and 13.70 after a round trip on one leg,
+        which is below the 25 dollar default no matter how well it annualizes.
+        """
+        config = ScreenConfig()
+        assert (
+            check_premium(candidate(credit=0.15), config).reason is Rejection.MAX_PROFIT_TOO_SMALL
+        )
+        assert check_premium(candidate(credit=5.00), config).passed
+
+    def test_the_profit_floor_is_net_of_commissions(self) -> None:
+        """0.26 of credit is 26 dollars gross, which clears the 25 dollar floor, and
+        24.70 after a round trip on one leg, which does not.
+
+        The annualized floor is lifted here so the profit floor is what is under test.
+        """
+        config = ScreenConfig.model_validate(
+            {"filters": {"premium": {"min_annualized_return": 0.0}}}
+        )
+        assert (
+            check_premium(candidate(credit=0.26), config).reason is Rejection.MAX_PROFIT_TOO_SMALL
+        )
+        assert check_premium(candidate(credit=0.26, commissions=NO_COMMISSIONS), config).passed
 
     def test_liquidity_checks_every_leg_not_just_the_short(self) -> None:
         config = ScreenConfig()

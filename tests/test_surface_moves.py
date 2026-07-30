@@ -56,7 +56,7 @@ class TestTermStructure:
     def test_normal_structure_slopes_up(self) -> None:
         """More time, more uncertainty, more vol."""
         term = self._normal()
-        assert term.slope == pytest.approx(0.04)
+        assert term.slope() == pytest.approx(0.04)
         assert not term.is_backwardated()
 
     def test_backwardation_is_detected(self) -> None:
@@ -65,7 +65,7 @@ class TestTermStructure:
             {date(2026, 8, 6): 0.45, date(2026, 8, 21): 0.28, date(2026, 9, 18): 0.22},
             TODAY,
         )
-        assert term.slope == pytest.approx(-0.23)
+        assert term.slope() == pytest.approx(-0.23)
         assert term.is_backwardated()
 
     def test_small_inversions_are_noise_not_backwardation(self) -> None:
@@ -100,10 +100,62 @@ class TestTermStructure:
         )
         assert len(term.points) == 1
 
+    def test_the_short_dated_front_is_excluded_from_the_comparison(self) -> None:
+        """Very short dated ATM vol is mechanically elevated, not a signal.
+
+        These are real SPY numbers from 30 July 2026: 0DTE at 26.9 percent against
+        11.4 percent four days out and 14.1 percent at 22 days, with nothing
+        happening. Including the front makes it read as heavily backwardated.
+        """
+        term = build_term_structure(
+            {
+                date(2026, 7, 30): 0.269,
+                date(2026, 8, 3): 0.114,
+                date(2026, 8, 7): 0.140,
+                date(2026, 8, 21): 0.141,
+            },
+            TODAY,
+        )
+        assert term.slope(min_dte=0) == pytest.approx(0.141 - 0.269)
+        assert term.is_backwardated(min_dte=0) is True
+
+        # From a week out the curve is upward sloping, which is the truth.
+        assert term.slope() == pytest.approx(0.141 - 0.140, abs=1e-9)
+        assert term.is_backwardated() is False
+
+    def test_a_real_event_still_shows_through_the_exclusion(self) -> None:
+        """AAPL on its earnings day: 36.8 percent at 8 days against 26.6 at 50.
+
+        The point of the exclusion is to remove a structural effect without removing
+        the signal, so a genuine event has to survive it.
+        """
+        term = build_term_structure(
+            {
+                date(2026, 8, 7): 0.368,
+                date(2026, 8, 14): 0.305,
+                date(2026, 9, 18): 0.266,
+            },
+            TODAY,
+        )
+        assert term.is_backwardated() is True
+
+    def test_comparable_points_drops_only_the_front(self) -> None:
+        term = build_term_structure(
+            {date(2026, 7, 31): 0.30, date(2026, 8, 21): 0.20, date(2026, 9, 18): 0.22},
+            TODAY,
+        )
+        assert len(term.points) == 3
+        assert [p.dte for p in term.comparable_points()] == [22, 50]
+
+    def test_nothing_left_after_the_exclusion_is_not_a_slope(self) -> None:
+        term = build_term_structure({date(2026, 7, 31): 0.30, date(2026, 8, 2): 0.28}, TODAY)
+        assert term.slope() is None
+        assert term.is_backwardated() is False
+
     def test_an_empty_structure_says_nothing(self) -> None:
         term = build_term_structure({}, TODAY)
         assert term.front is None
-        assert term.slope is None
+        assert term.slope() is None
         assert term.iv_at_dte(30) is None
         assert not term.is_backwardated()
 

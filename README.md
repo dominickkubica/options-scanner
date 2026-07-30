@@ -107,8 +107,9 @@ Every module states its own assumptions, and these are the ones that bite:
   nothing rather than a number, and it labels everything under a year of coverage.
 - Candidates are priced at mid. A real fill lands between mid and the far side, so
   every credit here is optimistic by roughly half the spread on each leg.
-- Commissions are not modelled. That matters most for narrow spreads, where the
-  annualized return can look spectacular on a very small capital base.
+- Commissions are modelled at 0.65 per contract per leg, in and out, and profit and
+  capital are reported in dollars so a spectacular percentage on a tiny base is
+  visible for what it is. Change the rates under `costs` in `screen.yaml`.
 - The score is a sorting device for a list you then read. It has not been validated
   against outcomes, and the scoring weights and ramps in `screen.yaml` are opinions.
 - The gaps module finds candidates for review, not edge. Its thresholds are

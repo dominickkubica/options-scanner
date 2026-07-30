@@ -15,13 +15,22 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
 from optscan.analytics.probability import probability_of_profit, touch_and_finish
-from optscan.analytics.returns import ReturnProfile
+from optscan.analytics.returns import Commissions, ReturnProfile
 from optscan.models import Action, Leg, OptionContract, Right, Strategy
 from optscan.screener.config import ScreenConfig
 from optscan.screener.context import ExpiryAnalysis, SymbolAnalysis
 
 #: Attached to candidates whose numbers are easy to misread at a glance.
 CONTRACT_SIZE_NOTE = "figures are per contract, which is 100 shares"
+
+
+def commissions_from(config: ScreenConfig) -> Commissions:
+    """The configured broker cost model."""
+    return Commissions(
+        per_contract=config.costs.per_contract,
+        per_trade=config.costs.per_trade,
+        assume_closing_trade=config.costs.assume_closing_trade,
+    )
 
 
 @dataclass(frozen=True, slots=True)

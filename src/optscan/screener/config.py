@@ -74,10 +74,33 @@ class LiquidityFilter(StrictModel):
     min_liquidity_score: float = Field(default=0.35, ge=0.0, le=1.0)
 
 
+class CostModel(StrictModel):
+    """Broker commissions, applied to every candidate's economics.
+
+    Modelled because leaving them out does not shift candidates equally: a fixed
+    couple of dollars is an eighth of a narrow spread's maximum profit and noise
+    against a cash secured put's. Omitting them systematically promotes the narrow
+    trades, which is exactly what the first version of this screen did.
+    """
+
+    per_contract: float = Field(default=0.65, ge=0.0)
+    per_trade: float = Field(default=0.0, ge=0.0)
+    assume_closing_trade: bool = True
+
+
 class PremiumFilter(StrictModel):
     """How much the position has to pay to be worth the capital and the risk."""
 
     min_credit: float = Field(default=0.10, gt=0.0)
+    min_max_profit: float = Field(
+        default=25.0,
+        ge=0.0,
+        description=(
+            "Dollars of maximum profit, net of commissions. A percentage return says "
+            "nothing about whether a trade is worth the ticket: a one wide spread can "
+            "annualize at 400 percent and clear 18 dollars."
+        ),
+    )
     min_credit_to_width: float = Field(
         default=0.20,
         gt=0.0,
@@ -248,6 +271,7 @@ class ScreenConfig(StrictModel):
     """The whole screen, as loaded from YAML."""
 
     filters: Filters = Filters()
+    costs: CostModel = CostModel()
     weights: ScoringWeights = ScoringWeights()
     normalization: ScoringNormalization = ScoringNormalization()
     strategies: StrategyConfig = StrategyConfig()

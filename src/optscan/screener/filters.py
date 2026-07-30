@@ -33,6 +33,7 @@ class Rejection(StrEnum):
     DELTA_TOO_HIGH = "delta_too_high"
     NO_DELTA = "no_delta"
     CREDIT_TOO_SMALL = "credit_too_small"
+    MAX_PROFIT_TOO_SMALL = "max_profit_too_small"
     CREDIT_TO_WIDTH_TOO_LOW = "credit_to_width_too_low"
     RETURN_TOO_LOW = "return_too_low"
     OPEN_INTEREST_TOO_LOW = "open_interest_too_low"
@@ -96,6 +97,9 @@ def check_premium(candidate: Candidate, config: ScreenConfig) -> FilterResult:
     rules = config.filters.premium
     if candidate.credit < rules.min_credit:
         return _fail(Rejection.CREDIT_TOO_SMALL)
+
+    if candidate.profile.max_profit < rules.min_max_profit:
+        return _fail(Rejection.MAX_PROFIT_TOO_SMALL)
 
     if candidate.width and (
         credit_to_width(candidate.credit, candidate.width) < rules.min_credit_to_width

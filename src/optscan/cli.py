@@ -224,10 +224,11 @@ def _cmd_scan(settings: Settings, args: argparse.Namespace) -> int:
 
     print()
     print(
-        f"{'symbol':<7}{'expiry':<12}{'strategy':<20}{'legs':<20}"
-        f"{'credit':>8}{'ann':>8}{'POP':>7}{'delta':>7}{'liq':>6}{'score':>7}"
+        f"{'symbol':<7}{'expiry':<12}{'strategy':<20}{'legs':<18}"
+        f"{'credit':>7}{'profit':>8}{'capital':>9}{'ann':>7}{'POP':>6}"
+        f"{'delta':>7}{'liq':>5}{'score':>7}"
     )
-    print("-" * 102)
+    print("-" * 113)
     for opportunity in rows:
         legs = "/".join(f"{leg.strike:g}{leg.right}" for leg in opportunity.legs)
         annualized = (
@@ -246,11 +247,14 @@ def _cmd_scan(settings: Settings, args: argparse.Namespace) -> int:
             if opportunity.liquidity_score is not None
             else "n/a"
         )
+        capital = (
+            f"{opportunity.capital:>9,.0f}" if opportunity.capital is not None else f"{'n/a':>9}"
+        )
         print(
             f"{opportunity.symbol:<7}{opportunity.expiry!s:<12}"
-            f"{opportunity.strategy.value:<20}{legs:<20}"
-            f"{opportunity.credit:>8.2f}{annualized:>8}{pop:>7}"
-            f"{delta:>7}{liquidity:>6}{opportunity.score:>7.3f}"
+            f"{opportunity.strategy.value:<20}{legs:<18}"
+            f"{opportunity.credit:>7.2f}{opportunity.max_profit:>8.0f}{capital}"
+            f"{annualized:>7}{pop:>6}{delta:>7}{liquidity:>5}{opportunity.score:>7.3f}"
         )
         if args.explain:
             parts = ", ".join(
@@ -270,6 +274,7 @@ def _cmd_scan(settings: Settings, args: argparse.Namespace) -> int:
         _print_gaps(result)
 
     print()
+    print("  Profit and capital are dollars per contract, net of modelled commissions.")
     print("  Scores rank candidates for review. They are not validated against outcomes.")
     return 0
 

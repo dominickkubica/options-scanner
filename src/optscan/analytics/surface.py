@@ -25,6 +25,19 @@ DEFAULT_SKEW_DELTA = 0.25
 #: A slope needs two points.
 MIN_POINTS_FOR_SLOPE = 2
 
+#: Expiries inside this many days are excluded from term structure comparisons.
+#:
+#: Very short dated ATM implied vol is mechanically elevated. As time to expiry goes
+#: to zero the diffusive part of the move shrinks with sqrt(t) while the jump part
+#: does not, so the vol needed to explain the option's price rises. On a real SPY
+#: chain the 0DTE ATM vol was 26.9 percent against 11.4 percent four days out, with
+#: nothing whatsoever happening.
+#:
+#: Comparing that against a back month makes every index look permanently
+#: backwardated, which is a fact about the front of the curve rather than a signal.
+#: A week is enough distance for the effect to fade.
+SHORT_DATED_DTE = 7
+
 
 @dataclass(frozen=True, slots=True)
 class TermPoint:
@@ -53,23 +66,43 @@ class TermStructure:
     def back(self) -> TermPoint | None:
         return self.points[-1] if self.points else None
 
-    @property
-    def slope(self) -> float | None:
-        """Back vol minus front vol. Negative is backwardation."""
-        if len(self.points) < MIN_POINTS_FOR_SLOPE:
-            return None
-        return self.back.iv - self.front.iv  # type: ignore[union-attr]
+    def comparable_points(self, min_dte: int = SHORT_DATED_DTE) -> tuple[TermPoint, ...]:
+        """Points far enough out to be compared against each other.
 
-    def is_backwardated(self, threshold: float = DEFAULT_BACKWARDATION_THRESHOLD) -> bool:
-        """Front vol meaningfully above back vol.
+        See SHORT_DATED_DTE for why the front of the curve is excluded.
+        """
+        return tuple(point for point in self.points if point.dte >= min_dte)
+
+    def slope(self, min_dte: int = SHORT_DATED_DTE) -> float | None:
+        """Back vol minus front vol, ignoring the very short dated end.
+
+        Negative is backwardation. Pass min_dte=0 for the raw slope across everything,
+        which is the right thing when the question really is about the front week.
+        """
+        points = self.comparable_points(min_dte)
+        if len(points) < MIN_POINTS_FOR_SLOPE:
+            return None
+        return points[-1].iv - points[0].iv
+
+    def is_backwardated(
+        self,
+        threshold: float = DEFAULT_BACKWARDATION_THRESHOLD,
+        min_dte: int = SHORT_DATED_DTE,
+    ) -> bool:
+        """Front vol meaningfully above back vol, measured past the short dated end.
 
         Normal term structure is upward sloping: more time, more uncertainty, more
         vol. An inversion means the market expects something to happen soon and then
         for things to calm down, which is almost always a scheduled event. Selling the
         rich front month without knowing what the event is means selling insurance
         against a specific thing you have not looked up.
+
+        Measured from a week out, because otherwise the structural elevation of very
+        short dated vol reports every index as permanently inverted. On a real six
+        symbol watchlist that change took the flag from firing on five of six to
+        firing on the two with earnings that week, which is what it is for.
         """
-        slope = self.slope
+        slope = self.slope(min_dte)
         return slope is not None and slope < -threshold
 
     def iv_at_dte(self, dte: int) -> float | None:

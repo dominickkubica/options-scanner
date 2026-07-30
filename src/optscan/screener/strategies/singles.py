@@ -16,6 +16,7 @@ from optscan.screener.strategies.base import (
     Candidate,
     StrategyGenerator,
     build_leg,
+    commissions_from,
     net_credit,
     short_leg_metrics,
     worst_liquidity,
@@ -57,7 +58,7 @@ class CashSecuredPut(StrategyGenerator):
                     strategy=self.strategy,
                     legs=(leg,),
                     credit=credit,
-                    profile=short_put_profile(strike, credit, expiry.dte),
+                    profile=short_put_profile(strike, credit, expiry.dte, commissions_from(config)),
                     short_delta=leg.delta,
                     short_iv=leg.iv,
                     probability_of_profit=pop,
@@ -104,7 +105,9 @@ class CoveredCall(StrategyGenerator):
                     strategy=self.strategy,
                     legs=(leg,),
                     credit=credit,
-                    profile=covered_call_profile(strike, credit, analysis.spot, expiry.dte),
+                    profile=covered_call_profile(
+                        strike, credit, analysis.spot, expiry.dte, commissions_from(config)
+                    ),
                     short_delta=leg.delta,
                     short_iv=leg.iv,
                     probability_of_profit=pop,

@@ -31,6 +31,10 @@ filters:
 
   premium:
     min_credit: 0.10
+    # Dollars of maximum profit, net of commissions. A percentage return says nothing
+    # about whether a trade is worth the ticket: a one point wide spread can annualize
+    # at 400 percent and clear 18 dollars.
+    min_max_profit: 25.0
     # Defined risk only. A third of the width is the usual bar for a vertical.
     min_credit_to_width: 0.20
     min_annualized_return: 0.10
@@ -49,6 +53,17 @@ filters:
     exclude_earnings: true
     earnings_buffer_days: 0
     exclude_early_assignment_risk: true
+
+# Broker commissions. Left out, they do not shift candidates equally: a fixed couple
+# of dollars is an eighth of a narrow spread's maximum profit and noise against a cash
+# secured put's, so omitting them systematically promotes the narrow trades.
+costs:
+  per_contract: 0.65
+  per_trade: 0.0
+  # Managing winners early is the mechanic this tool is built around, and closing a
+  # position pays to get out. Set false to model holding to expiration, where most
+  # brokers charge nothing for an option that expires worthless.
+  assume_closing_trade: true
 
 # Weights need not sum to 1: they are renormalized across whichever components could
 # be computed, so a missing IV rank shifts its weight onto the others rather than
