@@ -57,17 +57,24 @@ venv\Scripts\python -m optscan status # market state, watchlist, recent captures
   config. The caller passes config values in.
 - A number that cannot be computed honestly is not computed. The vol solver, IV rank,
   and the liquidity score all return a stated reason instead of a plausible value.
+- Screener thresholds live in screen.yaml only. Nothing in screener/ hardcodes a
+  number a user might want to change.
+- Every filter rejection carries a reason, and the tally is printed. An unexplained
+  empty result table is how a screener loses its user.
+- Before believing any detector that fires on a lot of contracts, check whether it is
+  measuring a constant offset. That mistake has now been made three times: the
+  expected move multiplier, the vertical gap detector, and the parity carry
+  assumption. Run it against tests/fixtures and count the hits.
 
 ## Non-goals
 - No auto-execution of trades. This tool ranks and displays, it does not place orders.
 - No claims of predictive accuracy that have not been validated in Phase 8.
 
 ## Current phase
-Phase 2 complete: greeks, implied vol, probability, Monte Carlo, term structure and
-skew, expected move, IV rank with confidence, return and capital metrics, liquidity
-scoring, event risk. All pure, all unit tested against hand computed values, greeks
-and vol cross checked against vollib.
+Phase 3 complete: six strategy generators, a YAML configurable filter layer that
+explains every rejection, weighted composite scoring that carries its components, the
+gaps module, and `optscan scan`.
 
-Phase 3 (screener and scoring) is next: strategy modules, a YAML configurable filter
-layer, the gaps module, and a weighted composite score that carries its components so
-the UI can show why something ranked. Do not start work on a later phase without asking.
+Phase 4 (dashboard v1, static) is next: FastAPI serving JSON, React consuming it,
+opportunities table with score breakdown, chain grid, underlying detail, payoff
+diagram. No websockets until Phase 5. Do not start work on a later phase without asking.

@@ -10,17 +10,29 @@ from optscan.models.market import (
     PriceBar,
     Quote,
 )
+from optscan.models.opportunity import (
+    Action,
+    Leg,
+    Opportunity,
+    ScoreComponents,
+    Strategy,
+)
 from optscan.models.snapshot import ChainSnapshot
 
 __all__ = [
     "MAX_PLAUSIBLE_IV",
+    "Action",
     "ChainSnapshot",
+    "Leg",
+    "Opportunity",
     "OptionChain",
     "OptionContract",
     "PriceBar",
     "Quote",
     "Record",
     "Right",
+    "ScoreComponents",
+    "Strategy",
     "SymbolEvents",
     "UtcDatetime",
 ]

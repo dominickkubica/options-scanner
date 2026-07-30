@@ -4,11 +4,11 @@ A local-first tool that ingests options chains, computes its own greeks and vola
 analytics, scores premium-selling candidates, and renders a dashboard with charts,
 levels, and projections.
 
-Currently at **Phase 2**: it pulls real option chains through a provider interface,
-lands them on disk as partitioned parquet, runs a daily snapshot job, and computes its
-own greeks, implied volatility, probabilities, surface metrics, and return figures. No
-screener or dashboard yet. See `DECISIONS.md` for why things are the way they are and
-`CLAUDE.md` for the rules any contributor (human or agent) works under.
+Currently at **Phase 3**: it pulls real option chains through a provider interface,
+lands them on disk as partitioned parquet, runs a daily snapshot job, computes its own
+greeks and volatility analytics, and ranks premium selling candidates from a YAML
+configurable screen. No dashboard yet. See `DECISIONS.md` for why things are the way
+they are and `CLAUDE.md` for the rules any contributor (human or agent) works under.
 
 ## Start the snapshot job today
 
@@ -47,6 +47,24 @@ venv\Scripts\python -m optscan --check             # print resolved config, touc
 The job declines to capture outside a trading session, because a pre open capture would
 file yesterday's close under today's session date. `--force` overrides that and labels
 the result honestly. Re-running on the same day is a no op unless you pass `--recapture`.
+
+## Scanning
+
+```
+venv\Scripts\python -m optscan scan                      # rank the watchlist
+venv\Scripts\python -m optscan scan --explain            # with score breakdowns
+venv\Scripts\python -m optscan scan --gaps               # plus flagged mispricings
+venv\Scripts\python -m optscan scan --symbol SPY --live  # fresh quotes, one symbol
+venv\Scripts\python -m optscan config                    # every knob and its value
+```
+
+By default the scan uses the most recent stored snapshot, which is fast, offline, and
+reproducible. `--live` fetches fresh chains. Either way the quote age is reported, and
+anything over six hours old is called out as stale.
+
+Thresholds live in `screen.yaml`. Every rejection is counted and the top reasons are
+printed under the table, so an empty result tells you whether the market was quiet or
+your filters were tight.
 
 ## Reading what it captured
 
@@ -87,6 +105,15 @@ Every module states its own assumptions, and these are the ones that bite:
   make the reported returns conservative.
 - IV rank needs history this tool has to build. Under 20 observations it publishes
   nothing rather than a number, and it labels everything under a year of coverage.
+- Candidates are priced at mid. A real fill lands between mid and the far side, so
+  every credit here is optimistic by roughly half the spread on each leg.
+- Commissions are not modelled. That matters most for narrow spreads, where the
+  annualized return can look spectacular on a very small capital base.
+- The score is a sorting device for a list you then read. It has not been validated
+  against outcomes, and the scoring weights and ramps in `screen.yaml` are opinions.
+- The gaps module finds candidates for review, not edge. Its thresholds are
+  uncalibrated, and one of its four detectors is switched off because it had no
+  working baseline.
 
 ## What this tool does not do
 

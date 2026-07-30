@@ -1,0 +1,102 @@
+# Screen configuration.
+#
+# Every value here is a default made explicit. Delete any key to fall back to the
+# default in src/optscan/screener/config.py; they are the same numbers.
+#
+# A typo in a key is an error rather than a silent fallback, because believing a
+# threshold is in force when it is not is worse than a crash.
+#
+# See it resolved with: optscan config
+
+filters:
+  dte:
+    # Far enough out that theta is not yet dominated by gamma, near enough that the
+    # annualized return is worth the capital.
+    min_dte: 21
+    max_dte: 60
+
+  delta:
+    # The conventional short premium band. Below it the credit stops paying for the
+    # risk of being tested; above it the position is closer to a directional bet.
+    min_abs_delta: 0.15
+    max_abs_delta: 0.30
+
+  liquidity:
+    min_open_interest: 100
+    min_volume: 0
+    # Applied to every leg, not just the short one. Candidates are priced at mid, so
+    # a real fill gives up roughly half of this per leg.
+    max_spread_pct: 0.10
+    min_liquidity_score: 0.35
+
+  premium:
+    min_credit: 0.10
+    # Defined risk only. A third of the width is the usual bar for a vertical.
+    min_credit_to_width: 0.20
+    min_annualized_return: 0.10
+
+  volatility:
+    # Both off until the snapshot history is deep enough to support a rank. Turning
+    # these on with a few weeks of data filters on a number that does not yet mean
+    # what its name says. Check `optscan scan --explain` for the confidence label.
+    min_iv_rank: null
+    require_iv_rank: false
+    min_iv: null
+
+  events:
+    # Elevated IV before a report is priced, not mispriced. Selling it is a bet on
+    # the size of the move, which is a different trade from selling rich vol.
+    exclude_earnings: true
+    earnings_buffer_days: 0
+    exclude_early_assignment_risk: true
+
+# Weights need not sum to 1: they are renormalized across whichever components could
+# be computed, so a missing IV rank shifts its weight onto the others rather than
+# dragging every score down.
+weights:
+  premium: 0.30
+  iv_rank: 0.20
+  liquidity: 0.25
+  probability: 0.15
+  event_risk: 0.10
+
+# The least defensible numbers in the project. They decide that 25 percent annualized
+# is full marks and 5 percent is zero, and nothing outside this file justifies that.
+# Phase 8 is where they get replaced by values that earned their place.
+normalization:
+  annualized_return_floor: 0.05
+  annualized_return_ceiling: 0.25
+  probability_floor: 0.50
+  probability_ceiling: 0.90
+
+strategies:
+  enabled:
+    - cash_secured_put
+    - put_credit_spread
+    - call_credit_spread
+    - iron_condor
+    # - covered_call     # assumes cost basis is current spot until Phase 7
+    # - short_strangle   # undefined risk, so no capital figure and no return on it
+  # Widths in strike points. A width with no listed strike produces nothing rather
+  # than substituting the nearest one.
+  spread_widths: [1.0, 2.5, 5.0, 10.0]
+  max_candidates_per_expiry: 200
+
+gaps:
+  enabled: true
+  # Both must be cleared: an absolute floor in vol points, and a robust deviation
+  # count against the fit's own residual scale.
+  min_skew_residual: 0.03
+  min_skew_zscore: 3.0
+  min_term_inversion: 0.03
+  # Off by default and honestly so. The measure it uses runs smoothly with moneyness
+  # rather than scattering, so without a historical baseline there is nothing to
+  # separate an anomaly from the normal shape of the variance risk premium.
+  vertical_mispricing_enabled: false
+  min_vertical_zscore: 3.0
+  # Dollars of parity breach after crossing both spreads, measured against the
+  # forward the chain itself implies.
+  min_parity_violation: 0.10
+  max_quote_age_hours: 4.0
+
+max_results: 50

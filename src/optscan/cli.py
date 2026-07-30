@@ -9,10 +9,12 @@ from __future__ import annotations
 import argparse
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from pathlib import Path
 
 from optscan import __version__
 from optscan.config import Settings, get_settings
 from optscan.logging import configure_logging, get_logger
+from optscan.screener.config import ScreenConfig
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -58,6 +60,46 @@ def build_parser() -> argparse.ArgumentParser:
     wl_add.add_argument("symbols", nargs="+", metavar="TICKER")
     wl_remove = watchlist_sub.add_parser("remove", help="Remove symbols.")
     wl_remove.add_argument("symbols", nargs="+", metavar="TICKER")
+
+    scan = sub.add_parser("scan", help="Rank premium selling candidates.")
+    scan.add_argument(
+        "--symbol",
+        action="append",
+        dest="symbols",
+        metavar="TICKER",
+        help="Scan this symbol instead of the watchlist. Repeatable.",
+    )
+    scan.add_argument(
+        "--watchlist",
+        default="default",
+        help="Named watchlist to scan. Only 'default' exists so far.",
+    )
+    scan.add_argument(
+        "--live",
+        action="store_true",
+        help="Fetch fresh chains instead of using the most recent stored snapshot.",
+    )
+    scan.add_argument("--limit", type=int, default=20, help="Rows to print.")
+    scan.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Screen config YAML. Defaults to screen.yaml beside the repo root.",
+    )
+    scan.add_argument("--gaps", action="store_true", help="Also print flagged mispricings.")
+    scan.add_argument(
+        "--explain",
+        action="store_true",
+        help="Show the score breakdown and warnings for each row.",
+    )
+    scan.add_argument(
+        "--no-events",
+        action="store_true",
+        help="Skip the corporate calendar fetch. Faster, and blind to earnings.",
+    )
+
+    config_cmd = sub.add_parser("config", help="Print the effective screen configuration.")
+    config_cmd.add_argument("--config", type=Path, default=None, help="Config YAML to load.")
 
     status = sub.add_parser("status", help="Market state, watchlist size, recent captures.")
     status.add_argument("--runs", type=int, default=10, help="How many recent runs to show.")
@@ -137,6 +179,121 @@ def _cmd_watchlist(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def _screen_config(settings: Settings, path: Path | None) -> ScreenConfig:
+    """Load the screen config from an explicit path, or the repo default if present."""
+    from optscan.config import REPO_ROOT
+    from optscan.screener.config import DEFAULT_CONFIG_FILENAME
+
+    return ScreenConfig.load(path or (REPO_ROOT / DEFAULT_CONFIG_FILENAME))
+
+
+def _cmd_scan(settings: Settings, args: argparse.Namespace) -> int:
+    from optscan.jobs.scan import STALE_AFTER_HOURS, run_scan
+
+    if args.watchlist != "default":
+        print(f"Unknown watchlist {args.watchlist!r}. Only 'default' exists so far.")
+        return 1
+
+    config = _screen_config(settings, args.config)
+    result, inputs = run_scan(
+        settings,
+        config,
+        symbols=args.symbols,
+        live=args.live,
+        with_events=not args.no_events,
+    )
+
+    if inputs.missing:
+        print(
+            f"No data for: {', '.join(inputs.missing)}. "
+            "Run `optscan snapshot` first, or pass --live."
+        )
+    for symbol, message in result.symbols_failed.items():
+        print(f"Failed: {symbol}: {message}")
+
+    for symbol, age_seconds in sorted(result.stale_symbols.items()):
+        hours = age_seconds / 3600.0
+        if hours > STALE_AFTER_HOURS:
+            print(f"Stale: {symbol} quotes are {hours:.1f} hours old.")
+
+    rows = result.top(args.limit)
+    if not rows:
+        print("No candidates passed the screen.")
+        print(f"  {result.tally.summary()}")
+        return 0
+
+    print()
+    print(
+        f"{'symbol':<7}{'expiry':<12}{'strategy':<20}{'legs':<20}"
+        f"{'credit':>8}{'ann':>8}{'POP':>7}{'delta':>7}{'liq':>6}{'score':>7}"
+    )
+    print("-" * 102)
+    for opportunity in rows:
+        legs = "/".join(f"{leg.strike:g}{leg.right}" for leg in opportunity.legs)
+        annualized = (
+            f"{opportunity.annualized_return:.0%}"
+            if opportunity.annualized_return is not None
+            else "n/a"
+        )
+        pop = (
+            f"{opportunity.probability_of_profit:.0%}"
+            if opportunity.probability_of_profit is not None
+            else "n/a"
+        )
+        delta = f"{opportunity.short_delta:.2f}" if opportunity.short_delta is not None else "n/a"
+        liquidity = (
+            f"{opportunity.liquidity_score:.2f}"
+            if opportunity.liquidity_score is not None
+            else "n/a"
+        )
+        print(
+            f"{opportunity.symbol:<7}{opportunity.expiry!s:<12}"
+            f"{opportunity.strategy.value:<20}{legs:<20}"
+            f"{opportunity.credit:>8.2f}{annualized:>8}{pop:>7}"
+            f"{delta:>7}{liquidity:>6}{opportunity.score:>7.3f}"
+        )
+        if args.explain:
+            parts = ", ".join(
+                f"{name}={value:.2f}" if value is not None else f"{name}=n/a"
+                for name, value in opportunity.components.as_dict().items()
+            )
+            print(f"         {parts}")
+            for warning in opportunity.warnings:
+                print(f"         ! {warning}")
+
+    print()
+    print(f"  {result.tally.summary()}")
+    if result.opportunities and len(result.opportunities) > len(rows):
+        print(f"  showing {len(rows)} of {len(result.opportunities)}")
+
+    if args.gaps:
+        _print_gaps(result)
+
+    print()
+    print("  Scores rank candidates for review. They are not validated against outcomes.")
+    return 0
+
+
+def _print_gaps(result) -> None:
+    if not result.gaps:
+        print("\n  No gaps flagged.")
+        return
+
+    print(f"\n  Gaps flagged: {len(result.gaps)}")
+    for gap in result.gaps[:10]:
+        marker = "*" if gap.actionable else " "
+        print(f"  {marker} [{gap.kind.value}] {gap.symbol} {gap.expiry}: {gap.description}")
+        if not gap.actionable:
+            print(f"      not actionable: {gap.executability.value}")
+        for caveat in gap.caveats[:2]:
+            print(f"      caveat: {caveat}")
+
+
+def _cmd_config(settings: Settings, args: argparse.Namespace) -> int:
+    print(_screen_config(settings, args.config).to_yaml())
+    return 0
+
+
 def _cmd_status(settings: Settings, args: argparse.Namespace) -> int:
     from optscan.jobs.snapshot import describe_state
     from optscan.market_calendar import session_date_for
@@ -188,6 +345,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     handlers = {
+        "scan": _cmd_scan,
+        "config": _cmd_config,
         "snapshot": _cmd_snapshot,
         "watchlist": _cmd_watchlist,
         "status": _cmd_status,

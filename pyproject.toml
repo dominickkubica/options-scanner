@@ -77,6 +77,9 @@ ignore = [
 # PLR0911 covers the vol solver and the interpolators, where each early return is a
 # distinct named refusal and collapsing them would hide the taxonomy.
 "src/optscan/analytics/*" = ["PLR0917", "PLR0911"]
+# Same reason for the screener: each early return is a distinct named refusal or a
+# distinct reason a session cannot contribute to the history.
+"src/optscan/screener/*" = ["PLR0917", "PLR0911"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "yfinance".msg = "Market data vendors are only imported inside optscan.providers."

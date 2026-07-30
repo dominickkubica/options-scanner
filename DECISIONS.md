@@ -203,3 +203,91 @@ understates P50 for a position sold into elevated IV, and understating is the sa
 anomaly rather than a normal smile. That needs a fitted smile and a residual threshold,
 and the threshold should be calibrated against the snapshot history rather than picked,
 which means it may have to wait until there is enough history to calibrate against.
+
+---
+
+## 2026-07-30: Phase 3 screener and scoring
+
+**Generation is generous, filtering is strict, and every rejection is counted.** A
+candidate that was never generated cannot be explained later, and an empty results
+table with no explanation is the fastest way for a screener to lose its user. The
+tally prints under every scan: "20236 candidates considered, 883 passed. Top
+rejections: dte_too_long 7151, dte_too_short 5371, delta_too_low 3285."
+
+**Every threshold is in screen.yaml and unknown keys are an error.** A typo silently
+leaving a filter at its default would let a user believe a threshold is in force when
+it is not, which is worse than a crash.
+
+**Scan reads the last stored snapshot by default, not live quotes.** Fast, offline,
+reproducible, and it makes the whole ranking pipeline testable against a frozen
+fixture. `--live` fetches fresh. Either way the quote age comes back on the result and
+anything over six hours is called out, because a scan of yesterday's close is a
+legitimate thing to want and an illegitimate thing to mistake for live.
+
+**Missing score components renormalize rather than scoring zero.** IV rank is the case
+that matters: before the history is deep enough every symbol would score zero on it,
+which would not change the ranking but would compress every score toward the bottom
+and make an unavailable input look like a failed one.
+
+**Liquidity takes the worst leg, not the average.** A position is only as fillable as
+its hardest leg, and averaging lets a liquid short strike hide an untradeable wing.
+
+**Strangles report no capital rather than a plausible one.** Undefined risk has no
+honest denominator, so `max_loss`, `capital`, and both return figures come back None,
+and the strategy ranks below anything with a real return. That is the right default
+for a tool that cannot see your account.
+
+### The gaps module, and three versions of the same mistake
+
+The first implementation flagged 5139 mispricings on one SPY chain. The second flagged
+2583. The third flagged 1646. Each round was the same error in a new place: **measuring
+a constant offset and reading it as signal.** Worth recording in full, because it is
+the third time this project has made that mistake and the pattern is now recognisable.
+
+**Vertical mispricing.** Compared credit-over-width against the delta implied
+probability and flagged the excess. That excess is the variance risk premium, which is
+the entire reason premium selling exists, so it is positive nearly everywhere: 63
+percent of a liquid chain cleared the threshold. Measuring each vertical against the
+others in its own expiry and width did not fix it either, because the excess is not a
+distribution with outliers, it is a smooth curve running from +0.002 far out of the
+money to +0.268 at the money. Every near the money spread then reads as 20 or 40
+deviations out, which is a statement about gamma. **This detector is now off by
+default.** The measurement is right and the baseline is missing, and the baseline needs
+history. Left in the code rather than deleted, for Phase 8.
+
+**Put call parity.** Measured against `spot * exp(rt)` with a zero dividend yield and
+flagged 1043 strikes. Every one was the same offset: the implied forward was 742.0
+across every strike while the model forward was 742.45, and that 0.45 was SPY's
+dividend yield over 22 days. Parity was holding perfectly. **Now solved from the chain
+itself:** rearranging C - P = (F - K)exp(-rt) at the strikes nearest spot gives the
+forward, and every carry assumption disappears with it. Checking only within 2 percent
+of that forward, with both legs quoted inside 5 percent, took it to 56 across six
+symbols. The strikes that survived the first two fixes but not the third were deep in
+the money puts carrying real early exercise value, which breaks European parity
+legitimately and in a consistent direction.
+
+**Skew.** Fitted a quadratic across the whole listed strike range, where a quadratic is
+a poor description of a smile, so every wing strike looked anomalous. Now fitted within
+20 percent moneyness and flagged on a robust z score against the fit's own residual
+scale as well as an absolute floor, because three vol points off the smile is
+remarkable on a 12 vol index and unremarkable on a 90 vol single name.
+
+**The lesson, written down so it gets applied first next time:** before believing any
+detector, run it against the fixture and count the hits. A detector that fires on a
+large fraction of a liquid chain is describing the market, not finding anomalies in it.
+
+**Gap thresholds remain uncalibrated.** They are chosen to produce a reviewable list,
+not because anything says they are right. That is the same answer as Phase 2's open
+question, and it still needs history.
+
+**Open questions for Phase 4:**
+
+- The term structure backwardation warning fires on nearly every SPY row, because the
+  front expiry is 0DTE and very short dated vol is mechanically elevated. Probably the
+  same constant offset mistake a fourth time. Excluding expiries under about a week
+  from the inversion check is the likely fix, and it changes Phase 2 code and tests.
+- Ranking is dominated by narrow call credit spreads, because a 1 wide spread ties up
+  79 dollars and so annualizes enormously. The premium ramp saturates at 25 percent so
+  the absurd figures do not distort the ordering, but commissions are not modelled and
+  they would eat a 21 dollar max profit. Either model commissions or floor the credit
+  by strategy.
