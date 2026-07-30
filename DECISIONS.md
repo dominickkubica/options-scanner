@@ -108,3 +108,98 @@ env vars before validators run, so `OPTSCAN_DEFAULT_WATCHLIST=SPY,QQQ` needed th
 trading days is the usual answer, but a percentile over sixty days of a single regime is
 confidently wrong rather than unavailable. The `confidence` field in the roadmap needs a
 defined rule, not a vibe.
+
+---
+
+## 2026-07-30: Phase 2 analytics core
+
+**Our own greeks, with vollib as a test oracle rather than the implementation.** The
+roadmap said use py_vollib. py_vollib is deprecated in favour of `vollib`, and more to
+the point, using it as an independent second opinion in the tests is stronger than using
+it as the implementation: our math is readable, carries its own dividend handling, and is
+checked against an outside implementation across a grid of inputs. It agrees to 1e-9.
+
+**Greek units are trader units, stated in the module docstring.** delta per 1.00 of
+underlying, gamma per 1.00, theta per calendar day, vega per volatility point, rho per
+rate point. Mixing raw partials with these is how a number ends up 100 or 365 times
+wrong, and the docstring exists so nobody has to guess which convention is in force.
+
+**Time is ACT/365 to the 16:00 New York close, with intraday precision.** A 0DTE at
+15:45 has fifteen minutes of life, not zero and not one day, and both roundings are
+wrong in opposite directions.
+
+**American exercise is documented, not modelled.** BSM is European. Calls on non payers
+agree exactly, puts and dividend paying calls are understated, and the error grows with
+moneyness. Stated in greeks.py rather than papered over, and assignment risk around ex
+dividend is handled as an event flag instead.
+
+**The vol solver refuses in five distinct named ways.** Crossed, one sided, too wide,
+below intrinsic, above maximum, outside the bracket, and not identifiable. The last one
+was added after the round trip tests failed: for a contract worth 1e-14 with a vega of
+1e-13, Brent happily returns a root and that root is an artifact of where the search
+landed. Publishing it would put a fabricated number in the IV history, which is worse
+than a gap. The identifiability test is a vega floor.
+
+**What makes a vol identifiable is time value, not price.** A deep in the money put
+worth 7.99 against 8.00 of forward intrinsic carries as little volatility information as
+a far out of the money call worth a hundredth of a cent, and by put call parity it has
+the same near zero vega. Measured against the no arbitrage floor, not against spot
+intrinsic: for an in the money call the gap between those two is carry on the strike,
+not time value.
+
+**Answering the Phase 1 open question on IV rank confidence.** Under 20 observations,
+nothing is published at all: not a low confidence number, no number. 20 to 60 is LOW,
+60 to 180 MEDIUM, 180 or more HIGH, and every level drops one step when completeness
+falls below 80 percent of the trading days the window spans. The completeness rule
+matters because the days the snapshot job fails are not random days, they are the days
+the vendor was struggling, which correlates with the days the market was moving.
+
+**Both IV rank and IV percentile are reported, because they disagree usefully.** Rank
+normalizes against the range and so is destroyed by a single spike; percentile counts
+days and is blind to how far the extremes are. A high percentile with a low rank means
+vol is near the top of where it usually sits but far from its outlier high.
+
+**The expected move conversion was wrong and is now exact.** First implementation used
+the widely quoted "straddle times 0.85" and compared the result against spot*IV*sqrt(t).
+Running it against the real SPY chain showed a 29.5 percent disagreement on a chain
+whose ATM vol had been solved from those very options, which should have been near zero.
+The cause: an ATM straddle is the mean absolute move, which is sqrt(2/pi) = 0.798 of one
+standard deviation, so multiplying by 0.85 lands at 0.68 sigma and the comparison
+measured a constant offset rather than the market. The straddle is now inverted exactly,
+by solving the ATM straddle formula for sigma*sqrt(t) rather than using any multiplier,
+which is also correct at high total volatility where the first order identity drifts by
+over a percent. On the real chain the disagreement went to minus 5.4 percent and minus
+2.0 percent, with the sign the skew predicts.
+
+**Probability of touch is the first passage formula, not double the finish probability.**
+The doubling shortcut is exact only at zero log drift. Validated against a Monte Carlo
+simulation: the closed form sits just above the simulated frequency, which is the
+expected direction since discrete monitoring misses crossings that reverse between steps.
+
+**POP is measured at the breakeven, not at the strike.** A short put assigned a cent in
+the money still keeps almost all the credit. Measuring at the strike understates POP most
+where the credit is largest, which is where it matters.
+
+**Delta is exposed as a proxy and labelled as biased.** Delta is N(d1), the ITM
+probability is N(d2), and d1 exceeds d2 by sigma*sqrt(t), so delta always overstates.
+About 8 points at a year and 20 vol. Shown next to the real number so the gap is visible.
+
+**The margin model is written down in returns.py.** CSP is full cash less credit, not
+reg-T, which would turn a 2 percent return into 10 on the same trade. Verticals and
+condors are max loss. Naked calls deliberately return None, because unbounded loss has no
+honest denominator. Annualizing is simple scaling, not compounding: compounding a 45 day
+trade assumes you can find eight more like it.
+
+**Liquidity drops missing components rather than scoring them zero.** Absent volume is
+not illiquidity, and treating it as such would systematically punish whichever fields the
+current vendor leaves empty, which changes when the provider changes in Phase 5.
+
+**P50 is Monte Carlo and carries a standard error.** No closed form exists. Deterministic
+given a seed, and every estimate reports its own uncertainty because an unqualified
+percentage from a few hundred paths is overconfident. It re-prices at constant vol, which
+understates P50 for a position sold into elevated IV, and understating is the safe side.
+
+**Open question for Phase 3:** the gaps module needs a rule for what counts as a skew
+anomaly rather than a normal smile. That needs a fitted smile and a residual threshold,
+and the threshold should be calibrated against the snapshot history rather than picked,
+which means it may have to wait until there is enough history to calibrate against.

@@ -261,6 +261,93 @@ class TestHistory:
             YFinanceProvider().get_history("SPY", 0)
 
 
+class TestEvents:
+    def _provider(self, monkeypatch: pytest.MonkeyPatch, calendar, dividends=None):
+        provider = YFinanceProvider()
+        monkeypatch.setattr(
+            provider,
+            "_ticker",
+            lambda symbol: SimpleNamespace(
+                calendar=calendar,
+                dividends=dividends if dividends is not None else pd.Series(dtype=float),
+            ),
+        )
+        return provider
+
+    def test_reads_the_calendar(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        provider = self._provider(
+            monkeypatch,
+            {
+                "Earnings Date": [date(2026, 8, 6)],
+                "Ex-Dividend Date": date(2026, 8, 10),
+            },
+            dividends=pd.Series([0.24, 0.25, 0.26]),
+        )
+        events = provider.get_events("aapl")
+        assert events.symbol == "AAPL"
+        assert events.earnings_date == date(2026, 8, 6)
+        assert events.ex_dividend_date == date(2026, 8, 10)
+        assert events.dividend_amount == pytest.approx(0.26)
+        assert events.source == "yfinance"
+
+    def test_takes_the_soonest_of_several_earnings_dates(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Yahoo returns a window when the date is not confirmed."""
+        provider = self._provider(
+            monkeypatch, {"Earnings Date": [date(2026, 8, 12), date(2026, 8, 6)]}
+        )
+        assert provider.get_events("AAPL").earnings_date == date(2026, 8, 6)
+
+    def test_a_far_off_earnings_date_is_flagged_as_estimated(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Yahoo publishes a guess for the next unannounced quarter and does not
+        label it. Treating that as fact defeats an earnings exclusion filter."""
+        provider = self._provider(monkeypatch, {"Earnings Date": [date(2027, 6, 1)]})
+        events = provider.get_events("AAPL")
+        assert events.earnings_estimated is True
+
+    def test_a_near_earnings_date_is_taken_as_confirmed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from datetime import timedelta
+
+        soon = datetime.now(UTC).date() + timedelta(days=10)
+        provider = self._provider(monkeypatch, {"Earnings Date": [soon]})
+        assert provider.get_events("AAPL").earnings_estimated is False
+
+    def test_an_etf_with_no_fundamentals_is_not_an_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """SPY has no earnings, which is a fact about SPY, not a failure."""
+        provider = self._provider(monkeypatch, {}, dividends=pd.Series([1.90]))
+        events = provider.get_events("SPY")
+        assert events.earnings_date is None
+        assert events.dividend_amount == pytest.approx(1.90)
+        assert events.has_any is False
+
+    def test_no_dividend_history(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        provider = self._provider(monkeypatch, {"Earnings Date": [date(2026, 8, 6)]})
+        assert provider.get_events("XYZ").dividend_amount is None
+
+    def test_a_provider_without_a_calendar_says_so(self) -> None:
+        """The base class refuses rather than returning an empty calendar, because
+        "no events" and "no event data" must not look the same to a screen."""
+        from optscan.providers.base import MarketDataProvider
+
+        class Bare(MarketDataProvider):
+            name = "bare"
+
+            def get_quote(self, symbol): ...
+            def get_expirations(self, symbol): ...
+            def get_chain(self, symbol, expiry): ...
+            def get_history(self, symbol, days): ...
+
+        with pytest.raises(NotImplementedError, match="corporate event calendar"):
+            Bare().get_events("SPY")
+
+
 class TestProviderRegistry:
     def test_yfinance_is_the_configured_default(self, clean_env: None) -> None:
         from optscan.config import Settings

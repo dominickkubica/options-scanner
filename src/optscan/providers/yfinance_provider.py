@@ -21,7 +21,7 @@ import pandas as pd
 import yfinance as yf
 
 from optscan.logging import get_logger
-from optscan.models import OptionChain, OptionContract, PriceBar, Quote, Right
+from optscan.models import OptionChain, OptionContract, PriceBar, Quote, Right, SymbolEvents
 from optscan.providers.base import MarketDataProvider
 from optscan.providers.errors import (
     MalformedResponse,
@@ -35,6 +35,10 @@ log = get_logger("optscan.providers.yfinance")
 
 _RATE_LIMIT_MARKERS = ("too many requests", "rate limit", "429")
 _NOT_FOUND_MARKERS = ("no data found", "symbol may be delisted", "not found", "404")
+
+#: An earnings date further out than this is Yahoo's guess at the next quarter
+#: rather than a company confirmed date.
+ESTIMATED_EARNINGS_HORIZON_DAYS = 100
 
 
 def _classify(error: Exception, symbol: str) -> Exception:
@@ -67,6 +71,18 @@ def _clean_float(value: Any) -> float | None:
 def _clean_int(value: Any) -> int | None:
     number = _clean_float(value)
     return None if number is None else int(number)
+
+
+def _first_date(value: Any) -> date | None:
+    """Yahoo returns either a date or a list of them. Take the soonest."""
+    if value is None:
+        return None
+    if isinstance(value, list):
+        dates = [item for item in value if isinstance(item, date)]
+        return min(dates) if dates else None
+    if isinstance(value, datetime):
+        return value.date()
+    return value if isinstance(value, date) else None
 
 
 def _clean_timestamp(value: Any) -> datetime | None:
@@ -226,6 +242,53 @@ class YFinanceProvider(MarketDataProvider):
                 kept=len(contracts),
             )
         return contracts
+
+    def get_events(self, symbol: str) -> SymbolEvents:
+        """Earnings and ex dividend dates from the vendor's calendar.
+
+        Yahoo publishes an estimated earnings date for quarters the company has not
+        announced yet and does not label it as an estimate. A date more than a quarter
+        out is almost certainly one of those, so it is flagged rather than trusted.
+        """
+        symbol = symbol.strip().upper()
+        ticker = self._ticker(symbol)
+        try:
+            calendar = ticker.calendar or {}
+        except Exception as error:  # yfinance raises bare Exception, so this is the net
+            raise _classify(error, symbol) from error
+
+        fetched_at = self.now()
+        earnings = _first_date(calendar.get("Earnings Date"))
+        ex_dividend = _first_date(calendar.get("Ex-Dividend Date"))
+
+        estimated = False
+        if earnings is not None:
+            estimated = (earnings - fetched_at.date()).days > ESTIMATED_EARNINGS_HORIZON_DAYS
+
+        return SymbolEvents(
+            symbol=symbol,
+            earnings_date=earnings,
+            earnings_estimated=estimated,
+            ex_dividend_date=ex_dividend,
+            dividend_amount=self._recent_dividend(ticker),
+            fetched_at=fetched_at,
+            source=self.name,
+        )
+
+    def _recent_dividend(self, ticker: Any) -> float | None:
+        """The most recent dividend paid, as a stand in for the next one.
+
+        A stand in and not a forecast. It is right whenever the company holds its
+        dividend flat, which is most of the time, and it is the input to an assignment
+        risk flag rather than to a valuation, so being one raise behind is tolerable.
+        """
+        try:
+            dividends = ticker.dividends
+        except Exception:  # yfinance raises bare Exception, so this is the net
+            return None
+        if dividends is None or len(dividends) == 0:
+            return None
+        return _clean_float(dividends.iloc[-1])
 
     def get_history(self, symbol: str, days: int) -> list[PriceBar]:
         symbol = symbol.strip().upper()

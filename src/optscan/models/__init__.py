@@ -2,6 +2,7 @@
 
 from optscan.models.base import Record, UtcDatetime
 from optscan.models.enums import Right
+from optscan.models.events import SymbolEvents
 from optscan.models.market import (
     MAX_PLAUSIBLE_IV,
     OptionChain,
@@ -20,5 +21,6 @@ __all__ = [
     "Quote",
     "Record",
     "Right",
+    "SymbolEvents",
     "UtcDatetime",
 ]

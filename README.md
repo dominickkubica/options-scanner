@@ -4,10 +4,11 @@ A local-first tool that ingests options chains, computes its own greeks and vola
 analytics, scores premium-selling candidates, and renders a dashboard with charts,
 levels, and projections.
 
-Currently at **Phase 1**: it pulls real option chains through a provider interface and
-lands them on disk as partitioned parquet, and the daily snapshot job is running. No
-analytics yet. See `DECISIONS.md` for why things are the way they are and `CLAUDE.md`
-for the rules any contributor (human or agent) works under.
+Currently at **Phase 2**: it pulls real option chains through a provider interface,
+lands them on disk as partitioned parquet, runs a daily snapshot job, and computes its
+own greeks, implied volatility, probabilities, surface metrics, and return figures. No
+screener or dashboard yet. See `DECISIONS.md` for why things are the way they are and
+`CLAUDE.md` for the rules any contributor (human or agent) works under.
 
 ## Start the snapshot job today
 
@@ -69,6 +70,23 @@ venv\Scripts\python -m pytest
 venv\Scripts\python -m ruff check .
 venv\Scripts\python -m ruff format .
 ```
+
+## What the analytics assume
+
+Every module states its own assumptions, and these are the ones that bite:
+
+- Pricing is Black-Scholes-Merton, which is European. Listed equity options are
+  American. Calls on non dividend payers agree exactly; puts and dividend paying calls
+  are understated, increasingly so deep in the money.
+- Probabilities assume lognormal terminal prices at constant volatility. Real returns
+  have fatter tails and negative skew, so a strike this tool says has a 90 percent
+  chance of expiring worthless is systematically a little optimistic, in exactly the
+  scenario a premium seller cares about. Treat them as a ranking device.
+- Return on capital uses a stated margin model: cash secured puts are full cash less
+  credit, verticals and condors are max loss. Your broker may hold less, which would
+  make the reported returns conservative.
+- IV rank needs history this tool has to build. Under 20 observations it publishes
+  nothing rather than a number, and it labels everything under a year of coverage.
 
 ## What this tool does not do
 

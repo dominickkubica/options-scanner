@@ -51,16 +51,23 @@ venv\Scripts\python -m optscan status # market state, watchlist, recent captures
   machine's date.
 - Tests never touch the network. `tests/fixtures/spy_chain_snapshot.json` is a real
   captured chain, and `FakeProvider` in conftest drives the job offline.
+- Greek units are trader units: theta per calendar day, vega per volatility point, rho
+  per rate point. See the greeks.py docstring before touching any of it.
+- Analytics take thresholds as arguments with documented defaults. They never read
+  config. The caller passes config values in.
+- A number that cannot be computed honestly is not computed. The vol solver, IV rank,
+  and the liquidity score all return a stated reason instead of a plausible value.
 
 ## Non-goals
 - No auto-execution of trades. This tool ranks and displays, it does not place orders.
 - No claims of predictive accuracy that have not been validated in Phase 8.
 
 ## Current phase
-Phase 1 complete: provider interface, yfinance adapter, models, parquet snapshot
-storage, sqlite watchlist and run manifest, daily snapshot job.
+Phase 2 complete: greeks, implied vol, probability, Monte Carlo, term structure and
+skew, expected move, IV rank with confidence, return and capital metrics, liquidity
+scoring, event risk. All pure, all unit tested against hand computed values, greeks
+and vol cross checked against vollib.
 
-Phase 2 (analytics core) is next, and it is the hardest correctness work in the
-project. Tests with hand verified expected values come before implementations, and
-greeks get validated against a public BSM calculator to four decimals. Do not start
-work on a later phase without asking.
+Phase 3 (screener and scoring) is next: strategy modules, a YAML configurable filter
+layer, the gaps module, and a weighted composite score that carries its components so
+the UI can show why something ranked. Do not start work on a later phase without asking.

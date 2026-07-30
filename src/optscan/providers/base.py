@@ -16,7 +16,7 @@ from abc import ABC, abstractmethod
 from datetime import UTC, date, datetime
 from typing import ClassVar
 
-from optscan.models import OptionChain, PriceBar, Quote
+from optscan.models import OptionChain, PriceBar, Quote, SymbolEvents
 
 
 class MarketDataProvider(ABC):
@@ -59,6 +59,18 @@ class MarketDataProvider(ABC):
         Calendar days, not trading days: the caller asks for a window of time and
         gets whatever sessions fall inside it.
         """
+
+    def get_events(self, symbol: str) -> SymbolEvents:
+        """Scheduled earnings and ex dividend dates.
+
+        Not abstract, because not every vendor sells a corporate calendar and a
+        provider that cannot answer should say so rather than be forced to invent an
+        implementation. Callers must handle the refusal: no event data is a reason to
+        widen the screen, not to assume the calendar is clear.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not provide a corporate event calendar"
+        )
 
     def now(self) -> datetime:
         """Fetch timestamp source. Overridable so tests can freeze time."""

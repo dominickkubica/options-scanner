@@ -17,6 +17,8 @@ dependencies = [
     "pyarrow>=16.0",
     "duckdb>=1.0",
     "pandas-market-calendars>=4.4",
+    # Phase 2: analytics. scipy is used only for root finding in the vol solver.
+    "scipy>=1.13",
 ]
 
 [project.optional-dependencies]
@@ -25,6 +27,9 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.5",
     "pre-commit>=3.7",
+    # Independent oracle for the greeks and vol tests. Not a runtime dependency:
+    # our pricing is our own, and vollib exists to disagree with it if we are wrong.
+    "vollib>=1.0.11",
 ]
 
 [project.scripts]
@@ -65,6 +70,13 @@ ignore = [
 # imported by someone who configured that broker.
 "src/optscan/cli.py" = ["PLC0415"]
 "src/optscan/providers/__init__.py" = ["PLC0415"]
+# Options pricing has a signature convention that every textbook and every other
+# library shares: (right, spot, strike, time, rate, sigma, dividend_yield), positional
+# and in that order. Forcing keyword-only arguments to satisfy a counter would make
+# this code harder to check against a reference, which is the opposite of the goal.
+# PLR0911 covers the vol solver and the interpolators, where each early return is a
+# distinct named refusal and collapsing them would hide the taxonomy.
+"src/optscan/analytics/*" = ["PLR0917", "PLR0911"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "yfinance".msg = "Market data vendors are only imported inside optscan.providers."
