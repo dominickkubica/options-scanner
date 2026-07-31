@@ -78,9 +78,18 @@ and `optscan-web` entries in `.claude/launch.json`.
 
 ## Current phase
 
-**Phases 0 to 4 are complete and committed.** Do not start work on a later phase
-without asking. Phase 5 is the live data feed: a real time provider (Schwab or
-Tradier), and the websockets the static dashboard deliberately does not have.
+**Phases 0 to 4 are complete and committed.** Phase 5 is the live data feed.
+
+**Phase 5 is authorized.** The user gave the go ahead on 2026-07-30 and made two
+choices at the same time, so do not ask again:
+
+- **Build against Tradier**, not Schwab. Schwab needs three legged OAuth with a browser
+  redirect and manual app approval, plus refresh tokens that expire weekly, so it
+  cannot be set up unattended. Tradier is a bearer token and has a streaming endpoint.
+- **Build, test, and commit autonomously** to `main`, the same workflow as Phases 0
+  to 4.
+
+Do not start Phase 6 or later without asking.
 
 ### The dashboard, as built
 
@@ -125,8 +134,82 @@ frontend/src/
   invalidates it, and guarded by a per key lock because the three panels that ask at
   once would otherwise all miss and all solve. See `test_concurrent_requests_for_one_symbol_solve_it_once`.
 
+### Next: Phase 5, live data and a real broker feed
+
+Goal, from the roadmap: the numbers move. Exit criteria: the dashboard updates during
+market hours without manual refresh, and degrades honestly when the feed drops.
+
+Steps, in order:
+
+1. **Check for a token before anything else**, and branch on the answer:
+   ```
+   venv\Scripts\python -c "from optscan.config import get_settings; print(get_settings().safe_summary()['credentials_set'])"
+   ```
+   That prints credential names only, never values. Keep it that way: never print, log,
+   or commit a token. As of 2026-07-30 nothing is set, and `OPTSCAN_TRADIER_TOKEN=` is
+   present but empty in `.env`. A free sandbox token comes from developer.tradier.com,
+   and only the user can create it.
+   - Token set: build the adapter and exercise it against real responses.
+   - Token unset: do not stall. Build everything that does not need the vendor, listed
+     below, driven by a fake provider. Write the adapter against the documented API
+     with recorded fixtures, and say plainly that the live feed is unverified.
+2. `providers/tradier.py`, behind the existing `MarketDataProvider` interface, plus its
+   entry in `get_provider`. **Add the Tradier client to the ruff TID251 banned-api list
+   in `pyproject.toml` in the same commit.** DECISIONS.md has said since Phase 0 that
+   every new vendor goes on that list, and it is the easiest rule in the project to
+   forget because nothing fails until someone imports the vendor somewhere else.
+3. Token handling through `optscan.config` only. Refresh state, if any, stays out of
+   git: `data/` and `.env` are both gitignored.
+4. Transport from FastAPI to the browser, delta updates only. See the open question
+   below before choosing.
+5. Rate limiting, request budgeting, and a chain cache TTL. All configurable, none
+   hardcoded, same as every other threshold in this project.
+6. Connection state in the UI and market open / closed / pre / post handling. Phase 4
+   already puts a `Provenance` on every payload carrying market data and renders it in
+   every panel header. Extend that rather than inventing a parallel mechanism.
+
+**The open question Phase 4 left, quoted from DECISIONS.md:**
+
+> When a real time provider arrives, the choice is between pushing over websockets and
+> letting the client poll a cheap endpoint. Pushing is the better experience and the
+> harder thing to keep honest, because a partially updated screen where the chain is
+> live and the scan is four minutes old is worse than one that is uniformly four
+> minutes old and says so.
+
+Decide it deliberately and record the reasoning. Whatever you pick, the screen must
+never show a mix of ages without saying so.
+
+**The highest consequence risk in this phase:** an IV history that silently mixes
+yfinance and Tradier marks is corrupt in a way that is nearly impossible to detect
+afterwards, and it poisons the one signal the whole tool is built around. Every record
+already carries `source` as well as `fetched_at` for exactly this reason. Make a
+provider switch visible in the stored data, and never merge marks from two vendors
+into one series.
+
+**Do not code Tradier's endpoints, auth headers, streaming session flow, or rate
+limits from memory.** Fetch the current developer documentation, verify the shapes you
+depend on, and record in DECISIONS.md what you verified and when. This project already
+has one file whose fragility comes from matching vendor error text.
+
+**Do not break Phase 4.** yfinance stays the default. `optscan scan`, `optscan
+snapshot`, and the stored snapshot dashboard keep working as they do now. If live data
+becomes available the UI must distinguish live from stored explicitly, per panel, and
+never quietly relabel stored data as live. `REALTIME_PROVIDERS` in
+`api/routers/health.py` is an empty frozenset today; update it only when a real time
+provider actually exists.
+
+**Live verification needs market hours.** The exit criterion cannot be checked outside
+a session, so build it, test it against a fake feed and a frozen clock, and state that
+live verification is outstanding rather than claiming it passed. An unverified claim
+in this project is worse than an admitted gap.
+
 ### Watch out for
 
+- **The daily snapshot job must keep running through every phase.** It is registered in
+  Windows Task Scheduler as `OptscanDailySnapshot` at 12:45 machine time, which is
+  15:45 New York. IV rank needs months of history, no free source sells it after the
+  fact, and every day the job does not run is a permanent hole. Check `optscan status`
+  before and after any change that touches providers, config, or storage.
 - Only one day of snapshot history exists, so every IV rank in the UI reads
   `insufficient` with a caveat under it. That is correct behaviour, not a bug.
 - API tests must stay offline. The provider is injected through `provider_factory_dep`
