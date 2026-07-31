@@ -360,3 +360,99 @@ refresh button that re-fetches from the provider, or stay strictly on stored sna
 until Phase 5 brings a real feed. Stored only is the more honest default and makes the
 whole UI reproducible; a refresh button invites the user to treat delayed yfinance
 quotes as live.
+
+---
+
+## 2026-07-30: Phase 4 finished, the dashboard
+
+The rest of what the previous entry left: the dependency layer, eight endpoints, the
+app, and the whole frontend. Answering that entry's open question first, because
+everything else follows from it.
+
+**The dashboard shows stored snapshots and has no live refresh button.** That was the
+open question and stored-only wins. A refresh button invites the user to treat delayed
+yfinance quotes as live, and there is no label that survives contact with a chart: put
+a number in a dashboard and it reads as current no matter what the caption says. The
+whole UI is therefore reproducible from what is on disk, the capture time and its age
+sit in the header on every screen, and anything over six hours is badged stale. Live
+data is Phase 5's job, with a provider that actually quotes in real time.
+
+**Two exceptions, both reference data rather than quotes, both stated when they fail.**
+The corporate calendar is fetched because without it the API's screen would silently
+differ from the CLI's: `exclude_earnings` would have nothing to exclude on, and the
+dashboard would return candidates the same config rejects in a terminal, invisibly.
+Daily candles are fetched because nothing stores them and a price chart is in the
+phase's exit criteria. Both are cached, and both come back as an empty result carrying
+the reason rather than as a blank panel. `ScanOut.events_checked` is false when the
+calendar could not be reached, and the UI says so above the table.
+
+**The solved symbol cache is keyed on the snapshot's own `fetched_at`.** A new capture
+therefore invalidates it without anyone remembering to. Keyed on the symbol alone it
+would serve yesterday's chain until someone restarted the server, which is the same
+class of error as everything else this project keeps catching.
+
+**And the cache needed a lock, which is the part that was nearly missed.** Opening a
+symbol fires the summary, the chain, and the scan at the same instant, uvicorn runs
+sync endpoints in a thread pool, and all three miss a cache none of them has finished
+filling. The first version cached correctly and saved nothing on the one page load
+where it mattered: the server log showed the same AAPL capture solved three times for
+two requests. A per key lock with a re-check inside turns that into one solve and two
+waits. Measured on the real six symbol data directory: four concurrent requests for SPY
+produced four solves before, one after. The test asserts the count rather than the
+timing, and was checked against the unlocked version to make sure it was not vacuous.
+
+**Analysis is solved as of the capture, not as of now.** `analyze_snapshot` is called
+without a `now`, so liquidity scores trade recency against the capture instant. A
+snapshot from Friday then scores the same on Monday as it did on Friday, which is both
+the honest reading for stored data and the thing that makes the result cacheable at
+all. Quote age is computed fresh per response from `fetched_at` instead.
+
+**The wire format never sends a zero it does not mean.** A contract with no solvable
+implied vol serializes `iv: null` plus the solver's own named refusal, and the grid
+prints that refusal in the cell. Every strike keeps its row even when nothing about it
+could be computed, because dropping the row leaves a hole in the ladder that reads as
+a strike which is not listed. The frontend has one formatting rule to match: `n/a` for
+null and never a `|| 0` fallback anywhere.
+
+**The chain grid's two column orders are written out in full.** The first version built
+the put side by reversing the call side's cells, which also reverses bid past ask: a
+normal 0.00 by 0.01 put rendered as bid 0.01 ask 0.00, a crossed market that was not
+there. Two explicit orders, no cleverness.
+
+**Payoff requests carry no prices.** The browser says which strikes, which rights, and
+which direction; the server prices the legs from the same solved snapshot the rest of
+the page came from. A client that could post its own prices could post a payoff for a
+position nobody could enter, and it would look exactly as convincing as a real one.
+
+**Default expiry is the server's choice, not the front of the chain.** The first
+screenable expiry, meaning the nearest one at or beyond the screen's own `min_dte`.
+Opening on the front expiry lands on a zero or one day chain whose vol is the least
+representative on the board and whose grid is 25 percent solved. The browser asks with
+no expiry and reads back which one it got, so the threshold stays in config where it
+belongs.
+
+**Two charts needed a band, for the same reason the analytics did.** The skew curve
+plots strikes within 20 percent of spot, the same band the smile fit uses in the gaps
+module. Without it a far out of the money strike quoted 0.00 by 0.05 solves to a real
+195 percent implied vol and compresses a 14 vol smile into the bottom two pixels. The
+chain grid defaults to 25 percent either side for the same reason and always prints how
+many strikes are hidden. Neither is cosmetic: an axis scaled by an artifact is a chart
+about the artifact.
+
+**Charts are hand rolled SVG except the candles.** A payoff diagram needs zero to be a
+real axis rather than the bottom of the plot, and a null point has to break the line
+rather than bridge it, which is the drawing equivalent of rendering unknown as zero.
+Candles plus a volume histogram on its own scale is the one shape worth a dependency,
+so that one uses lightweight-charts.
+
+**Still open, and still blocked on history:** every gap threshold and the vertical
+mispricing baseline, unchanged from Phase 3. The dashboard makes the shortage visible
+rather than fixing it, which is the correct thing for it to do: every IV rank on the
+watchlist currently reads `insufficient` with "Only 1 observations, need 20" under it.
+
+**Open question for Phase 5:** the API is stateless per request and the frontend polls
+nothing. When a real time provider arrives, the choice is between pushing over
+websockets and letting the client poll a cheap endpoint. Pushing is the better
+experience and the harder thing to keep honest, because a partially updated screen
+where the chain is live and the scan is four minutes old is worse than one that is
+uniformly four minutes old and says so.

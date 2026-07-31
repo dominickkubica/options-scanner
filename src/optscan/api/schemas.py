@@ -99,6 +99,18 @@ class SymbolSummaryOut(ApiModel):
     expiries: list[ExpirySummaryOut] = Field(default_factory=list)
     earnings_date: date | None = None
     ex_dividend_date: date | None = None
+    events_checked: bool = Field(
+        default=False,
+        description=(
+            "Whether the corporate calendar was reachable. False means the absence of "
+            "an earnings date below says nothing, and the UI must not read it as clear."
+        ),
+    )
+    events_note: str | None = None
+    partial: bool = Field(
+        default=False,
+        description="True when at least one expiry failed to capture in this snapshot.",
+    )
 
 
 class ContractOut(ApiModel):
@@ -155,6 +167,13 @@ class HistoryOut(ApiModel):
     symbol: str
     bars: list[BarOut] = Field(default_factory=list)
     provenance: Provenance | None = None
+    note: str | None = Field(
+        default=None,
+        description=(
+            "Why there are no candles. An empty series without a stated reason would "
+            "render as a blank panel that looks like a styling bug."
+        ),
+    )
 
 
 class LegOut(ApiModel):
@@ -227,6 +246,15 @@ class ScanOut(ApiModel):
     stale: dict[str, float] = Field(
         default_factory=dict, description="Quote age in seconds, per symbol."
     )
+    events_checked: bool = Field(
+        default=False,
+        description=(
+            "Whether the earnings exclusion actually ran. When false the screen is "
+            "weaker than the same config run from the CLI, and saying so is the only "
+            "way that difference is visible."
+        ),
+    )
+    notes: list[str] = Field(default_factory=list)
     disclaimer: str = (
         "Scores rank candidates for review. They have not been validated against outcomes."
     )
@@ -245,6 +273,40 @@ class GapOut(ApiModel):
     caveats: list[str] = Field(default_factory=list)
 
 
+class GapsOut(ApiModel):
+    gaps: list[GapOut] = Field(default_factory=list)
+    symbols_scanned: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+    disclaimer: str = (
+        "Candidates for human review, not edge. Every flag here is more likely to be a "
+        "stale quote, an uncrossable spread, or a dividend than a mispricing."
+    )
+
+
+class PayoffLegIn(ApiModel):
+    """One leg of a position the browser wants a payoff diagram for.
+
+    Deliberately carries no prices. The strike, right, expiry, and direction are the
+    user's choice; the mid and the implied vol are looked up server side from the same
+    solved snapshot everything else on the page came from. A browser that could post
+    its own prices could post a payoff for a position nobody could enter.
+    """
+
+    action: str = Field(description="buy or sell")
+    right: str = Field(description="C or P")
+    strike: float = Field(gt=0.0)
+    quantity: int = Field(default=1, gt=0)
+
+
+class PayoffRequest(ApiModel):
+    symbol: str
+    expiry: date
+    legs: list[PayoffLegIn] = Field(min_length=1)
+    price_range: float | None = Field(
+        default=None, gt=0.0, le=1.0, description="Fraction of spot to draw either side."
+    )
+
+
 class PayoffPointOut(ApiModel):
     price: float
     at_expiry: float
@@ -258,3 +320,13 @@ class PayoffOut(ApiModel):
     max_loss: float | None
     spot: float
     net_credit: float
+    legs: list[LegOut] = Field(
+        default_factory=list,
+        description="The legs as priced, so the diagram can be checked against its inputs.",
+    )
+    dte: int = 0
+    provenance: Provenance | None = None
+    note: str | None = Field(
+        default=None,
+        description="Set when the T+0 curve could not be drawn, with the reason.",
+    )

@@ -101,6 +101,15 @@ def build_parser() -> argparse.ArgumentParser:
     config_cmd = sub.add_parser("config", help="Print the effective screen configuration.")
     config_cmd.add_argument("--config", type=Path, default=None, help="Config YAML to load.")
 
+    serve = sub.add_parser("serve", help="Run the dashboard API, and the built UI if present.")
+    serve.add_argument("--host", default=None, help="Defaults to api_host in config.")
+    serve.add_argument("--port", type=int, default=None, help="Defaults to api_port in config.")
+    serve.add_argument(
+        "--reload",
+        action="store_true",
+        help="Restart on source changes. Development only.",
+    )
+
     status = sub.add_parser("status", help="Market state, watchlist size, recent captures.")
     status.add_argument("--runs", type=int, default=10, help="How many recent runs to show.")
 
@@ -299,6 +308,35 @@ def _cmd_config(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_serve(settings: Settings, args: argparse.Namespace) -> int:
+    """Start uvicorn against the app factory.
+
+    The import is deferred like every other command's, so `optscan status` does not
+    pay for FastAPI. Nothing here reads the network beyond binding a local port.
+    """
+    import uvicorn
+
+    from optscan.api.deps import frontend_dist
+
+    host = args.host or settings.api_host
+    port = args.port or settings.api_port
+
+    print(f"API on http://{host}:{port}/api/health")
+    if frontend_dist() is None:
+        print("No built frontend. Run `npm run dev` in frontend/ and open http://localhost:5173")
+    else:
+        print(f"Dashboard on http://{host}:{port}/")
+
+    uvicorn.run(
+        "optscan.api.app:app",
+        host=host,
+        port=port,
+        reload=args.reload,
+        log_config=None,
+    )
+    return 0
+
+
 def _cmd_status(settings: Settings, args: argparse.Namespace) -> int:
     from optscan.jobs.snapshot import describe_state
     from optscan.market_calendar import session_date_for
@@ -356,6 +394,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "watchlist": _cmd_watchlist,
         "status": _cmd_status,
         "schedule": _cmd_schedule,
+        "serve": _cmd_serve,
     }
     return handlers[args.command](settings, args)
 

@@ -109,3 +109,50 @@ class TestSnapshotCommand:
         )
         assert main(["snapshot"]) == 0
         assert "Skipped" in capsys.readouterr().out
+
+
+class TestServeCommand:
+    def test_binds_the_configured_host_and_port_without_starting_a_server(
+        self, isolated: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The command is wiring, so the test checks the wiring and never opens a port."""
+        import uvicorn
+
+        from optscan.api import deps
+
+        captured: dict[str, object] = {}
+        monkeypatch.setattr(uvicorn, "run", lambda app, **kw: captured.update(app=app, **kw))
+        # Whether a build exists depends on whether anyone has run `npm run build`, so
+        # the branch is chosen here rather than inherited from the working tree.
+        monkeypatch.setattr(deps, "frontend_dist", lambda: None)
+
+        assert main(["serve", "--port", "8123"]) == 0
+        assert captured["app"] == "optscan.api.app:app"
+        assert captured["port"] == 8123
+        assert captured["reload"] is False
+
+        out = capsys.readouterr().out
+        assert "8123/api/health" in out
+        # Without a build the message has to say where the UI actually is.
+        assert "5173" in out
+
+    def test_points_at_itself_when_the_frontend_is_built(
+        self, isolated: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import uvicorn
+
+        from optscan.api import deps
+
+        monkeypatch.setattr(uvicorn, "run", lambda app, **kw: None)
+        monkeypatch.setattr(deps, "frontend_dist", lambda: tmp_dist(isolated))
+
+        assert main(["serve"]) == 0
+        out = capsys.readouterr().out
+        assert "Dashboard on" in out
+        assert "5173" not in out
+
+
+def tmp_dist(root: Path) -> Path:
+    dist = root / "dist"
+    dist.mkdir(exist_ok=True)
+    return dist
