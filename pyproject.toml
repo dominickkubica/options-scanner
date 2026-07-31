@@ -19,6 +19,11 @@ dependencies = [
     "pandas-market-calendars>=4.4",
     # Phase 2: analytics. scipy is used only for root finding in the vol solver.
     "scipy>=1.13",
+    # Phase 3: screener config.
+    "pyyaml>=6.0",
+    # Phase 4: dashboard API.
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
 ]
 
 [project.optional-dependencies]
@@ -30,6 +35,8 @@ dev = [
     # Independent oracle for the greeks and vol tests. Not a runtime dependency:
     # our pricing is our own, and vollib exists to disagree with it if we are wrong.
     "vollib>=1.0.11",
+    # Exercises the API without a running server.
+    "httpx>=0.27",
 ]
 
 [project.scripts]

@@ -324,3 +324,39 @@ disabled vertical gap detector tested in its disabled state and its enabled one.
 **Still open, and genuinely blocked rather than deferred:** every gap threshold, and
 the vertical mispricing baseline. Both need snapshot history to calibrate against, and
 the history is one day old. Phase 8 is where that gets settled.
+
+---
+
+## 2026-07-30: Phase 4 started, paused partway
+
+Committed as work in progress rather than left in the working tree. See the Current
+phase section of CLAUDE.md for the ordered list of what remains.
+
+**Payoff curves are computed server side, not in the browser.** The expiry curve is
+piecewise linear and a browser could draw it, but the T+0 curve needs Black-Scholes
+repricing at every point, and putting a second pricing implementation in JavaScript is
+how the two quietly disagree. One implementation, tested, in Python.
+
+**Breakevens are solved, not sampled.** The expiry payoff has kinks only at strikes,
+so every zero crossing lies on a straight segment between two of them and one linear
+interpolation is exact. Scanning a grid would miss a crossing between samples and
+report the rest slightly wrong.
+
+**Only the upside is unbounded.** A stock cannot fall below zero, so a short put has a
+real maximum loss, large and rarely quoted, while a short call has none. The first
+implementation treated both tails symmetrically and reported no maximum loss for a
+cash secured put, which is wrong and would have shown as an empty cell in the UI.
+
+**API schemas are separate from the domain models.** The domain models are strict,
+frozen, and carry things a browser has no use for. The wire formats are shaped for a
+table or a chart and are allowed to flatten and rename. Keeping them apart means a UI
+change never pulls on the models the analytics depend on. Two rules carry over and
+matter more here: every payload with market data in it also carries when that data was
+fetched, and a missing number serializes as null rather than zero, because a chart
+that draws zero for "unknown" is lying where nobody can see it.
+
+**Open question for the rest of Phase 4:** whether the dashboard should offer a live
+refresh button that re-fetches from the provider, or stay strictly on stored snapshots
+until Phase 5 brings a real feed. Stored only is the more honest default and makes the
+whole UI reproducible; a refresh button invites the user to treat delayed yfinance
+quotes as live.

@@ -71,10 +71,63 @@ venv\Scripts\python -m optscan status # market state, watchlist, recent captures
 - No claims of predictive accuracy that have not been validated in Phase 8.
 
 ## Current phase
-Phase 3 complete: six strategy generators, a YAML configurable filter layer that
-explains every rejection, weighted composite scoring that carries its components, the
-gaps module, and `optscan scan`.
 
-Phase 4 (dashboard v1, static) is next: FastAPI serving JSON, React consuming it,
-opportunities table with score breakdown, chain grid, underlying detail, payoff
-diagram. No websockets until Phase 5. Do not start work on a later phase without asking.
+**Phase 4 (dashboard v1, static) is IN PROGRESS.** Phases 0 to 3 are complete and
+committed. Do not start work on a later phase without asking.
+
+### Phase 4 goal and exit criteria
+
+FastAPI serves JSON, React consumes it, no websockets (those are Phase 5). Exit
+criteria from the roadmap: pick a ticker in the UI and see chain, charts, and
+candidates without touching a terminal. Four views:
+
+- Opportunities: sortable/filterable ranked table, score breakdown on expand
+- Chain: full grid, heatmap on IV and volume, greeks columns
+- Underlying detail: candles + volume, IV rank gauge, term structure curve, skew curve
+- Payoff: P/L at expiry and at T+0, breakevens, max profit and loss
+
+### Done so far
+
+- `analytics/payoff.py` plus 28 tests, all passing. Expiry and T+0 curves, breakevens
+  solved exactly by interpolation on the piecewise linear segments rather than
+  sampled, and bounded/unbounded extremes. Note the asymmetry it encodes: only the
+  upside can be unbounded, because a stock cannot fall below zero, so a short put has
+  a real maximum loss and a short call does not.
+- `api/schemas.py`, the wire formats. Deliberately separate from the domain models so
+  a UI change never pulls on what the analytics depend on. Every payload carrying
+  market data also carries a `Provenance` with its age and a stale flag.
+- `pyproject.toml` now depends on fastapi and uvicorn, with httpx as a dev dependency
+  for testing the API without a running server. Already installed in the venv.
+
+### Next steps, in order
+
+1. `api/deps.py`: settings and screen config access, plus a solved-symbol cache keyed
+   on the snapshot's `fetched_at` so a new capture invalidates it automatically.
+   Solving a chain is several hundred milliseconds and three panels ask for the same
+   symbol at once. Also a `frontend_dist()` helper returning the built frontend path
+   or None in development.
+2. `api/routers/`: health, watchlist, symbol summary, chain (per expiry), history
+   (candles), scan/opportunities, gaps, payoff. Payoff must be computed server side
+   because the T+0 curve needs BSM repricing.
+3. `api/app.py`: the FastAPI app, CORS for the Vite dev server on 5173, and mounting
+   the built frontend when it exists.
+4. Tests via `fastapi.testclient.TestClient` against the frozen fixture. The API must
+   be testable with no network and no running server.
+5. `frontend/`: Vite + React. Node 20.20.2 and npm 10.8.2 are installed. Write
+   `package.json`, `vite.config.js`, `index.html` and `src/` directly rather than
+   running `npm create vite`, which is interactive. lightweight-charts for candles,
+   hand rolled SVG or Recharts for payoff, term structure, and skew.
+6. Add a `.claude/launch.json` entry so the dev server starts through the preview
+   tool. Never run a dev server through Bash.
+7. Verify in the browser preview, screenshot it, then update README, DECISIONS, and
+   this file, and commit.
+
+### Watch out for
+
+- The API must never invent a number. A missing greek serializes as null, never zero:
+  a chart that draws zero for "unknown" is lying invisibly.
+- `optscan scan` currently takes seconds across the watchlist. The dashboard will need
+  the cache in step 1 or every page load will re-solve everything.
+- Only one day of snapshot history exists, so every IV rank in the UI will be
+  `insufficient` with a caveat. That is correct behaviour and the UI has to show it
+  rather than render an empty gauge.
