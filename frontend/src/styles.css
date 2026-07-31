@@ -184,6 +184,75 @@ button {
   border-color: var(--good);
 }
 
+/* Connection state ------------------------------------------------------- */
+
+/* Pushed to the right so it sits in the chrome rather than in the reading order of
+   the numbers. It is a condition light, not a data point, and it has to be findable
+   in the same place on every screen. */
+.connection {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--dim);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 3px 8px;
+}
+
+.connection .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--dim);
+}
+
+.connection.good .dot {
+  background: var(--good);
+  /* A slow pulse rather than a static dot. A feed that has silently stopped and a
+     feed that is delivering look identical otherwise, and the header is exactly where
+     that difference has to be visible without reading anything. */
+  animation: live-pulse 2.4s ease-in-out infinite;
+}
+
+.connection.good .label {
+  color: var(--good);
+}
+
+.connection.bad .dot {
+  background: var(--warn);
+}
+
+.connection.bad .label {
+  color: var(--warn);
+}
+
+.connection .session {
+  color: var(--dim);
+  border-left: 1px solid var(--line);
+  padding-left: 8px;
+}
+
+@keyframes live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+/* Respect a reader who has asked the system for less motion. The colour still
+   carries the state, so nothing is lost by holding the dot still. */
+@media (prefers-reduced-motion: reduce) {
+  .connection.good .dot {
+    animation: none;
+  }
+}
+
 .note {
   border-left: 2px solid var(--warn);
   background: rgba(217, 164, 65, 0.07);

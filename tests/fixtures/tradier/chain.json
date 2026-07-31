@@ -1,0 +1,109 @@
+{
+  "options": {
+    "option": [
+      {
+        "symbol": "SPY260821C00630000",
+        "description": "SPY Aug 21 2026 $630 Call",
+        "exch": "Z",
+        "type": "option",
+        "last": 14.32,
+        "volume": 1204,
+        "open": 13.9,
+        "high": 15.05,
+        "low": 13.55,
+        "close": 14.32,
+        "bid": 14.28,
+        "ask": 14.36,
+        "underlying": "SPY",
+        "strike": 630.0,
+        "trade_date": 1785513600000,
+        "prevclose": 15.1,
+        "bidsize": 40,
+        "asksize": 35,
+        "bid_date": 1785513600000,
+        "ask_date": 1785513600000,
+        "open_interest": 18422,
+        "contract_size": 100,
+        "expiration_date": "2026-08-21",
+        "expiration_type": "standard",
+        "option_type": "call",
+        "root_symbol": "SPY",
+        "greeks": {
+          "delta": 0.6431,
+          "gamma": 0.0121,
+          "theta": -0.1934,
+          "vega": 0.7712,
+          "rho": 0.2201,
+          "phi": -0.2044,
+          "bid_iv": 0.1382,
+          "mid_iv": 0.1391,
+          "ask_iv": 0.14,
+          "smv_vol": 0.1388,
+          "updated_at": "2026-07-31T15:44:02.000Z"
+        }
+      },
+      {
+        "symbol": "SPY260821P00630000",
+        "description": "SPY Aug 21 2026 $630 Put",
+        "type": "option",
+        "last": 5.81,
+        "volume": 2311,
+        "close": 5.81,
+        "bid": 5.78,
+        "ask": 5.85,
+        "underlying": "SPY",
+        "strike": 630.0,
+        "trade_date": 1785513600000,
+        "open_interest": 30115,
+        "contract_size": 100,
+        "expiration_date": "2026-08-21",
+        "option_type": "put",
+        "greeks": {
+          "delta": -0.3569,
+          "gamma": 0.0121,
+          "theta": -0.1802,
+          "vega": 0.7712,
+          "mid_iv": 0.1452,
+          "smv_vol": 0.1449,
+          "updated_at": "2026-07-31T15:44:02.000Z"
+        }
+      },
+      {
+        "symbol": "SPY260821C00780000",
+        "description": "SPY Aug 21 2026 $780 Call",
+        "type": "option",
+        "last": 0.02,
+        "volume": 0,
+        "close": 0.02,
+        "bid": 0.0,
+        "ask": 0.05,
+        "underlying": "SPY",
+        "strike": 780.0,
+        "trade_date": 0,
+        "open_interest": 91,
+        "contract_size": 100,
+        "expiration_date": "2026-08-21",
+        "option_type": "call",
+        "greeks": null
+      },
+      {
+        "symbol": "SPY260821C00999000",
+        "description": "row with no option_type, which cannot be normalized",
+        "strike": 999.0,
+        "bid": 0.01,
+        "ask": 0.03,
+        "expiration_date": "2026-08-21",
+        "contract_size": 100
+      },
+      {
+        "symbol": "SPY260821P00000000",
+        "description": "row with no strike, which cannot be normalized",
+        "bid": 0.01,
+        "ask": 0.03,
+        "option_type": "put",
+        "expiration_date": "2026-08-21",
+        "contract_size": 100
+      }
+    ]
+  }
+}

@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
-import { Cell, ErrorBox, Panel, Provenance, useAsync } from "../components/common.jsx";
+import {
+  Cell,
+  ErrorBox,
+  LiveProvenance,
+  Note,
+  Panel,
+  Provenance,
+  useAsync,
+} from "../components/common.jsx";
 import { count, heat, normalize, num, pct, vol } from "../format.js";
 
 // The full grid, calls on the left, puts on the right, strikes down the middle.
@@ -12,11 +20,30 @@ import { count, heat, normalize, num, pct, vol } from "../format.js";
 // A strike that could not be solved keeps its row and shows the solver's own refusal
 // on hover. Dropping those rows would leave gaps in the ladder that read as strikes
 // which are not listed, and colouring them as zero volatility would be worse.
+//
+// **Live or stored, never both.** When a live cycle is running for this expiry the
+// whole grid is built from that cycle: its strikes, its quotes, its solved vols, its
+// spot. It is not an overlay on the stored table. Overlaying would put a live bid next
+// to a stored delta in the same row under one timestamp, which is precisely the
+// half updated screen this phase set out not to build. The two sources have different
+// strike sets and different ages, so the table shows one of them at a time and says
+// which in its header.
 
 function byStrike(rows) {
   const map = new Map();
   for (const row of rows) map.set(row.strike, row);
   return map;
+}
+
+// A live cycle's flat contract map back into the call/put pairs the grid renders.
+function liveRows(cycle) {
+  const calls = new Map();
+  const puts = new Map();
+  for (const contract of Object.values(cycle.contracts)) {
+    (contract.right === "C" ? calls : puts).set(contract.strike, contract);
+  }
+  const strikes = [...new Set([...calls.keys(), ...puts.keys()])].sort((a, b) => a - b);
+  return strikes.map((strike) => ({ strike, call: calls.get(strike), put: puts.get(strike) }));
 }
 
 //: Strike bands the grid can be narrowed to, as a fraction either side of spot. A
@@ -29,23 +56,35 @@ const BANDS = [
   { label: "every listed strike", value: null },
 ];
 
-export default function Chain({ symbol, expiries, expiry, onExpiry }) {
+export default function Chain({ symbol, expiries, expiry, onExpiry, live }) {
   const { data, error, loading } = useAsync(() => api.chain(symbol, expiry), [symbol, expiry]);
   const [band, setBand] = useState(0.25);
   const atmRow = useRef(null);
 
+  // Only adopted when it is unambiguously this symbol and this expiry. A cycle for a
+  // neighbouring expiry rendered under this header would be wrong in the worst way:
+  // plausible, and invisible.
+  const cycle =
+    live?.cycle && live.cycle.symbol === symbol && (!data || live.cycle.expiry === data.expiry)
+      ? live.cycle
+      : null;
+
+  const spot = cycle ? cycle.quote.spot : data?.spot;
+  const atmIv = cycle ? cycle.atmIv : data?.atm_iv;
+
   const allRows = useMemo(() => {
+    if (cycle) return liveRows(cycle);
     if (!data) return [];
     const calls = byStrike(data.calls);
     const puts = byStrike(data.puts);
     const strikes = [...new Set([...calls.keys(), ...puts.keys()])].sort((a, b) => a - b);
     return strikes.map((strike) => ({ strike, call: calls.get(strike), put: puts.get(strike) }));
-  }, [data]);
+  }, [data, cycle]);
 
   const rows = useMemo(() => {
-    if (!data || band === null) return allRows;
-    return allRows.filter((row) => Math.abs(row.strike / data.spot - 1) <= band);
-  }, [allRows, band, data]);
+    if (!spot || band === null) return allRows;
+    return allRows.filter((row) => Math.abs(row.strike / spot - 1) <= band);
+  }, [allRows, band, spot]);
 
   const ivScale = useMemo(
     () => normalize(rows.flatMap((row) => [row.call?.iv, row.put?.iv])),
@@ -68,9 +107,7 @@ export default function Chain({ symbol, expiries, expiry, onExpiry }) {
 
   const atmStrike = rows.reduce(
     (best, row) =>
-      best === null || Math.abs(row.strike - data.spot) < Math.abs(best - data.spot)
-        ? row.strike
-        : best,
+      best === null || Math.abs(row.strike - spot) < Math.abs(best - spot) ? row.strike : best,
     null,
   );
 
@@ -82,9 +119,31 @@ export default function Chain({ symbol, expiries, expiry, onExpiry }) {
 
   return (
     <Panel
-      title={`Chain ${data.expiry} (${data.dte} DTE)`}
-      right={<Provenance provenance={data.provenance} />}
+      title={`Chain ${data.expiry} (${cycle ? cycle.dte : data.dte} DTE)`}
+      right={
+        cycle ? (
+          <LiveProvenance cycle={cycle} connection={live.connection} status={live.status} />
+        ) : (
+          <Provenance provenance={data.provenance} />
+        )
+      }
     >
+      {cycle ? (
+        <Note>
+          Every number in this grid comes from one live fetch at{" "}
+          {new Date(cycle.fetchedAt).toLocaleTimeString()}. Nothing here is mixed with the
+          stored capture.
+        </Note>
+      ) : (
+        live?.status &&
+        live.status.state !== "disabled" && (
+          <Note>
+            Showing the stored capture. The live feed is {live.status.state}
+            {live.status.detail ? `: ${live.status.detail}` : "."}
+          </Note>
+        )
+      )}
+
       <div className="controls">
         <label>
           expiry{" "}
@@ -116,8 +175,8 @@ export default function Chain({ symbol, expiries, expiry, onExpiry }) {
           </select>
         </label>
         <span className="provenance">
-          spot {num(data.spot)}, at the money vol {vol(data.atm_iv)}, showing{" "}
-          {count(rows.length)} of {count(allRows.length)} strikes
+          spot {num(spot)}, at the money vol {vol(atmIv)}, showing {count(rows.length)} of{" "}
+          {count(allRows.length)} strikes
         </span>
       </div>
 

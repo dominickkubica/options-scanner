@@ -44,6 +44,16 @@ export function age(seconds) {
   return `${Math.round(hours / 24)}d ago`;
 }
 
+// An elapsed span, not a point in the past. `age` says "1m ago", which is right after
+// "updated" and wrong after "for". Two formatters because they are two sentences.
+export function duration(seconds) {
+  if (absent(seconds)) return MISSING;
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const minutes = seconds / 60;
+  if (minutes < 60) return `${Math.round(minutes)}m`;
+  return `${Math.round(minutes / 60)}h`;
+}
+
 export function strategyLabel(value) {
   return String(value).replace(/_/g, " ");
 }

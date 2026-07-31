@@ -1,7 +1,7 @@
 # Project: Options Selling Scanner
 
 ## Stack
-Python 3.12, FastAPI, DuckDB + SQLite, pydantic v2, py_vollib, pytest, ruff.
+Python 3.12, FastAPI, DuckDB + SQLite, pydantic v2, py_vollib, httpx, pytest, ruff.
 Frontend: React + Vite + lightweight-charts. Windows dev environment.
 
 The venv is pinned to 3.12 and lives at `venv/`. Use `venv\Scripts\python` for everything.
@@ -11,8 +11,11 @@ The system default `python` on this machine is 3.13 and is not what this project
 - Analytics functions are pure: no I/O, no network, no globals. All I/O lives in providers/ and storage/.
 - Every analytics function ships with a unit test containing a hand-verified expected value.
 - No hardcoded thresholds. Anything a user might tune goes in config.
-- All market data flows through the MarketDataProvider interface. Never import yfinance
-  or a broker SDK outside providers/. Ruff enforces this (TID251).
+- All market data flows through the MarketDataProvider interface. Never import yfinance,
+  httpx, or a broker SDK outside providers/. Ruff enforces this (TID251), and every new
+  vendor goes on that list in the same commit that adds the adapter.
+- An IV history is per vendor. Never pool two sources into one series, and say what was
+  excluded when you filter.
 - Every data record carries fetched_at. Never display a number without knowing its age.
 - Prefer explicit failure over silent fallback. A stale quote must be visibly stale.
 - No em dashes in comments, docstrings, or UI copy.
@@ -30,6 +33,7 @@ src/optscan/
   analytics/        greeks.py, iv.py, probability.py, levels.py
   screener/         rules/, scoring.py, strategies/
   jobs/             snapshot.py, scheduler.py
+  live/             the polling refresh loop and its delta encoder
   api/              schemas, deps, views, app, routers/
 frontend/           React app: src/views, src/components, gitignored node_modules and dist
 tests/              mirrors src layout; fixtures/ holds frozen chains
@@ -78,141 +82,99 @@ and `optscan-web` entries in `.claude/launch.json`.
 
 ## Current phase
 
-**Phases 0 to 4 are complete and committed.** Phase 5 is the live data feed.
+**Phases 0 to 5 are complete and committed.** Phase 6 is levels and projections, and it
+is **not authorized**. Ask before starting it, and before anything later.
 
-**Phase 5 is authorized.** The user gave the go ahead on 2026-07-30 and made two
-choices at the same time, so do not ask again:
+### What Phase 5 built
 
-- **Build against Tradier**, not Schwab. Schwab needs three legged OAuth with a browser
-  redirect and manual app approval, plus refresh tokens that expire weekly, so it
-  cannot be set up unattended. Tradier is a bearer token and has a streaming endpoint.
-- **Build, test, and commit autonomously** to `main`, the same workflow as Phases 0
-  to 4.
-
-Do not start Phase 6 or later without asking.
-
-### The dashboard, as built
-
-`optscan serve` runs uvicorn on the API and hosts `frontend/dist` at the same address
-when it has been built. In development, `npm --prefix frontend run dev` puts Vite on
-5173 proxying `/api` to 8000. Both preview servers are registered in `.claude/launch.json`.
+A Tradier adapter, a polling live feed, and an SSE stream to the browser.
 
 ```
-src/optscan/api/
-  schemas.py    wire formats, separate from the domain models on purpose
-  deps.py       settings, screen config, the solved symbol cache, the two fetches
-  views.py      domain objects to wire formats, one place, where None survives
-  app.py        the app, CORS for 5173, the built frontend mounted at the root
-  routers/      health, watchlist, symbols (summary/chain/history), scan+gaps, payoff
-frontend/src/
-  api.js        every call, surfacing the server's own `detail` string on failure
-  format.js     formatting, and the rule that null renders "n/a" and never 0
-  views/        Opportunities, Chain, Underlying, Payoff
-  components/   common.jsx, charts.jsx (hand rolled SVG), Candles.jsx
+src/optscan/providers/
+  tradier.py        REST adapter: quotes, expirations, chains, daily bars
+  ratelimit.py      token bucket sized from the documented per minute limit
+src/optscan/live/
+  hub.py            the refresh loop, the delta encoder, the subscriber fan-out
+src/optscan/api/routers/live.py    GET /api/live/status and /api/live/stream
+frontend/src/live.js               EventSource client and the delta application rule
 ```
 
-### Rules the dashboard adds
+The transport decision and its reasoning are in DECISIONS.md under 2026-07-31. The
+short version: Tradier's free sandbox has no streaming endpoint at all and is fifteen
+minutes delayed, so there is no vendor push to forward. The server polls, and SSE tells
+the browser a cycle landed.
 
-- **Stored snapshots only.** No live refresh button until Phase 5. The header shows the
-  capture time and age everywhere, and over six hours is badged stale.
-- **Two request time fetches, and both state their failures:** the corporate calendar
-  (or the screen silently skips its earnings exclusion) and daily candles (nothing
-  stores them). Anything unavailable returns an empty result carrying the reason.
-- **Never send a zero you do not mean.** A contract with no solvable vol serializes
-  `iv: null` plus the solver's named refusal, and every listed strike keeps its row.
-  The frontend mirrors this: `n/a`, never a `|| 0` fallback.
-- **The payoff request carries no prices.** The browser names strikes and directions;
-  the server prices them from the same solved snapshot as the rest of the page.
-- **Thresholds stay in config.** The browser asks for a chain with no expiry and the
-  server picks the first one at or beyond `min_dte`, so the UI never hardcodes a
-  screen threshold.
-- **Charts need bands for the same reason the analytics do.** A 0.00 by 0.05 wing
-  strike solves to a real 195 percent vol and flattens a 14 vol smile to nothing. Skew
-  plots within 20 percent of spot, the chain grid defaults to 25 percent, and both say
-  how many strikes are hidden.
-- **The solved symbol cache is locked per key.** Keyed on `fetched_at` so a new capture
-  invalidates it, and guarded by a per key lock because the three panels that ask at
-  once would otherwise all miss and all solve. See `test_concurrent_requests_for_one_symbol_solve_it_once`.
+### Rules Phase 5 adds
 
-### Next: Phase 5, live data and a real broker feed
+- **The unit of update is a whole cycle, never a field.** One quote, one chain, one
+  solve, one `fetched_at` across all of it. That is what makes a delta safe: a contract
+  that did not move holds the same value at this version as at the last, so the table is
+  entirely as of the newest version rather than a mixture of ages.
+- **A fetch that fails or comes back partial never becomes a version.** It emits a
+  status event. The previous cycle stays on screen and its age climbs, which is the
+  honest picture.
+- **A contract that leaves the chain is named in `removed`.** A row nobody mentions
+  again is one the browser renders forever at its last price.
+- **The grid is live or stored, never a blend.** Not an overlay. Different strike sets,
+  different ages; the table renders one source and its header says which.
+- **`realtime` is a function of the settings, not a set of provider names.** Sandbox is
+  delayed regardless; production depends on an entitlement no response announces, so
+  `tradier_realtime_entitled` is asked and defaults to false. `delay_minutes` null means
+  unknown, not zero.
+- **Nothing is polled while the market is closed.** Polling slows by a configurable
+  multiple outside the regular session. Session state comes from the offline market
+  calendar, not from a vendor clock endpoint.
+- **The live feed never writes to storage.** The daily snapshot job stays the single
+  writer of the IV history.
+- **The hub and the chain endpoint must resolve an unnamed expiry identically.** They
+  did not at first, and the symptom was a stream that connected, cycles that arrived, a
+  header that said live, and a grid that never moved. `LiveHub._default_expiry` and
+  `symbols.py` both use `min_dte` from screen.yaml, and a test pins it.
 
-Goal, from the roadmap: the numbers move. Exit criteria: the dashboard updates during
-market hours without manual refresh, and degrades honestly when the feed drops.
+### What is verified, and what is not
 
-Steps, in order:
+Verified in a browser on 2026-07-31 with the market open, against **yfinance**: the
+stream connects, cycles arrive on the interval with no refresh, the numbers move, the
+header shows connection and session state, and stopping the API leaves the last cycle
+on screen with its age climbing.
 
-1. **Check for a token before anything else**, and branch on the answer:
-   ```
-   venv\Scripts\python -c "from optscan.config import get_settings; print(get_settings().safe_summary()['credentials_set'])"
-   ```
-   That prints credential names only, never values. Keep it that way: never print, log,
-   or commit a token. As of 2026-07-30 nothing is set, and `OPTSCAN_TRADIER_TOKEN=` is
-   present but empty in `.env`. A free sandbox token comes from developer.tradier.com,
-   and only the user can create it.
-   - Token set: build the adapter and exercise it against real responses.
-   - Token unset: do not stall. Build everything that does not need the vendor, listed
-     below, driven by a fake provider. Write the adapter against the documented API
-     with recorded fixtures, and say plainly that the live feed is unverified.
-2. `providers/tradier.py`, behind the existing `MarketDataProvider` interface, plus its
-   entry in `get_provider`. **Add the Tradier client to the ruff TID251 banned-api list
-   in `pyproject.toml` in the same commit.** DECISIONS.md has said since Phase 0 that
-   every new vendor goes on that list, and it is the easiest rule in the project to
-   forget because nothing fails until someone imports the vendor somewhere else.
-3. Token handling through `optscan.config` only. Refresh state, if any, stays out of
-   git: `data/` and `.env` are both gitignored.
-4. Transport from FastAPI to the browser, delta updates only. See the open question
-   below before choosing.
-5. Rate limiting, request budgeting, and a chain cache TTL. All configurable, none
-   hardcoded, same as every other threshold in this project.
-6. Connection state in the UI and market open / closed / pre / post handling. Phase 4
-   already puts a `Provenance` on every payload carrying market data and renders it in
-   every panel header. Extend that rather than inventing a parallel mechanism.
+**Nothing has been run against Tradier.** No token existed. `tests/fixtures/tradier/`
+is built from the published response schemas, not captured, and its README says so.
 
-**The open question Phase 4 left, quoted from DECISIONS.md:**
+**The single thing only the user can do:** create a free sandbox token at
+developer.tradier.com and paste it into the empty `OPTSCAN_TRADIER_TOKEN=` line in
+`.env`. Never enter it on their behalf, never print or commit a token value.
+`safe_summary()` reports credential names only.
 
-> When a real time provider arrives, the choice is between pushing over websockets and
-> letting the client poll a cheap endpoint. Pushing is the better experience and the
-> harder thing to keep honest, because a partially updated screen where the chain is
-> live and the scan is four minutes old is worse than one that is uniformly four
-> minutes old and says so.
+**When a token appears, in this order:**
 
-Decide it deliberately and record the reasoning. Whatever you pick, the screen must
-never show a mix of ages without saying so.
-
-**The highest consequence risk in this phase:** an IV history that silently mixes
-yfinance and Tradier marks is corrupt in a way that is nearly impossible to detect
-afterwards, and it poisons the one signal the whole tool is built around. Every record
-already carries `source` as well as `fetched_at` for exactly this reason. Make a
-provider switch visible in the stored data, and never merge marks from two vendors
-into one series.
-
-**Do not code Tradier's endpoints, auth headers, streaming session flow, or rate
-limits from memory.** Fetch the current developer documentation, verify the shapes you
-depend on, and record in DECISIONS.md what you verified and when. This project already
-has one file whose fragility comes from matching vendor error text.
-
-**Do not break Phase 4.** yfinance stays the default. `optscan scan`, `optscan
-snapshot`, and the stored snapshot dashboard keep working as they do now. If live data
-becomes available the UI must distinguish live from stored explicitly, per panel, and
-never quietly relabel stored data as live. `REALTIME_PROVIDERS` in
-`api/routers/health.py` is an empty frozenset today; update it only when a real time
-provider actually exists.
-
-**Live verification needs market hours.** The exit criterion cannot be checked outside
-a session, so build it, test it against a fake feed and a frozen clock, and state that
-live verification is outstanding rather than claiming it passed. An unverified claim
-in this project is worse than an admitted gap.
+1. `venv\Scripts\python -c "from optscan.config import get_settings; print(get_settings().safe_summary()['credentials_set'])"`
+2. Recapture `tests/fixtures/tradier/*.json` from the sandbox and delete the paragraph
+   in its README that says they are constructed from documentation.
+3. Check the shapes the adapter guesses at because the docs do not state them: whether
+   `quotes.unmatched_symbols` really appears for an unknown ticker, and whether the
+   epoch fields are milliseconds. `_clean_epoch` infers the unit by magnitude.
+4. Only then consider `OPTSCAN_PROVIDER=tradier`. Switching weakens the earnings
+   exclusion, visibly, because Tradier sells no corporate calendar, and it starts a new
+   IV history: the yfinance sessions are excluded by design and the UI says so.
 
 ### Watch out for
 
-- **The daily snapshot job must keep running through every phase.** It is registered in
-  Windows Task Scheduler as `OptscanDailySnapshot` at 12:45 machine time, which is
-  15:45 New York. IV rank needs months of history, no free source sells it after the
-  fact, and every day the job does not run is a permanent hole. Check `optscan status`
-  before and after any change that touches providers, config, or storage.
-- Only one day of snapshot history exists, so every IV rank in the UI reads
+- **The daily snapshot job must keep running through every phase.** Registered in
+  Windows Task Scheduler as `OptscanDailySnapshot` at 12:45 machine time, which is 15:45
+  New York. IV rank needs months of history, no free source sells it after the fact, and
+  every day the job does not run is a permanent hole. Check `optscan status` before and
+  after any change touching providers, config, or storage.
+- **`OPTSCAN_LIVE_ENABLED` is false by default and should stay that way** until somebody
+  asks for live data. With it false this is exactly the stored snapshot dashboard Phases
+  0 to 4 built, and nothing polls anything.
+- Only two days of snapshot history exist, so every IV rank in the UI reads
   `insufficient` with a caveat under it. That is correct behaviour, not a bug.
 - API tests must stay offline. The provider is injected through `provider_factory_dep`
-  and overridden with a fake; never let a test reach the real one.
+  and the hub through `live_hub`, both overridden with fakes.
+- **The SSE endpoint cannot be tested through TestClient.** Starlette buffers the whole
+  response and returns only on the app's final body message, which a stream never sends,
+  so the request never returns. Drive `_events` directly, as `tests/test_api_live.py`
+  does.
 - The gaps thresholds and the vertical mispricing baseline are still uncalibrated and
   still blocked on history. Phase 8.

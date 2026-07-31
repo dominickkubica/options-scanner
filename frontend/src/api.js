@@ -41,6 +41,7 @@ function query(params) {
 
 export const api = {
   health: () => request("/health"),
+  liveStatus: () => request("/live/status"),
   watchlist: () => request("/watchlist"),
   symbol: (symbol) => request(`/symbols/${encodeURIComponent(symbol)}`),
   chain: (symbol, expiry) =>

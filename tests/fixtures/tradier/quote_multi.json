@@ -1,0 +1,34 @@
+{
+  "quotes": {
+    "quote": [
+      {
+        "symbol": "SPY",
+        "description": "SPDR S&P 500",
+        "type": "etf",
+        "last": 638.42,
+        "volume": 47994892,
+        "close": 638.42,
+        "bid": 638.4,
+        "ask": 638.44,
+        "bidsize": 12,
+        "asksize": 8,
+        "prevclose": 640.2,
+        "trade_date": 1785513600000
+      },
+      {
+        "symbol": "QQQ",
+        "description": "Invesco QQQ Trust",
+        "type": "etf",
+        "last": 571.03,
+        "volume": 28114500,
+        "close": 571.03,
+        "bid": 571.0,
+        "ask": 571.06,
+        "bidsize": 4,
+        "asksize": 6,
+        "prevclose": 573.8,
+        "trade_date": 1785513600000
+      }
+    ]
+  }
+}

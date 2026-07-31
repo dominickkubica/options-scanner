@@ -43,12 +43,13 @@ from optscan.api.schemas import Provenance
 from optscan.config import REPO_ROOT, Settings, get_settings
 from optscan.jobs.load import latest_snapshot
 from optscan.jobs.scan import STALE_AFTER_HOURS
+from optscan.live import LiveHub
 from optscan.logging import get_logger
 from optscan.models import ChainSnapshot, PriceBar, SymbolEvents
 from optscan.providers import MarketDataProvider, ProviderError, get_provider
 from optscan.screener.config import DEFAULT_CONFIG_FILENAME, ScreenConfig
 from optscan.screener.context import SymbolAnalysis, analyze_snapshot
-from optscan.screener.history import atm_iv_history
+from optscan.screener.history import IvHistory, atm_iv_history
 from optscan.storage import read_snapshots
 
 log = get_logger("optscan.api.deps")
@@ -87,6 +88,10 @@ class SolvedSymbol:
     iv_history: list[tuple[date, float]] = field(default_factory=list)
     events: EventWindow | None = None
     events_note: str | None = None
+    #: Set when stored sessions from another vendor were left out of the IV history.
+    #: Surfaced next to the rank, because a confidence level that drops after a
+    #: provider switch otherwise looks like the snapshot job has been failing.
+    iv_history_note: str | None = None
 
     @property
     def events_checked(self) -> bool:
@@ -191,13 +196,19 @@ def _release_solve_lock(key: object) -> None:
 
 
 def clear_caches() -> None:
-    """Drop everything cached. Called between tests, and by the app on startup."""
+    """Drop everything cached. Called between tests, and by the app on startup.
+
+    The live hub is torn down here too. A test that leaves one running keeps a polling
+    thread and a provider connection alive into the next test, which is how an offline
+    suite quietly acquires a network call.
+    """
     _SOLVED.clear()
     _EVENTS.clear()
     _HISTORY.clear()
     with _SOLVE_LOCKS_GUARD:
         _SOLVE_LOCKS.clear()
     screen_config.cache_clear()
+    reset_live_hub()
 
 
 # --------------------------------------------------------------------------------
@@ -252,6 +263,47 @@ def provider_factory_dep() -> ProviderFactory:
 SettingsDep = Annotated[Settings, Depends(settings_dep)]
 ScreenConfigDep = Annotated[ScreenConfig, Depends(screen_config_dep)]
 ProviderFactoryDep = Annotated[ProviderFactory, Depends(provider_factory_dep)]
+
+
+#: The live hub, built once per process. A singleton rather than a dependency because
+#: it owns a polling thread and a provider connection: one per request would be one
+#: poller per request, which is exactly the request budget catastrophe Phase 5 is
+#: supposed to prevent.
+#: A one slot dict rather than a rebound module global, so the lock is what guards it
+#: rather than the import machinery.
+_HUB: dict[str, LiveHub] = {}
+_HUB_GUARD = threading.Lock()
+
+
+def live_hub(settings: Settings) -> LiveHub:
+    """The process wide live hub, created on first use.
+
+    Created even when the feed is disabled, because the status endpoint has to be able
+    to say "disabled" and a None here would make every caller handle that separately.
+    A disabled hub never starts its thread and never builds a provider.
+    """
+    with _HUB_GUARD:
+        hub = _HUB.get("hub")
+        if hub is None:
+            hub = LiveHub(
+                settings,
+                lambda: get_provider(settings),
+                # The same accessor the chain endpoint uses, so both resolve an
+                # unnamed expiry to the same one. If they diverged, a live panel
+                # would follow an expiry the grid is not showing and the table
+                # would never move while the feed insisted it was live.
+                screen_config=screen_config,
+            )
+            _HUB["hub"] = hub
+        return hub
+
+
+def reset_live_hub() -> None:
+    """Stop and forget the hub. Called on shutdown, and between tests."""
+    with _HUB_GUARD:
+        hub = _HUB.pop("hub", None)
+    if hub is not None:
+        hub.stop()
 
 
 def frontend_dist() -> Path | None:
@@ -324,7 +376,14 @@ def _solve(
 ) -> SolvedSymbol:
     """Do the expensive part. Called with the key's solve lock held."""
     frame = read_snapshots(settings.snapshot_path, symbol=normalized)
-    history = atm_iv_history(frame, rate=settings.risk_free_rate) if not frame.empty else []
+    # Attributed to the snapshot's own source rather than the configured provider, so
+    # that switching vendors does not silently re-rank the captures already on disk.
+    iv_history = (
+        atm_iv_history(frame, rate=settings.risk_free_rate, source=snapshot.source)
+        if not frame.empty
+        else IvHistory(source=snapshot.source)
+    )
+    history = list(iv_history.points)
 
     events: EventWindow | None = None
     events_note: str | None = None
@@ -354,6 +413,7 @@ def _solve(
         iv_history=history,
         events=events,
         events_note=events_note,
+        iv_history_note=iv_history.note(),
     )
     _SOLVED.put(key, solved)
     _release_solve_lock(key)

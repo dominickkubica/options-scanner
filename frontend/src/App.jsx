@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "./api.js";
-import { ErrorBox, Provenance, useAsync } from "./components/common.jsx";
+import { ConnectionBadge, ErrorBox, Provenance, useAsync } from "./components/common.jsx";
+import { CONNECTION, useLive } from "./live.js";
 import Chain from "./views/Chain.jsx";
 import Opportunities from "./views/Opportunities.jsx";
 import Payoff from "./views/Payoff.jsx";
@@ -24,11 +25,18 @@ const VIEWS = [
 export default function App() {
   const health = useAsync(() => api.health(), []);
   const watchlist = useAsync(() => api.watchlist(), []);
+  const liveStatus = useAsync(() => api.liveStatus(), []);
 
   const [symbol, setSymbol] = useState(null);
   const [view, setView] = useState("opportunities");
   const [expiry, setExpiry] = useState(null);
   const [handover, setHandover] = useState(null);
+
+  // Subscribed only while a view that can actually show live numbers is open. A
+  // stream held open behind the payoff diagram would spend the request budget
+  // refreshing a chain nobody is looking at.
+  const wantsLive = Boolean(liveStatus.data?.state && liveStatus.data.state !== "disabled");
+  const live = useLive(symbol, expiry, { enabled: wantsLive && view === "chain" });
 
   // Open on the first symbol that actually has data. Landing on an empty one and
   // showing a 404 is a bad first run when a captured symbol is sitting right there.
@@ -113,8 +121,11 @@ export default function App() {
         <div style={{ marginTop: "auto", padding: "0 16px" }} className="provenance">
           {health.data && !health.data.realtime && (
             <>
-              Delayed data. This tool ranks and displays. It never places orders, and its
-              scores have not been validated against outcomes.
+              {health.data.delay_minutes
+                ? `Data is delayed by ${health.data.delay_minutes} minutes. `
+                : "Delayed data. "}
+              This tool ranks and displays. It never places orders, and its scores have
+              not been validated against outcomes.
             </>
           )}
         </div>
@@ -125,6 +136,11 @@ export default function App() {
           <h1>{symbol || "no symbol"}</h1>
           {summary.data && <span className="spot">{num(summary.data.spot)}</span>}
           {summary.data && <Provenance provenance={summary.data.provenance} />}
+          <ConnectionBadge
+            status={live.status || liveStatus.data}
+            connection={wantsLive ? live.connection : CONNECTION.CLOSED}
+            cycle={live.cycle}
+          />
         </div>
 
         <ErrorBox error={watchlist.error} />
@@ -141,6 +157,7 @@ export default function App() {
             expiries={summary.data.expiries}
             expiry={expiry}
             onExpiry={setExpiry}
+            live={live}
           />
         )}
 

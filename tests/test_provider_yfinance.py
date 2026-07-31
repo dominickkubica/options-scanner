@@ -357,12 +357,60 @@ class TestProviderRegistry:
         assert provider.name == "yfinance"
         assert provider.realtime is False
 
-    def test_unimplemented_provider_says_which_phase(self, clean_env: None) -> None:
+    def test_tradier_without_a_token_says_how_to_get_one(self, clean_env: None) -> None:
+        """Phase 5 implemented this provider, so the failure is now a missing
+        credential rather than a missing adapter, and the message has to say which."""
+        from optscan.config import Settings
+        from optscan.providers import get_provider
+        from optscan.providers.errors import AuthenticationError
+
+        with pytest.raises(AuthenticationError, match=r"developer\.tradier\.com"):
+            get_provider(Settings(_env_file=None, provider="tradier"))
+
+    def test_a_still_unimplemented_provider_says_why(self, clean_env: None) -> None:
         from optscan.config import Settings
         from optscan.providers import get_provider
 
-        with pytest.raises(NotImplementedError, match="Phase 5"):
-            get_provider(Settings(_env_file=None, provider="tradier"))
+        with pytest.raises(NotImplementedError, match="OAuth"):
+            get_provider(Settings(_env_file=None, provider="schwab"))
+
+    def test_realtime_is_answered_without_building_a_provider(self, clean_env: None) -> None:
+        """The health endpoint asks on every request and must not open a connection,
+        and for Tradier the answer depends on the environment rather than the vendor."""
+        from optscan.config import Settings
+        from optscan.providers import provider_is_realtime
+
+        assert provider_is_realtime(Settings(_env_file=None)) is False
+        assert (
+            provider_is_realtime(
+                Settings(_env_file=None, provider="tradier", tradier_environment="sandbox")
+            )
+            is False
+        )
+        # Sandbox is documented as fifteen minutes delayed, so the entitlement flag
+        # cannot talk it into calling itself real time.
+        assert (
+            provider_is_realtime(
+                Settings(
+                    _env_file=None,
+                    provider="tradier",
+                    tradier_environment="sandbox",
+                    tradier_realtime_entitled=True,
+                )
+            )
+            is False
+        )
+        assert (
+            provider_is_realtime(
+                Settings(
+                    _env_file=None,
+                    provider="tradier",
+                    tradier_environment="production",
+                    tradier_realtime_entitled=True,
+                )
+            )
+            is True
+        )
 
 
 class TestExpirations:

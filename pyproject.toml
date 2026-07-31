@@ -24,6 +24,11 @@ dependencies = [
     # Phase 4: dashboard API.
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
+    # Phase 5: the Tradier adapter. Tradier publishes no SDK, so this is how the vendor
+    # is reached. Already present transitively for the API tests; named here because a
+    # runtime dependency that only arrives through a dev extra is a broken install
+    # waiting for the first person who does not install the dev extra.
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
@@ -71,6 +76,7 @@ ignore = [
 "tests/*" = [
     "PLR2004",  # magic values are the point of a test
     "PLC0415",  # a local import keeps a test's setup next to the assertion it serves
+    "TID251",   # the adapter tests drive httpx with a mock transport, offline
 ]
 "src/optscan/providers/*" = ["TID251"]        # the one place vendor SDKs are allowed
 # Deferred imports, deliberately: the CLI stays fast to start and a broker SDK is only
@@ -90,6 +96,11 @@ ignore = [
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "yfinance".msg = "Market data vendors are only imported inside optscan.providers."
+# Phase 5 added Tradier, which has no SDK: it is reached over plain HTTP. So the thing
+# to ban is the HTTP client itself, which is what a shortcut to a vendor endpoint from
+# a router or a job would have to import. Same rule as yfinance, one layer down.
+"httpx".msg = "Vendor HTTP calls are only made inside optscan.providers."
+"optscan.providers.tradier".msg = "Build providers through get_provider, not by importing the adapter."
 
 [tool.ruff.format]
 quote-style = "double"

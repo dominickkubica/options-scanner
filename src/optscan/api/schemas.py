@@ -40,6 +40,48 @@ class HealthOut(ApiModel):
     version: str
     provider: str
     realtime: bool = Field(description="Whether the configured provider quotes in real time.")
+    delay_minutes: int | None = Field(
+        default=None,
+        description=(
+            "Documented delay on this provider's quotes, in minutes. Null means the "
+            "delay is unknown rather than zero: a vendor that does not publish one is "
+            "not thereby real time."
+        ),
+    )
+    live_enabled: bool = Field(
+        default=False,
+        description="Whether the live feed is configured to run at all.",
+    )
+
+
+class LiveStatusOut(ApiModel):
+    """The live feed's own condition.
+
+    Reported whether or not data is flowing, because the case the UI most needs to get
+    right is the one where nothing is arriving and the panels are quietly ageing.
+    """
+
+    state: str = Field(description="disabled, starting, live, idle, degraded, or stopped.")
+    session: str = Field(description="Market session right now: pre, open, post, or closed.")
+    source: str | None = None
+    realtime: bool = False
+    delay_minutes: int | None = None
+    symbols: list[str] = Field(default_factory=list)
+    last_cycle_at: datetime | None = None
+    consecutive_failures: int = 0
+    detail: str | None = Field(
+        default=None,
+        description="A sentence explaining the state, shown verbatim in the UI.",
+    )
+    poll_seconds: float | None = Field(
+        default=None,
+        description=(
+            "Seconds to expect between cycles, or null when nothing is being polled. "
+            "The UI marks a panel overdue against this rather than against a threshold "
+            "of its own, so that a feed which died without closing its socket cannot "
+            "keep looking live."
+        ),
+    )
 
 
 class WatchlistOut(ApiModel):
@@ -85,6 +127,14 @@ class IvRankOut(ApiModel):
     observations: int
     span_days: int
     caveat: str | None = None
+    source_note: str | None = Field(
+        default=None,
+        description=(
+            "Set when stored sessions from another vendor were excluded from the "
+            "history. Two vendors' implied vols are not one series, so they are never "
+            "pooled, and the exclusion is stated because it lowers the confidence."
+        ),
+    )
 
 
 class SymbolSummaryOut(ApiModel):

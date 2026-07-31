@@ -40,12 +40,16 @@ from optscan.screener.context import ExpiryAnalysis
 from optscan.screener.gaps import Gap
 
 
-def iv_rank_view(rank) -> IvRankOut | None:
+def iv_rank_view(rank, source_note: str | None = None) -> IvRankOut | None:
     """IV rank with its caveat attached, or None when there is no history at all.
 
     The caveat is not decoration. With one session captured every rank in this UI
     reads `insufficient`, and a gauge with no number and no explanation looks broken
     rather than honest.
+
+    source_note is the second reason a rank can be weaker than the stored history
+    suggests: sessions captured from a different vendor are excluded rather than
+    pooled, and the count that was left out belongs next to the number it shrank.
     """
     if rank is None:
         return None
@@ -57,6 +61,7 @@ def iv_rank_view(rank) -> IvRankOut | None:
         observations=rank.observations,
         span_days=rank.span_days,
         caveat=rank.caveat(),
+        source_note=source_note,
     )
 
 
@@ -81,7 +86,7 @@ def symbol_summary_view(solved, provenance: Provenance) -> SymbolSummaryOut:
         spot=analysis.spot,
         session_date=analysis.session_date,
         provenance=provenance,
-        iv_rank=iv_rank_view(analysis.iv_rank),
+        iv_rank=iv_rank_view(analysis.iv_rank, solved.iv_history_note),
         term_structure=[
             TermPointOut(expiry=point.expiry, dte=point.dte, iv=point.iv)
             for point in analysis.term.points

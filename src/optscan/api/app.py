@@ -5,8 +5,11 @@ is mounted at the root and its index is served for unknown paths so client side 
 survive a refresh. In development there is no build: Vite serves the app on 5173 and
 talks to this over CORS, which is the only reason CORS is configured at all.
 
-No websockets. Live updates are Phase 5, and a dashboard that polls while claiming to
-stream is worse than one that says it is showing the last capture.
+Phase 5 added one streaming endpoint, /api/live/stream, and it is server sent events
+rather than a websocket. The reasoning is in optscan.live.hub: the vendor this project
+runs against has no push to forward on its free tier, the traffic is one directional,
+and EventSource reconnects on its own. Every other endpoint still answers from stored
+snapshots, and the UI labels which is which per panel rather than in aggregate.
 """
 
 from __future__ import annotations
@@ -21,8 +24,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from optscan import __version__
-from optscan.api.deps import clear_caches, frontend_dist, settings_dep
-from optscan.api.routers import health, payoff, scan, symbols, watchlist
+from optscan.api.deps import clear_caches, frontend_dist, live_hub, reset_live_hub, settings_dep
+from optscan.api.routers import health, live, payoff, scan, symbols, watchlist
 from optscan.config import Settings, get_settings
 from optscan.logging import configure_logging, get_logger
 
@@ -61,8 +64,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         provider=settings.provider,
         data_path=str(settings.data_path),
         frontend="built" if dist else "dev (serve it with vite)",
+        live=settings.live_enabled,
     )
+    # A no-op unless live_enabled, and the hub itself enforces that rather than this
+    # caller, so there is one place that decides whether a poller may exist.
+    live_hub(settings).start()
     yield
+    reset_live_hub()
     clear_caches()
 
 
@@ -87,7 +95,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    for router in (health.router, watchlist.router, symbols.router, scan.router, payoff.router):
+    for router in (
+        health.router,
+        watchlist.router,
+        symbols.router,
+        scan.router,
+        payoff.router,
+        live.router,
+    ):
         app.include_router(router, prefix=API_PREFIX)
 
     if settings is not None:

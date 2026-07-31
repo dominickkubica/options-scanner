@@ -7,10 +7,20 @@ history retroactively rather than only going forward.
 The cost is that IV rank has to rebuild its history on demand. That is cheap enough at
 one ATM vol per symbol per session, and it is why this takes a DataFrame rather than
 re-solving whole chains.
+
+**One series, one vendor.** Phase 5 made a provider switch possible, and an IV history
+that pools yfinance marks with Tradier marks is corrupt in a way nothing downstream can
+detect. Two vendors disagree about the mid of a wide contract, about which strikes are
+quoted at all, and about what time of day their snapshot represents; the difference
+between them is a level shift, and a level shift inside the window IV rank normalizes
+against moves the rank without moving the market. So the source is a required argument
+here rather than a filter somebody might remember to apply, and whatever gets excluded
+is counted and reported rather than dropped quietly.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 
 import pandas as pd
@@ -27,30 +37,83 @@ log = get_logger("optscan.screener.history")
 TARGET_DTE = 30
 
 
+@dataclass(frozen=True, slots=True)
+class IvHistory:
+    """One vendor's ATM vol series, with whatever was left out of it named."""
+
+    points: list[tuple[date, float]] = field(default_factory=list)
+    source: str | None = None
+    excluded: dict[str, int] = field(default_factory=dict)
+
+    def __len__(self) -> int:
+        return len(self.points)
+
+    def __iter__(self):
+        return iter(self.points)
+
+    def __bool__(self) -> bool:
+        return bool(self.points)
+
+    @property
+    def excluded_sessions(self) -> int:
+        return sum(self.excluded.values())
+
+    def note(self) -> str | None:
+        """A sentence for the UI, or None when nothing was excluded.
+
+        Worth showing even though it makes the rank look worse than it could. A user
+        who switched providers last week and sees the confidence drop back to
+        insufficient needs to know it is the switch and not a broken job.
+        """
+        if not self.excluded:
+            return None
+        others = ", ".join(f"{count} from {name}" for name, count in sorted(self.excluded.items()))
+        return (
+            f"IV history uses only the {len(self.points)} sessions captured from "
+            f"{self.source}. Excluded: {others}. Implied vols from two vendors are not "
+            "one series, and pooling them would move the rank without the market moving."
+        )
+
+
 def atm_iv_history(
     frame: pd.DataFrame,
     *,
     rate: float,
+    source: str,
     dividend_yield: float = 0.0,
     target_dte: int = TARGET_DTE,
-) -> list[tuple[date, float]]:
-    """One constant maturity ATM implied vol per session, oldest first.
+) -> IvHistory:
+    """One constant maturity ATM implied vol per session, oldest first, for one vendor.
 
     For each stored session it picks the expiry nearest `target_dte`, solves the vols
     around the money, and interpolates to spot. Sessions that cannot produce one are
     skipped rather than filled: a gap in the IV history is visible in the completeness
     ratio, and an interpolated value would not be.
+
+    `source` is required and is matched against the stored `source` column. Sessions
+    from any other vendor are excluded and counted, never merged.
     """
     if frame.empty:
-        return []
+        return IvHistory(source=source)
 
-    required = {"session_date", "expiry", "strike", "right", "bid", "ask", "captured_at"}
+    required = {"session_date", "expiry", "strike", "right", "bid", "ask", "captured_at", "source"}
     missing = required - set(frame.columns)
     if missing:
         raise ValueError(f"snapshot frame is missing columns: {sorted(missing)}")
 
+    matching = frame[frame["source"] == source]
+    excluded = _excluded_sessions(frame, source)
+    if matching.empty:
+        if excluded:
+            log.warning(
+                "no IV history for the configured source",
+                source=source,
+                excluded=excluded,
+            )
+        return IvHistory(source=source, excluded=excluded)
+
     history: list[tuple[date, float]] = []
-    for session, session_rows in frame.groupby(frame["session_date"].dt.date, sort=True):
+    for session, session_rows in matching.groupby(matching["session_date"].dt.date, sort=True):
         value = _session_atm_iv(
             session_rows,
             rate=rate,
@@ -60,7 +123,17 @@ def atm_iv_history(
         if value is not None:
             history.append((session, value))
 
-    return history
+    return IvHistory(points=history, source=source, excluded=excluded)
+
+
+def _excluded_sessions(frame: pd.DataFrame, source: str) -> dict[str, int]:
+    """Distinct sessions per other vendor. Sessions, not rows: a chain is thousands of
+    rows and a count of those would read as a much bigger loss than it is."""
+    other = frame[frame["source"] != source]
+    if other.empty:
+        return {}
+    counts = other.groupby("source")["session_date"].nunique()
+    return {str(name): int(count) for name, count in counts.items()}
 
 
 def _session_atm_iv(

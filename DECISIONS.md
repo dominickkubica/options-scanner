@@ -456,3 +456,130 @@ websockets and letting the client poll a cheap endpoint. Pushing is the better
 experience and the harder thing to keep honest, because a partially updated screen
 where the chain is live and the scan is four minutes old is worse than one that is
 uniformly four minutes old and says so.
+
+## 2026-07-31: Phase 5, live data and the Tradier adapter
+
+**The vendor documentation was read, not remembered.** Everything the adapter depends
+on came from docs.tradier.com on 2026-07-31, at these URLs. The site has moved since
+the roadmap was written: documentation.tradier.com now 308s to docs.tradier.com.
+
+- `/reference/brokerage-api-markets-get-quotes`, `-get-options-chains`,
+  `-get-options-expirations`, `-get-history`, `-get-clock`
+- `/reference/brokerage-api-streaming-create-market-session`,
+  `/reference/websocket-market-data-streaming`
+- `/docs/endpoints`, `/docs/rate-limiting`, `/docs/faq`
+
+Verified from those pages: hosts are `https://api.tradier.com` and
+`https://sandbox.tradier.com`; auth is `Authorization: Bearer <token>` with
+`Accept: application/json`; market data is limited to 120 requests a minute in
+production and 60 in sandbox, per access token per minute, with the running count in
+`X-Ratelimit-Allowed`, `-Used`, `-Available` and `-Expiry`. Two shapes are worth
+naming because they are the ones that bite: `quotes.quote` is a `oneOf`, an object for
+one symbol and an array for several, and the epoch fields carry no documented unit, so
+the adapter infers seconds or milliseconds by magnitude rather than assuming.
+
+**Two facts from that reading reshaped the phase.** Their FAQ states that sandbox data
+is delayed by fifteen minutes, and that "Presently, we do not offer a delayed streaming
+endpoint for paper trading." The free tier this project is built against therefore has
+no push at all. The websocket exists, it needs a production session, and it would still
+be delayed here.
+
+**So the open question from Phase 4 is answered: server sent events, and the server
+polls.** There is no vendor stream to forward, only a refresh loop to announce. SSE
+because the traffic is one directional, because EventSource reconnects with backoff on
+its own where a websocket would have that written by hand, and because it needs no new
+dependency. Subscription changes go the other way as ordinary HTTP, since they happen
+when somebody clicks a symbol rather than sixty times a minute.
+
+**The honesty worry about deltas is answered by choosing the right unit.** The Phase 4
+note said a screen where the chain is live and the scan is four minutes old is worse
+than one uniformly four minutes old. So the unit of update is a whole cycle: one quote,
+one chain, one solve, one `fetched_at` over all of it. A delta then names only the
+contracts whose numbers moved, which is not a mixture of ages, because a contract that
+did not move holds the same value at this version as at the last. Two rules make that
+true and both are enforced: a fetch that fails or comes back partial emits a status
+event and never becomes a version, and a contract that leaves the chain is named in
+`removed` rather than left to sit at its last price forever. A subscriber that falls
+behind has its queue cleared and its next cycle sent in full, because a delta applied
+against a version the client never received is silent corruption rather than lag.
+
+**The grid shows live or stored, never a blend.** Not an overlay. Overlaying would put
+a live bid beside a stored delta in one row under one timestamp, which is the exact
+screen this phase set out not to build. The two sources have different strike sets and
+different ages, so the table renders one of them and its header says which.
+
+**Live cycles are solved the same way stored snapshots are**, through `analyze_chain`
+with our own rate. Tradier ships ORATS greeks and implied vols; those are kept as
+`vendor_iv` for comparison only, exactly as yfinance's are. Switching provider must not
+move a number that is ours.
+
+**The IV history no longer pools vendors, and this was a live bug rather than a
+precaution.** `atm_iv_history` grouped every stored session regardless of the `source`
+column that Phase 1 put there for this purpose. Switching to Tradier would have mixed
+its marks into a yfinance series with nothing downstream able to see it. The source is
+now a required argument, sessions from other vendors are excluded and counted, and the
+count is reported next to the rank so that a confidence level dropping after a switch
+does not read as a failing job. The live feed never writes to storage at all: the daily
+snapshot job stays the single writer of the history, sampled deliberately at 15:45
+rather than at whatever moment a browser happened to be open.
+
+**`realtime` became a function of the settings rather than a set of provider names.**
+For Tradier it is not a property of the vendor: sandbox is delayed no matter what, and
+production depends on a market data entitlement that no response announces. So
+`tradier_realtime_entitled` is asked and defaults to false, sandbox overrides it to
+false regardless, and `/api/health` reports `delay_minutes` alongside. Null there means
+the delay is unknown, not zero: yfinance is delayed but publishes no number, and
+reporting an inferred one beside a documented one would give them equal weight.
+
+**Nothing is polled while the market is closed**, and polling slows by a configurable
+multiple outside the regular session. Every fetch would return the same settled
+numbers, and the budget spent confirming that is budget missing on Monday morning. The
+session comes from the existing offline market calendar rather than Tradier's clock
+endpoint, which keeps it free and testable.
+
+**The rate limiter is separate from the retry helper** because they solve opposite
+problems: retry reacts after a call has failed, and a limiter stops the call being
+made. Against a per minute budget a pure 429 handler would burn the very thing it
+protects. The vendor's own counter wins over the local bucket when it is lower, and
+never when it is higher, because a vendor count above ours usually means their window
+is about to roll.
+
+**Tradier has no corporate calendar**, so `get_events` stays unimplemented and inherits
+the base class refusal. Phase 4 already handles that: the screen widens and says it
+could not check earnings. Switching provider therefore weakens the earnings exclusion,
+visibly, which is the correct behaviour and worth knowing before switching.
+
+**The ban list got httpx rather than a vendor package.** Tradier publishes no SDK, so
+the thing a shortcut from a router would have to import is the HTTP client itself. Same
+rule as yfinance, one layer down.
+
+### What is verified and what is not
+
+Verified in a browser against a live yfinance feed during the 2026-07-31 session, with
+the market open: the stream connects, cycles arrive on the poll interval without a
+refresh, the header shows connection and session state, the grid switches to live and
+says so, and the age next to it climbs between cycles.
+
+**Not verified: anything against Tradier itself.** No token existed when this was
+written. `tests/fixtures/tradier/` is built from the response schemas above and its
+README says so; those files pin the parsing, the one-or-many quirk and the failure
+mapping, and they are not evidence that the live API behaves this way. The first thing
+to do with a real sandbox token is recapture them.
+
+**A defect this found in its own design, worth recording.** The hub first resolved an
+unnamed expiry to the front month while the chain endpoint resolves it to the first at
+or beyond `min_dte`. The symptom was the nastiest kind available: the stream connected,
+cycles arrived, the header said live, and the grid never moved, because the two sides
+were following different expiries. Both now use one rule and a test pins it.
+
+**Also worth recording: the SSE endpoint cannot be integration tested with
+TestClient.** Starlette's buffers a whole response and returns only once the app sends
+its final body message, which a stream never does, so a request against it does not
+read slowly, it never returns at all. The generator is exercised directly instead, and
+the browser check covers the plumbing between it and a socket.
+
+**Open for Phase 6 and later:** the live feed covers the chain grid only. The
+opportunities table, the term structure and the skew curves still read the stored
+snapshot, and they say so. Extending live to the scan means deciding what a scan of a
+mid session chain even means when its IV rank comes from a history sampled at 15:45,
+and that is a question about the signal rather than about the transport.

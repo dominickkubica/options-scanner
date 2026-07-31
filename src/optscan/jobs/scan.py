@@ -69,7 +69,14 @@ def gather(
 
         frame = read_snapshots(settings.snapshot_path, symbol=symbol)
         if not frame.empty:
-            inputs.iv_histories[symbol] = atm_iv_history(frame, rate=settings.risk_free_rate)
+            # The snapshot's own source, not the configured provider. A stored capture
+            # is ranked against the history of the vendor that produced it, which stays
+            # right even when the config has moved on since.
+            history = atm_iv_history(frame, rate=settings.risk_free_rate, source=snapshot.source)
+            inputs.iv_histories[symbol] = list(history.points)
+            note = history.note()
+            if note:
+                log.info("iv history excludes other vendors", symbol=symbol, note=note)
 
         if with_events and provider is not None:
             window = _load_events(provider, symbol)

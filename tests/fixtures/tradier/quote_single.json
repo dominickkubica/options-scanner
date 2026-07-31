@@ -1,0 +1,33 @@
+{
+  "quotes": {
+    "quote": {
+      "symbol": "SPY",
+      "description": "SPDR S&P 500",
+      "exch": "P",
+      "type": "etf",
+      "last": 638.42,
+      "change": -1.78,
+      "volume": 47994892,
+      "open": 640.1,
+      "high": 641.73,
+      "low": 636.7,
+      "close": 638.42,
+      "bid": 638.4,
+      "ask": 638.44,
+      "change_percentage": -0.28,
+      "average_volume": 71234567,
+      "last_volume": 200,
+      "trade_date": 1785513600000,
+      "prevclose": 640.2,
+      "week_52_high": 655.11,
+      "week_52_low": 493.86,
+      "bidsize": 12,
+      "bidexch": "P",
+      "bid_date": 1785513600000,
+      "asksize": 8,
+      "askexch": "P",
+      "ask_date": 1785513600000,
+      "lot_size": 100
+    }
+  }
+}

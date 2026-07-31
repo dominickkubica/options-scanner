@@ -21,6 +21,19 @@ MINUTES_PER_HOUR = 60
 
 ProviderName = Literal["yfinance", "schwab", "tradier"]
 LogFormat = Literal["console", "json"]
+TradierEnvironment = Literal["sandbox", "production"]
+
+#: Tradier's documented hosts, verified against docs.tradier.com on 2026-07-31.
+TRADIER_HOSTS: dict[str, str] = {
+    "sandbox": "https://sandbox.tradier.com",
+    "production": "https://api.tradier.com",
+}
+
+#: Tradier delays every sandbox response by this much. Their FAQ: "We delay our market
+#: data the industry standard 15-minutes for all sandbox data." It is a documented
+#: property of the tier, not something the responses announce, so it is recorded here
+#: and shown in the UI rather than inferred from a timestamp.
+SANDBOX_DELAY_MINUTES = 15
 
 
 class Settings(BaseSettings):
@@ -85,6 +98,47 @@ class Settings(BaseSettings):
     schwab_client_id: SecretStr | None = None
     schwab_client_secret: SecretStr | None = None
 
+    # Tradier. The environment decides the host and, more importantly, whether the
+    # data can be called real time at all: sandbox is documented as 15 minutes delayed.
+    tradier_environment: TradierEnvironment = "sandbox"
+
+    # Whether the production account actually carries a real time market data
+    # entitlement. Nothing in a Tradier response says so, and a quote that is silently
+    # delayed looks exactly like one that is not, so this is asked rather than guessed
+    # and it defaults to the answer that cannot mislead. Ignored in sandbox, which is
+    # delayed regardless of what this says.
+    tradier_realtime_entitled: bool = False
+
+    # Documented market data limit: 120 requests per minute in production, 60 in
+    # sandbox, enforced per minute per access token. The default is the lower one
+    # because exceeding it is worse than being slower than necessary.
+    tradier_requests_per_minute: int = Field(default=60, gt=0)
+
+    # Live feed. Off by default: Phases 0 to 4 are a stored snapshot tool and must keep
+    # behaving like one until somebody asks for live data.
+    live_enabled: bool = False
+
+    # How often a subscribed symbol is refetched while the market is open. Two requests
+    # per cycle per symbol (one quote, one chain), so the default costs 8 of the 60
+    # sandbox requests a minute for one symbol.
+    live_poll_seconds: float = Field(default=15.0, ge=1.0)
+
+    # Multiplier applied to the poll interval outside the regular session. Pre and post
+    # market chains barely move and the budget is better spent when it matters. Nothing
+    # is polled at all when the market is closed.
+    live_offhours_poll_multiple: float = Field(default=8.0, ge=1.0)
+
+    # How long a fetched live chain is reused when several subscribers want the same
+    # symbol and expiry. Short: this is deduplication, not caching.
+    live_chain_ttl_seconds: float = Field(default=5.0, ge=0.0)
+
+    # Ceiling on symbols polled at once, so an open browser tab cannot spend the whole
+    # request budget by cycling through the watchlist.
+    live_max_symbols: int = Field(default=4, gt=0)
+
+    # A symbol stops being polled this long after its last subscriber disconnects.
+    live_idle_timeout_seconds: float = Field(default=60.0, gt=0.0)
+
     # API server
     api_host: str = "127.0.0.1"
     api_port: int = 8000
@@ -138,6 +192,33 @@ class Settings(BaseSettings):
         return time(hour=hour, minute=minute)
 
     @property
+    def tradier_base_url(self) -> str:
+        """Host for the configured Tradier environment, without a trailing slash."""
+        return TRADIER_HOSTS[self.tradier_environment]
+
+    @property
+    def tradier_is_realtime(self) -> bool:
+        """Whether Tradier quotes on this configuration may be called real time.
+
+        Sandbox never can: it is documented as 15 minutes delayed and there is no
+        setting that changes it. Production only can when the account holder has said
+        their entitlement is real time, because the responses do not carry that fact.
+        """
+        return self.tradier_environment == "production" and self.tradier_realtime_entitled
+
+    @property
+    def quote_delay_minutes(self) -> int | None:
+        """Known delay on the configured provider's quotes, when it is documented.
+
+        None means the delay is unknown rather than zero. yfinance is delayed by
+        roughly fifteen minutes but does not document it, and reporting an
+        undocumented number next to a documented one would give both the same weight.
+        """
+        if self.provider == "tradier" and self.tradier_environment == "sandbox":
+            return SANDBOX_DELAY_MINUTES
+        return None
+
+    @property
     def data_path(self) -> Path:
         """Absolute data directory."""
         return self.data_dir if self.data_dir.is_absolute() else REPO_ROOT / self.data_dir
@@ -165,6 +246,8 @@ class Settings(BaseSettings):
             "log_format": self.log_format,
             "data_path": str(self.data_path),
             "risk_free_rate": self.risk_free_rate,
+            "tradier_environment": self.tradier_environment,
+            "live_enabled": self.live_enabled,
             "credentials_set": sorted(
                 name
                 for name in ("tradier_token", "schwab_client_id", "schwab_client_secret")
