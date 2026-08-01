@@ -3,6 +3,7 @@ import { api } from "./api.js";
 import { ConnectionBadge, ErrorBox, Provenance, useAsync } from "./components/common.jsx";
 import { CONNECTION, useLive } from "./live.js";
 import Chain from "./views/Chain.jsx";
+import Levels from "./views/Levels.jsx";
 import Opportunities from "./views/Opportunities.jsx";
 import Payoff from "./views/Payoff.jsx";
 import Underlying from "./views/Underlying.jsx";
@@ -19,6 +20,7 @@ const VIEWS = [
   { key: "opportunities", label: "Opportunities" },
   { key: "chain", label: "Chain" },
   { key: "underlying", label: "Underlying" },
+  { key: "levels", label: "Levels" },
   { key: "payoff", label: "Payoff" },
 ];
 
@@ -162,6 +164,8 @@ export default function App() {
         )}
 
         {view === "underlying" && summary.data && <Underlying summary={summary.data} />}
+
+        {view === "levels" && summary.data && <Levels summary={summary.data} />}
 
         {view === "payoff" && summary.data && (
           <Payoff

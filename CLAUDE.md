@@ -30,7 +30,7 @@ src/optscan/
   providers/        market data adapters, one per vendor
   models/           pydantic: Quote, Chain, Contract, Snapshot, Opportunity
   storage/          sqlite + duckdb writers, migrations
-  analytics/        greeks.py, iv.py, probability.py, levels.py
+  analytics/        greeks.py, iv.py, probability.py, levels.py, projection.py
   screener/         rules/, scoring.py, strategies/
   jobs/             snapshot.py, scheduler.py
   live/             the polling refresh loop and its delta encoder
@@ -60,7 +60,10 @@ and `optscan-web` entries in `.claude/launch.json`.
 - The session a capture belongs to comes from the market calendar, never from the
   machine's date.
 - Tests never touch the network. `tests/fixtures/spy_chain_snapshot.json` is a real
-  captured chain, and `FakeProvider` in conftest drives the job offline.
+  captured chain, `tests/fixtures/spy_daily_bars.json` is 1100 real sessions, and
+  `FakeProvider` in conftest drives the job offline. Both fixtures are real captures on
+  purpose: synthetic bars agree with whatever a detector happens to do, which is the
+  opposite of what the counting tests are for.
 - Greek units are trader units: theta per calendar day, vega per volatility point, rho
   per rate point. See the greeks.py docstring before touching any of it.
 - Analytics take thresholds as arguments with documented defaults. They never read
@@ -71,10 +74,17 @@ and `optscan-web` entries in `.claude/launch.json`.
   number a user might want to change.
 - Every filter rejection carries a reason, and the tally is printed. An unexplained
   empty result table is how a screener loses its user.
-- Before believing any detector that fires on a lot of contracts, check whether it is
-  measuring a constant offset. That mistake has now been made three times: the
-  expected move multiplier, the vertical gap detector, and the parity carry
-  assumption. Run it against tests/fixtures and count the hits.
+- Before believing any detector, check whether it is measuring a constant offset. That
+  mistake has now been made eight times, most recently twice in one sitting in
+  `analytics/levels.py`: a swing prominence filter thresholding a quantity that is one
+  ATR by construction, and a touch count that was really measuring pivot density. Run
+  it against tests/fixtures and count the hits before believing any of it. If the
+  measure needs a baseline, the baseline usually has to account for structure rather
+  than being uniform: see `occupancy_share`, where the null is how much time price
+  actually spent at each price.
+- Two filters aimed at the same thing will hide each other. The confounded one in front
+  of the principled one does not merely fail to help, it starves the good one of the
+  data it needs.
 
 ## Non-goals
 - No auto-execution of trades. This tool ranks and displays, it does not place orders.
@@ -82,99 +92,90 @@ and `optscan-web` entries in `.claude/launch.json`.
 
 ## Current phase
 
-**Phases 0 to 5 are complete and committed.** Phase 6 is levels and projections, and it
-is **not authorized**. Ask before starting it, and before anything later.
+**Phases 0 to 6 are complete and committed.** Phase 7 is positions and risk, and it is
+**not authorized**. Ask before starting it, and before anything later.
 
-### What Phase 5 built
-
-A Tradier adapter, a polling live feed, and an SSE stream to the browser.
+### What Phase 6 built
 
 ```
-src/optscan/providers/
-  tradier.py        REST adapter: quotes, expirations, chains, daily bars
-  ratelimit.py      token bucket sized from the documented per minute limit
-src/optscan/live/
-  hub.py            the refresh loop, the delta encoder, the subscriber fan-out
-src/optscan/api/routers/live.py    GET /api/live/status and /api/live/stream
-frontend/src/live.js               EventSource client and the delta application rule
+src/optscan/analytics/
+  levels.py       backward looking: pivots, clustering, the significance test,
+                  volume profile, round numbers, ATR, Bollinger, realized vol
+  projection.py   forward looking: the expected move cone, terminal distributions
+src/optscan/api/routers/levels.py    GET /api/symbols/{symbol}/levels
+frontend/src/components/LevelsChart.jsx   the one chart
+frontend/src/views/Levels.jsx             the panel around it
+tests/fixtures/spy_daily_bars.json        1100 real SPY sessions, 2022 to 2026
 ```
 
-The transport decision and its reasoning are in DECISIONS.md under 2026-07-31. The
-short version: Tradier's free sandbox has no streaming endpoint at all and is fifteen
-minutes delayed, so there is no vendor push to forward. The server polls, and SSE tells
-the browser a cycle landed.
+The exit criterion is met: one chart carries price, the levels it respected, the
+expected move cone projected to each expiry, and the screener's candidate strikes shaded
+by probability of profit.
 
-### Rules Phase 5 adds
+### The thing to understand before touching levels.py
 
-- **The unit of update is a whole cycle, never a field.** One quote, one chain, one
-  solve, one `fetched_at` across all of it. That is what makes a delta safe: a contract
-  that did not move holds the same value at this version as at the last, so the table is
-  entirely as of the newest version rather than a mixture of ages.
-- **A fetch that fails or comes back partial never becomes a version.** It emits a
-  status event. The previous cycle stays on screen and its age climbs, which is the
-  honest picture.
-- **A contract that leaves the chain is named in `removed`.** A row nobody mentions
-  again is one the browser renders forever at its last price.
-- **The grid is live or stored, never a blend.** Not an overlay. Different strike sets,
-  different ages; the table renders one source and its header says which.
-- **`realtime` is a function of the settings, not a set of provider names.** Sandbox is
-  delayed regardless; production depends on an entitlement no response announces, so
-  `tradier_realtime_entitled` is asked and defaults to false. `delay_minutes` null means
-  unknown, not zero.
-- **Nothing is polled while the market is closed.** Polling slows by a configurable
-  multiple outside the regular session. Session state comes from the offline market
-  calendar, not from a vendor clock endpoint.
-- **The live feed never writes to storage.** The daily snapshot job stays the single
-  writer of the IV history.
-- **The hub and the chain endpoint must resolve an unnamed expiry identically.** They
-  did not at first, and the symptom was a stream that connected, cycles that arrived, a
-  header that said live, and a grid that never moved. `LiveHub._default_expiry` and
-  `symbols.py` both use `min_dte` from screen.yaml, and a test pins it.
+**Almost all of that module is a baseline, not a detector.** Clustering swing pivots and
+keeping the ones touched twice publishes 31 levels on four years of SPY, and every one
+of them looks like evidence. They are not: 123 pivots scattered across a 390 point range
+put about 1.45 in each 4.5 point band by arithmetic alone. So each cluster is compared
+against how many touches its own band would have collected by chance *given how much
+time price actually spent there*, and only the excess survives. That takes 31 down to 1.
 
-### What is verified, and what is not
+The null had to account for occupancy rather than being uniform. Price spends months in
+a congestion zone and crosses a gap in a day, so a uniform null would call everything
+inside the zone significant and everything outside it noise, which is the same trap in a
+new hat. `occupancy_share` is that null.
 
-Verified in a browser on 2026-07-31 with the market open, against **yfinance**: the
-stream connects, cycles arrive on the interval with no refresh, the numbers move, the
-header shows connection and session state, and stopping the API leaves the last cycle
-on screen with its age climbing.
+`min_prominence_atr` defaults to 0.0 and is documented as a trap rather than deleted. It
+thresholds a quantity that is one ATR by construction, so it selects almost nothing, and
+turning it up far enough to bite starves the test that works.
 
-**Nothing has been run against Tradier.** No token existed. `tests/fixtures/tradier/`
-is built from the published response schemas, not captured, and its README says so.
+### Rules Phase 6 adds
 
-**The single thing only the user can do:** create a free sandbox token at
-developer.tradier.com and paste it into the empty `OPTSCAN_TRADIER_TOKEN=` line in
-`.env`. Never enter it on their behalf, never print or commit a token value.
-`safe_summary()` reports credential names only.
-
-**When a token appears, in this order:**
-
-1. `venv\Scripts\python -c "from optscan.config import get_settings; print(get_settings().safe_summary()['credentials_set'])"`
-2. Recapture `tests/fixtures/tradier/*.json` from the sandbox and delete the paragraph
-   in its README that says they are constructed from documentation.
-3. Check the shapes the adapter guesses at because the docs do not state them: whether
-   `quotes.unmatched_symbols` really appears for an unknown ticker, and whether the
-   epoch fields are milliseconds. `_clean_epoch` infers the unit by magnitude.
-4. Only then consider `OPTSCAN_PROVIDER=tradier`. Switching weakens the earnings
-   exclusion, visibly, because Tradier sells no corporate calendar, and it starts a new
-   IV history: the yfinance sessions are excluded by design and the UI says so.
+- **Zero levels is a finding, not an empty panel.** The UI says how many candidates were
+  tested and why none survived. An unexplained blank reads as a broken job.
+- **Strength is only comparable within a kind.** A swing level's restates a p-value, a
+  volume node's is a share of the busiest bin, a round number's is a constant standing
+  in for the fact that nothing was measured. Never sort them together.
+- **A round number's `p_value` is null, not 1.0.** Null means not tested; 1.0 would mean
+  tested and failed.
+- **The cone uses each expiry's own implied vol.** One vol over a sqrt(t) curve is wrong
+  for anyone selling more than one expiry, and most wrong around events. Bands are
+  lognormal, not symmetric.
+- **The variance risk premium is refused across mismatched tenors.** Comparing 30 day
+  realized against 4 day implied is the term structure talking. Nothing within a factor
+  of two of the realized window means no number is published.
+- **The levels payload is one request carrying two provenances.** It is the only screen
+  that draws a just fetched number and a stored one on the same axes, and splitting it
+  would let the browser assemble one picture from four moments.
+- **A candidate strike's POP belongs to its position, not to the strike.** Neighbouring
+  strikes can read 62 and 75 percent when one is a spread and one a single leg. The
+  panel says so, because it looks like a bug otherwise.
 
 ### Watch out for
 
 - **The daily snapshot job must keep running through every phase.** Registered in
-  Windows Task Scheduler as `OptscanDailySnapshot` at 12:45 machine time, which is 15:45
-  New York. IV rank needs months of history, no free source sells it after the fact, and
+  Windows Task Scheduler as `OptscanDailySnapshot` at 12:45 machine time, 15:45 New
+  York. IV rank needs months of history, no free source sells it after the fact, and
   every day the job does not run is a permanent hole. Check `optscan status` before and
   after any change touching providers, config, or storage.
-- **`OPTSCAN_LIVE_ENABLED` is false by default and should stay that way** until somebody
-  asks for live data. With it false this is exactly the stored snapshot dashboard Phases
-  0 to 4 built, and nothing polls anything.
-- Only two days of snapshot history exist, so every IV rank in the UI reads
-  `insufficient` with a caveat under it. That is correct behaviour, not a bug.
+- Two captured sessions exist as of 2026-07-31, so every IV rank still reads
+  `insufficient`. Correct behaviour, not a bug.
+- **`OPTSCAN_LIVE_ENABLED` is false by default** and should stay that way until somebody
+  asks for live data. See the Phase 5 notes in DECISIONS.md.
+- **The Tradier adapter has still never run against Tradier.** No token exists.
+  `tests/fixtures/tradier/` is built from published schemas, not captured. The ordered
+  checklist for when a token appears is in the Phase 5 DECISIONS entry.
 - API tests must stay offline. The provider is injected through `provider_factory_dep`
   and the hub through `live_hub`, both overridden with fakes.
 - **The SSE endpoint cannot be tested through TestClient.** Starlette buffers the whole
-  response and returns only on the app's final body message, which a stream never sends,
-  so the request never returns. Drive `_events` directly, as `tests/test_api_live.py`
-  does.
+  response. Drive `_events` directly, as `tests/test_api_live.py` does.
 - The gaps thresholds and the vertical mispricing baseline are still uncalibrated and
   still blocked on history. Phase 8.
+- **A historical options backfill is the highest leverage thing available.** IV rank
+  needs 20 observations minimum and 180 for high confidence, and at one capture a day
+  that is nine months away. ThetaData's docs advertise a free tier with one year of EOD
+  history, though their pricing page shows no zero tier, so it needs an account to
+  confirm. Cboe DataShop's EOD file snapshots at 15:45, which is exactly this project's
+  capture time. Buy raw chains and re-solve them with our own solver; never adopt a
+  vendor's IV rank, which would import their rate and dividend assumptions.

@@ -48,6 +48,8 @@ export const api = {
     request(`/symbols/${encodeURIComponent(symbol)}/chain${query({ expiry })}`),
   history: (symbol, days) =>
     request(`/symbols/${encodeURIComponent(symbol)}/history${query({ days })}`),
+  levels: (symbol, days, expiry) =>
+    request(`/symbols/${encodeURIComponent(symbol)}/levels${query({ days, expiry })}`),
   scan: (symbols, limit) => request(`/scan${query({ symbols, limit })}`),
   gaps: (symbols) => request(`/gaps${query({ symbols })}`),
   payoff: (body) =>

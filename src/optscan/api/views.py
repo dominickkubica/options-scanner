@@ -15,17 +15,27 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
+from optscan.analytics.levels import DEFAULT_REALIZED_VOL_WINDOW
 from optscan.analytics.payoff import Payoff
+from optscan.analytics.projection import build_cone, terminal_histogram
 from optscan.api.deps import make_provenance
 from optscan.api.schemas import (
     BarOut,
+    BollingerOut,
+    CandidateStrikeOut,
     ChainOut,
+    ConeBandOut,
+    ConePointOut,
     ContractOut,
+    DistributionOut,
     ExpirySummaryOut,
     GapOut,
+    HistogramBinOut,
     HistoryOut,
     IvRankOut,
     LegOut,
+    LevelOut,
+    LevelsOut,
     OpportunityOut,
     PayoffOut,
     PayoffPointOut,
@@ -38,6 +48,7 @@ from optscan.api.schemas import (
 from optscan.models import Leg, Opportunity, PriceBar, Right
 from optscan.screener.context import ExpiryAnalysis
 from optscan.screener.gaps import Gap
+from optscan.screener.scan import scan_analysis
 
 
 def iv_rank_view(rank, source_note: str | None = None) -> IvRankOut | None:
@@ -167,6 +178,22 @@ def chain_view(solved, expiry: ExpiryAnalysis, provenance: Provenance) -> ChainO
     )
 
 
+def bar_view(bar: PriceBar) -> BarOut:
+    """One candle in the shape the chart library wants.
+
+    Extracted so the levels panel and the history panel cannot drift into rendering
+    the same bar two different ways.
+    """
+    return BarOut(
+        time=bar.ts.date().isoformat(),
+        open=bar.open,
+        high=bar.high,
+        low=bar.low,
+        close=bar.close,
+        volume=bar.volume,
+    )
+
+
 def history_view(
     symbol: str,
     bars: list[PriceBar],
@@ -180,17 +207,7 @@ def history_view(
 
     return HistoryOut(
         symbol=symbol,
-        bars=[
-            BarOut(
-                time=bar.ts.date().isoformat(),
-                open=bar.open,
-                high=bar.high,
-                low=bar.low,
-                close=bar.close,
-                volume=bar.volume,
-            )
-            for bar in sorted(bars, key=lambda bar: bar.ts)
-        ],
+        bars=[bar_view(bar) for bar in sorted(bars, key=lambda bar: bar.ts)],
         provenance=provenance,
         note=note,
     )
@@ -259,6 +276,206 @@ def opportunity_view(opportunity: Opportunity) -> OpportunityOut:
             event_risk=opportunity.components.event_risk,
         ),
     )
+
+
+def levels_view(
+    *,
+    solved,
+    bars: list[PriceBar],
+    bars_note: str | None,
+    levels,
+    expiry: date | None,
+    rate: float,
+    config,
+) -> LevelsOut:
+    """Assemble the one chart's payload from parts that were computed separately.
+
+    The assembly is here rather than in the router for the usual reason, but there is a
+    second one specific to this panel: it is the only place in the API where a number
+    from the stored capture and a number fetched seconds ago are drawn on the same
+    axes. Keeping the joining in one function keeps the two provenances together with
+    the values they belong to.
+    """
+    analysis = solved.analysis
+    notes: list[str] = []
+    if bars_note:
+        notes.append(bars_note)
+    if levels is not None:
+        notes.extend(levels.notes)
+
+    chosen = analysis.expiry(expiry) if expiry is not None else None
+    if expiry is not None and chosen is None:
+        notes.append(f"{expiry} is listed but produced no solved expiry to project.")
+
+    implied = _comparable_implied_vol(analysis, levels)
+    realized = levels.realized_vol if levels is not None else None
+    premium = None
+    if implied is not None and realized is not None:
+        premium = implied - realized
+        if premium < 0:
+            notes.append(
+                "Implied volatility is below realized. Selling premium here is being "
+                "paid less than the recent move has actually cost, which is unusual "
+                "and worth understanding before treating it as an opportunity."
+            )
+
+    return LevelsOut(
+        symbol=analysis.symbol,
+        spot=analysis.spot,
+        session_date=analysis.session_date,
+        bars_provenance=(make_provenance(bars[-1].source, bars[-1].fetched_at) if bars else None),
+        chain_provenance=solved.provenance(),
+        bars=[bar_view(bar) for bar in bars],
+        levels=[_level_view(level, analysis.spot) for level in (levels.all() if levels else ())],
+        moving_averages=(
+            {str(period): value for period, value in levels.moving_averages.items()}
+            if levels
+            else {}
+        ),
+        bollinger=(
+            BollingerOut(
+                middle=levels.bollinger.middle,
+                upper=levels.bollinger.upper,
+                lower=levels.bollinger.lower,
+                width=levels.bollinger.width,
+            )
+            if levels is not None and levels.bollinger is not None
+            else None
+        ),
+        atr=levels.atr if levels else None,
+        realized_vol=realized,
+        implied_vol=implied,
+        variance_risk_premium=premium,
+        sessions=levels.sessions if levels else 0,
+        swing_candidates=levels.swing_candidates if levels else 0,
+        cone=_cone_view(analysis),
+        distribution=_distribution_view(analysis, chosen, rate),
+        candidates=_candidate_view(analysis, chosen, config),
+        notes=notes,
+    )
+
+
+def _level_view(level, spot: float) -> LevelOut:
+    return LevelOut(
+        price=level.price,
+        kind=str(level.kind),
+        strength=level.strength,
+        touches=level.touches,
+        first_touch=level.first_touch,
+        last_touch=level.last_touch,
+        p_value=level.p_value,
+        expected_touches=level.expected_touches,
+        distance=level.distance_from(spot),
+    )
+
+
+def _comparable_implied_vol(analysis, levels) -> float | None:
+    """ATM implied vol at the tenor the realized vol was measured over.
+
+    Comparing a 30 day realized vol against a 7 day implied is the term structure
+    talking, not the variance risk premium. The expiry nearest the realized window is
+    picked so the two sides describe the same horizon, and None comes back rather than
+    a mismatched pair when nothing is close.
+    """
+    if levels is None or levels.realized_vol is None:
+        return None
+    target = DEFAULT_REALIZED_VOL_WINDOW
+    usable = [item for item in analysis.expiries if item.atm_iv is not None and item.dte > 0]
+    if not usable:
+        return None
+    nearest = min(usable, key=lambda item: abs(item.dte - target))
+    # Beyond about a factor of two away in tenor the comparison stops being like for
+    # like, and a silently mismatched premium is worse than no premium.
+    if not 0.5 * target <= nearest.dte <= 2.0 * target:
+        return None
+    return nearest.atm_iv
+
+
+def _cone_view(analysis) -> list[ConePointOut]:
+    cone = build_cone(
+        analysis.spot,
+        analysis.session_date,
+        [(item.expiry, item.atm_iv) for item in analysis.expiries if item.atm_iv],
+    )
+    return [
+        ConePointOut(
+            expiry=point.expiry,
+            dte=point.dte,
+            sigma=point.sigma,
+            bands=[
+                ConeBandOut(deviations=deviations, low=band[0], high=band[1])
+                for deviations, band in sorted(point.bands.items())
+            ],
+        )
+        for point in cone.points
+    ]
+
+
+def _distribution_view(analysis, chosen, rate: float) -> DistributionOut | None:
+    if chosen is None or chosen.atm_iv is None:
+        return None
+    result = terminal_histogram(analysis.spot, chosen.time, chosen.atm_iv, rate=rate)
+    if result is None:
+        return None
+    return DistributionOut(
+        expiry=chosen.expiry,
+        dte=chosen.dte,
+        sigma=chosen.atm_iv,
+        paths=result.paths,
+        median=result.median,
+        mode=result.mode,
+        quantiles={f"{key:g}": value for key, value in sorted(result.quantiles.items())},
+        bins=[
+            HistogramBinOut(low=item.low, high=item.high, probability=item.probability)
+            for item in result.bins
+        ],
+    )
+
+
+def _candidate_view(analysis, chosen, config) -> list[CandidateStrikeOut]:
+    """The screener's own short strikes for the projected expiry.
+
+    The screener rather than a fresh delta band, because the phase's exit criterion is
+    "your candidate strikes" and the answer to which strikes are yours is whatever
+    screen.yaml says. Running it here also means a strike drawn on this chart is the
+    same strike, with the same POP, as the row in the opportunities table.
+    """
+    if chosen is None:
+        return []
+
+    try:
+        result = scan_analysis(analysis, config)
+    except (ValueError, KeyError):
+        # A screen that cannot run is not a reason to lose the chart. The levels and
+        # the cone are the substance of this panel; the strikes are an overlay.
+        return []
+
+    seen: set[tuple[float, str]] = set()
+    candidates: list[CandidateStrikeOut] = []
+    for opportunity in result.opportunities:
+        if opportunity.expiry != chosen.expiry:
+            continue
+        for leg in opportunity.legs:
+            if leg.quantity >= 0 and str(leg.action).lower() != "sell":
+                continue
+            key = (leg.strike, str(leg.right))
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(
+                CandidateStrikeOut(
+                    strike=leg.strike,
+                    right=str(leg.right),
+                    strategy=str(opportunity.strategy),
+                    expiry=opportunity.expiry,
+                    dte=opportunity.dte,
+                    probability_of_profit=opportunity.probability_of_profit,
+                    short_delta=opportunity.short_delta,
+                    credit=opportunity.credit,
+                    score=opportunity.score,
+                )
+            )
+    return sorted(candidates, key=lambda item: item.strike)
 
 
 def gap_view(gap: Gap) -> GapOut:

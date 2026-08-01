@@ -226,6 +226,145 @@ class HistoryOut(ApiModel):
     )
 
 
+class LevelOut(ApiModel):
+    """One horizontal line on the price chart.
+
+    `strength` is deliberately only comparable against other levels of the same kind.
+    A swing level's strength restates a p-value, a volume node's is a share of the
+    busiest bin, and a round number's is a constant standing in for the fact that
+    nothing was measured. The UI groups by kind rather than sorting them together.
+    """
+
+    price: float
+    kind: str
+    strength: float
+    touches: int = 0
+    first_touch: date | None = None
+    last_touch: date | None = None
+    p_value: float | None = Field(
+        default=None,
+        description=(
+            "Probability of seeing at least this many touches by chance, given how "
+            "much time price actually spent in this band. Null for kinds where there "
+            "is no count to test."
+        ),
+    )
+    expected_touches: float | None = Field(
+        default=None,
+        description=(
+            "Touches chance alone would have produced here. Sent so the UI can show "
+            "5 against 1.6 expected rather than a bare 5, which reads as far more "
+            "evidence than it is."
+        ),
+    )
+    distance: float | None = Field(
+        default=None, description="Signed distance from spot as a fraction. Positive is above."
+    )
+
+
+class BollingerOut(ApiModel):
+    middle: float
+    upper: float
+    lower: float
+    width: float
+
+
+class ConeBandOut(ApiModel):
+    deviations: float
+    low: float
+    high: float
+
+
+class ConePointOut(ApiModel):
+    """One expiry's projected band, from that expiry's own implied volatility."""
+
+    expiry: date
+    dte: int
+    sigma: float
+    bands: list[ConeBandOut] = Field(default_factory=list)
+
+
+class HistogramBinOut(ApiModel):
+    low: float
+    high: float
+    probability: float
+
+
+class DistributionOut(ApiModel):
+    """Simulated terminal prices for one expiry."""
+
+    expiry: date
+    dte: int
+    sigma: float
+    paths: int
+    median: float
+    mode: float | None = None
+    quantiles: dict[str, float] = Field(default_factory=dict)
+    bins: list[HistogramBinOut] = Field(default_factory=list)
+
+
+class CandidateStrikeOut(ApiModel):
+    """A short strike the screener surfaced, for drawing against the levels."""
+
+    strike: float
+    right: str
+    strategy: str
+    expiry: date
+    dte: int
+    probability_of_profit: float | None = None
+    short_delta: float | None = None
+    credit: float | None = None
+    score: float | None = None
+
+
+class LevelsOut(ApiModel):
+    """Everything the one chart needs: price, levels, cone, and candidate strikes.
+
+    Two provenances on purpose, because this payload mixes two ages and the phase's own
+    rule is that a screen must never do that silently. The bars are fetched at request
+    time; the implied volatilities behind the cone and the strikes come from the last
+    stored capture, which may be hours or days old.
+    """
+
+    symbol: str
+    spot: float
+    session_date: date
+    bars_provenance: Provenance | None = None
+    chain_provenance: Provenance
+    bars: list[BarOut] = Field(default_factory=list)
+    levels: list[LevelOut] = Field(default_factory=list)
+    moving_averages: dict[str, float] = Field(default_factory=dict)
+    bollinger: BollingerOut | None = None
+    atr: float | None = None
+    realized_vol: float | None = Field(
+        default=None,
+        description="Annualized close to close realized volatility over the recent window.",
+    )
+    implied_vol: float | None = Field(
+        default=None,
+        description="At the money implied vol nearest the realized vol window, for comparison.",
+    )
+    variance_risk_premium: float | None = Field(
+        default=None,
+        description=(
+            "Implied minus realized, in volatility points. What a premium seller is "
+            "being paid for. Null when either side could not be computed."
+        ),
+    )
+    sessions: int = 0
+    swing_candidates: int = Field(
+        default=0,
+        description=(
+            "Swing levels clustered and tested. Reported alongside how many survived, "
+            "because no levels and no candidates are different facts."
+        ),
+    )
+    cone: list[ConePointOut] = Field(default_factory=list)
+    distribution: DistributionOut | None = None
+    candidates: list[CandidateStrikeOut] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
 class LegOut(ApiModel):
     action: str
     right: str

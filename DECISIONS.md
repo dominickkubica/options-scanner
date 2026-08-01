@@ -583,3 +583,106 @@ opportunities table, the term structure and the skew curves still read the store
 snapshot, and they say so. Extending live to the scan means deciding what a scan of a
 mid session chain even means when its IV rank comes from a history sampled at 15:45,
 and that is a question about the signal rather than about the transport.
+
+## 2026-07-31: Phase 6, levels and projections
+
+**The seventh instance of the constant offset trap, and it was in the filter written to
+prevent it.** `min_prominence_atr` requires a swing to be deeper than some multiple of
+ATR before it counts as a pivot. That sounds like a significance test. It is not: the
+prominence of a local extreme inside an eleven bar window is the depth of an eleven bar
+range, and an eleven bar range is about one ATR by construction. So thresholding it in
+ATR units thresholds a constant. Measured on the real capture: 123 pivots at 0.0 ATR,
+still 123 at 0.5, 118 at 0.75. It defaults to zero now and its docstring records the
+measurement so the next person to reach for it does not repeat it.
+
+**The eighth was next to it, and is the more interesting one: a touch count is a
+density.** Clustering pivots and keeping the ones touched twice or more publishes 31
+levels on four years of SPY, and every one of them looks like evidence. It is not.
+Scatter 123 pivots across a 390 point range and cluster in 4.5 point bands and about
+1.45 land in each band by arithmetic alone, so "touched twice" is what chance produces
+and "touched seven times" is the only kind of number worth looking at.
+
+The fix is a baseline, and the baseline had to be the right one. A uniform null over the
+price range would have been wrong in the familiar direction: price does not visit all
+prices equally, it spends months in a congestion zone and crosses a gap in a day, so a
+uniform null calls everything inside the congestion zone significant and everything
+outside it noise. `occupancy_share` therefore measures how much time price actually
+spent in each band, and the expected touch count is the pivot count times that share.
+The test is a Poisson tail on the excess.
+
+What it does to the numbers is the point of the whole module: 31 candidates, 8 at p
+below 0.20, 1 at p below 0.05. On the 365 day window the API serves, 10 candidates and
+zero survivors.
+
+**Zero survivors is a finding, and the UI says so rather than showing an empty panel.**
+"Nothing here turned out to be a level. Every candidate was a price where the number of
+times price turned is what the time it spent there already predicts." An empty list with
+no explanation would read as a broken job, and the honest reading is considerably more
+interesting than a chart full of lines would have been.
+
+**Two filters aimed at the same thing, one of them silently disabling the other.** Worth
+recording as a pattern rather than as one bug. Raising the prominence default to 1.5 ATR
+to make it "work" cut the pivot count to 66, which starved the significance test of the
+counts it needs, which took the surviving level count from 1 to 0. A confounded filter
+stacked in front of a principled one does not merely fail to help.
+
+**The volume profile reproduces the trap in its purest form and is left visible.** Over
+the full 1100 sessions the point of control lands at 413 against a spot of 748, because
+that is where the 2022 to 2026 advance spent the most time. That is a fact about the
+path, not a price buyers defend. `build_levels` trims the profile to 120 sessions and
+says in a note that it did, and a test pins the long window behaviour so the bias stays
+documented rather than becoming folklore.
+
+**Round numbers carry a constant strength on purpose.** There is nothing to measure. A
+round number has no touch count and no p-value, and giving it a computed looking score
+would put it on the same footing as a level that earned one. They are drawn dashed and
+faint, and their `p_value` is null rather than 1.0, because null means "not tested" and
+1.0 would mean "tested and failed".
+
+**The cone uses each expiry's own implied vol, not one vol over a sqrt(t) curve.** The
+single vol version is what everyone draws and it is wrong for anyone selling more than
+one expiry: the term structure slopes, and it inverts around events, so projecting the
+front week out to ninety days draws a cone that is too narrow at the back in contango
+and too wide when inverted. The error is largest exactly around the events a premium
+seller most wants to see. The cone is a polyline through one point per expiry and the
+straight lines between points are labelled as interpolation.
+
+Bands are lognormal rather than symmetric. Over a week the two are indistinguishable;
+a year out a symmetric band puts its lower edge at a price the model assigns almost no
+probability to, which looks like precision and is an artifact.
+
+**The variance risk premium is refused across mismatched tenors.** Comparing a 30 day
+realized vol against the frozen fixture's 4 day implied is the term structure talking,
+not the premium, so `_comparable_implied_vol` picks the expiry nearest the realized
+window and returns None when nothing is within a factor of two. On live SPY it does
+publish, and the first thing it showed was implied 12.1 against realized 12.8: a
+negative premium, which the UI flags as unusual rather than rendering as a small
+positive number the reader would skim past.
+
+**One endpoint, not four.** The levels panel is the only screen that draws a number
+fetched seconds ago on the same axes as one from the last stored capture. Splitting it
+across four requests would let the browser assemble one picture out of four moments,
+and this is precisely the panel where that matters, since the whole purpose is judging
+a strike against a level. The payload carries two provenances and the header shows both.
+
+**A failed candle fetch costs the levels and nothing else.** The cone and the strikes
+come from the stored capture, so they still render. An honest partial beats an error
+page, and a test pins it.
+
+### What is verified
+
+Full suite and ruff green. Verified in a browser against live data on 2026-07-31 with
+the market in its post session: one chart carrying the close line, 11 levels, both cone
+bands, 25 candidate strikes shaded by probability of profit, the two provenances, and
+the terminal distribution histogram for the selected expiry. `optscan status` before and
+after shows the snapshot job unaffected and today's capture present for all six symbols.
+
+**A subtlety the chart now states.** A candidate strike's shade is the probability of
+profit of the position the screener built around it, not of the strike alone, so two
+neighbouring strikes can read 62 percent and 75 percent when one is a spread and the
+other a single leg. That looked like a bug on the first render and is not, so the panel
+explains it rather than leaving it to be rediscovered.
+
+**Still blocked on history, unchanged:** every gap threshold and the vertical
+mispricing baseline. Phase 6 does not touch them. IV rank is still `insufficient`
+everywhere, now on two captured sessions rather than one.
