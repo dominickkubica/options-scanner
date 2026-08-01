@@ -81,7 +81,12 @@ ignore = [
 "src/optscan/providers/*" = ["TID251"]        # the one place vendor SDKs are allowed
 # Deferred imports, deliberately: the CLI stays fast to start and a broker SDK is only
 # imported by someone who configured that broker.
-"src/optscan/cli.py" = ["PLC0415"]
+#
+# PLR0915 and PLR0911 cover the argument parser and the subcommand dispatchers. Both
+# are long because they are flat: one statement per flag, one return per subcommand.
+# Splitting them to satisfy a counter would scatter the definition of the command line
+# across several functions, which is harder to read rather than easier.
+"src/optscan/cli.py" = ["PLC0415", "PLR0915", "PLR0911"]
 "src/optscan/providers/__init__.py" = ["PLC0415"]
 # Options pricing has a signature convention that every textbook and every other
 # library shares: (right, spot, strike, time, rate, sigma, dividend_yield), positional

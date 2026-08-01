@@ -686,3 +686,117 @@ explains it rather than leaving it to be rediscovered.
 **Still blocked on history, unchanged:** every gap threshold and the vertical
 mispricing baseline. Phase 6 does not touch them. IV rank is still `insufficient`
 everywhere, now on two captured sessions rather than one.
+
+## 2026-08-01: Phase 7, positions and risk
+
+**The fill price is required and there is no default.** Every other number in this
+project can be recomputed from a stored snapshot; the price a person actually got
+cannot. A tool that opened a position at the mid and then reported profit against the
+mid would show a trader flat at the moment they have already lost half the spread, and
+on the wide contracts a premium seller lives in that is most of the last of the credit.
+So `PositionLeg.fill_price` has no default, the CLI leg parser refuses a spec without
+it, and the column is NOT NULL.
+
+**Positions are not `Record`s.** Everything else in models/ came from a vendor and
+carries `fetched_at` and `source` so its age can be judged. A position came from a
+person. Forcing it into the same base would mean inventing a source for a fact that has
+none, so there is a separate `UserRecord` base and the distinction is visible in the
+type.
+
+**One sign convention, both directions.** `signed_fill` and `signed_value` are positive
+for a credit and negative for a debit, so profit is always `signed_fill - signed_value`:
+a put sold at 2.00 now marked 1.00 gives 2.00 minus 1.00, and a call bought at 3.00 now
+marked 5.00 gives -3.00 minus -5.00. One formula rather than a branch on direction,
+which is what keeps the aggregate honest when a position holds legs of each kind.
+
+**Held positions mark at the closing price, not the mid.** A short leg marks at the ask
+because that is what buying it back costs; a long leg marks at the bid. Marking a short
+book at the mid overstates every position by half the spread on every leg, and it does
+so worst in exactly the range where a profit target fires. `mark_convention` is
+configurable and defaults to closing.
+
+**Greeks refuse; profit sums.** A four legged condor summed over the three legs that
+solved reports a delta that is not the position's delta, and it is wrong in the
+direction of whichever wing failed, so any missing leg withholds the whole greek.
+Profit is different: an incomplete total is still the profit of the positions in it,
+and `unmarked` says how many are missing. A profit total gets read; a delta gets used to
+size a hedge, and that asymmetry is why they are treated differently.
+
+**Beta is None rather than 1.0 when it cannot be estimated.** A default of 1.0 is a
+measured looking number for an unmeasured thing, and it would quietly weight a thinly
+traded name as though it moved exactly with the index. Below sixty overlapping sessions
+`beta` returns a `Beta` whose value is None and whose caveat says why, and the portfolio
+withholds its beta weighted delta rather than publishing a total built on a guess.
+
+Three limitations are documented on the module rather than left to be discovered: beta
+is an estimate that moves, it is a linear fit and correlations go to one in a crash
+which is precisely when it is being relied on, and beta weighting an option position is
+a first order estimate of a first order estimate. Returns are matched by session date
+rather than by position, because two vendors can disagree about holidays and a one day
+offset turns a beta of 1.0 into noise.
+
+**Early assignment is decided by extrinsic value, not by moneyness.** Reused from
+`analytics/events.py`, which got this right in Phase 2: a short call is at risk when the
+dividend exceeds the remaining time value, because that is when exercising is rational.
+Deep in the money and near an ex date is not sufficient, and giving up 3.00 of extrinsic
+to collect 1.50 is not something anybody does. The trigger computes extrinsic as the
+mark less the intrinsic rather than using the mark directly.
+
+**Delta breach is measured per leg, not on the net.** An iron condor's net delta can sit
+near zero while one side is badly tested, and the net would report the book balanced
+right up until assignment.
+
+**There is deliberately no stop loss trigger.** It is popular and it would have been
+easy. On a short option it systematically closes the positions that were about to
+recover, because the loss is largest when the move is largest and the move is what mean
+reverts. Shipping it would need Phase 8 evidence, and without that it would be this
+project asserting a rule it cannot defend. The omission is recorded in the module
+docstring so the next person finds the reasoning rather than the gap.
+
+**An alert fires once per condition, and the suppression is in the database.** In
+memory it would reset on every restart. This is the difference between a tool that gets
+trusted and one that gets muted, and a muted alerting tool is worse than none because it
+is still believed to be working. The uniqueness is a database index rather than a read
+then write, so two runs racing cannot both decide they are first.
+
+**A delivery failure is not recorded as sent.** If no sink accepts an alert it is left
+unrecorded and retried next run, because a webhook outage must not consume the only
+notification a condition will ever send. A sink that raises is caught and the others are
+still tried: the run matters more than any one notification.
+
+**The default sink needs no account.** Telegram, Discord and SMTP all require somebody
+to register somewhere, and a default that cannot run until they do is a feature that
+does not work out of the box. So the default is a JSONL file next to the database plus a
+structured log line. `WebhookSink` exists for the rest and is **untested against a real
+endpoint**, which its docstring says: this project has no webhook to try.
+
+**Position entry stays on the CLI and the API is read only.** A fill price typed into a
+browser form is unverifiable and a mistyped one silently corrupts every number on the
+page. More importantly, a GET that delivered alerts would fire them on every refresh,
+so `/api/positions` runs the evaluation with `send_alerts=False` and only `optscan
+manage` sends.
+
+### What is verified
+
+Full suite and ruff green. Verified end to end on 2026-08-01 by opening two paper
+positions through the CLI, running `optscan manage`, and reading the result in the
+browser:
+
+- A put credit spread marked from the stored snapshot at +221.40, 71 percent of maximum
+  profit, firing the profit target trigger.
+- A deliberately tested short 800 put firing both `delta_breach` and `tested`, with two
+  alerts delivered to the log and the JSONL file.
+- A second run delivering zero alerts while still reporting both conditions, which is
+  the once-only suppression working.
+- Portfolio totals with a beta weighted delta of 62,304 dollars of SPY exposure, and
+  the same totals withheld with a stated reason when run with `--offline`.
+- Signs checked against expectation on a real put credit spread: positive delta,
+  positive theta, negative vega.
+
+Both paper positions were deleted afterwards, so the database is clean.
+
+**Not verified: the webhook sink**, for the reason above, and **nothing here has been
+validated against outcomes**. Every threshold in `ManagementConfig` is a convention
+rather than a finding. That is what Phase 8 is for, and the alert JSONL file was chosen
+partly because it is the record Phase 8 will want when it asks whether any of these
+triggers were worth acting on.

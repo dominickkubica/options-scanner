@@ -39,11 +39,15 @@ from optscan.api.schemas import (
     OpportunityOut,
     PayoffOut,
     PayoffPointOut,
+    PortfolioOut,
+    PositionLegOut,
+    PositionOut,
     Provenance,
     ScoreComponentsOut,
     SkewPointOut,
     SymbolSummaryOut,
     TermPointOut,
+    TriggerOut,
 )
 from optscan.models import Leg, Opportunity, PriceBar, Right
 from optscan.screener.context import ExpiryAnalysis
@@ -275,6 +279,80 @@ def opportunity_view(opportunity: Opportunity) -> OpportunityOut:
             probability=opportunity.components.probability,
             event_risk=opportunity.components.event_risk,
         ),
+    )
+
+
+def portfolio_view(result) -> PortfolioOut:
+    """A management run's output, flattened for the browser.
+
+    Takes the whole ManageResult rather than the portfolio alone, because the triggers
+    are keyed by position id and pairing them back up is exactly the kind of join that
+    should happen once here rather than in the browser.
+    """
+    book = result.portfolio
+    return PortfolioOut(
+        positions=[
+            _position_view(risk, result.triggers.get(risk.position.id or -1, []))
+            for risk in book.positions
+        ],
+        asof=book.asof,
+        reference=book.reference,
+        unrealized=book.unrealized,
+        unmarked=book.unmarked,
+        delta=book.delta,
+        theta=book.theta,
+        vega=book.vega,
+        beta_weighted_delta=book.beta_weighted_delta,
+        notes=list(book.notes),
+    )
+
+
+def _position_view(risk, triggers) -> PositionOut:
+    position = risk.position
+    return PositionOut(
+        id=position.id or 0,
+        symbol=position.symbol,
+        strategy=str(position.strategy) if position.strategy else None,
+        expiry=position.expiry,
+        dte=risk.dte,
+        opened_at=position.opened_at,
+        legs=[
+            PositionLegOut(
+                action=str(item.leg.action),
+                right=str(item.leg.right),
+                strike=item.leg.strike,
+                expiry=item.leg.expiry,
+                quantity=item.leg.quantity,
+                fill_price=item.leg.fill_price,
+                mark=item.mark,
+                iv=item.iv,
+                delta=item.delta,
+                theta=item.theta,
+                vega=item.vega,
+            )
+            for item in risk.legs
+        ],
+        entry_credit=position.entry_credit,
+        net_credit=position.net_credit,
+        unrealized=risk.unrealized,
+        profit_fraction=risk.profit_fraction,
+        delta=risk.delta,
+        theta=risk.theta,
+        vega=risk.vega,
+        beta_weighted_delta=risk.beta_weighted_delta,
+        tested=risk.tested,
+        marks_complete=risk.marks_complete,
+        triggers=[
+            TriggerOut(
+                kind=str(item.kind),
+                message=item.message,
+                severity=item.severity,
+                value=item.value,
+                threshold=item.threshold,
+            )
+            for item in triggers
+        ],
+        notes=list(risk.notes),
     )
 
 

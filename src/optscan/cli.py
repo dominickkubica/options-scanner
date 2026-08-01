@@ -8,11 +8,11 @@ from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from optscan import __version__
-from optscan.config import Settings, get_settings
+from optscan.config import REPO_ROOT, Settings, get_settings
 from optscan.logging import configure_logging, get_logger
 from optscan.screener.config import ScreenConfig
 
@@ -112,6 +112,71 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = sub.add_parser("status", help="Market state, watchlist size, recent captures.")
     status.add_argument("--runs", type=int, default=10, help="How many recent runs to show.")
+
+    # Positions. Entry is manual and the fill price is required, because it is the one
+    # number the tool cannot reconstruct and the one every P/L is measured against.
+    position = sub.add_parser("position", help="Track positions you actually hold.")
+    position_sub = position.add_subparsers(dest="position_command", required=True)
+
+    position_sub.add_parser("list", help="Open positions with their profit and greeks.")
+
+    pos_add = position_sub.add_parser(
+        "add",
+        help="Record a position you opened.",
+        description=(
+            "Legs are given as ACTION:RIGHT:STRIKE:FILL, for example sell:P:700:5.20. "
+            "Repeat --leg for a spread. Every leg needs the price you actually got, "
+            "not the mid it was showing."
+        ),
+    )
+    pos_add.add_argument("symbol", help="Underlying symbol.")
+    pos_add.add_argument("--expiry", required=True, help="Expiry, YYYY-MM-DD.")
+    pos_add.add_argument(
+        "--leg",
+        action="append",
+        required=True,
+        metavar="ACTION:RIGHT:STRIKE:FILL",
+        help="Repeatable. sell:P:700:5.20",
+    )
+    pos_add.add_argument("--quantity", type=int, default=1, help="Contracts per leg.")
+    pos_add.add_argument("--commission", type=float, default=0.0, help="Paid to open.")
+    pos_add.add_argument("--strategy", default=None, help="Optional label, e.g. cash_secured_put.")
+    pos_add.add_argument("--note", default=None)
+
+    pos_close = position_sub.add_parser("close", help="Mark a position closed.")
+    pos_close.add_argument("id", type=int)
+    pos_close.add_argument(
+        "--value",
+        type=float,
+        required=True,
+        help="Net cash to close, credit positive. Paying 2.00 to buy back is -200.",
+    )
+    pos_close.add_argument("--commission", type=float, default=0.0)
+
+    pos_delete = position_sub.add_parser(
+        "delete",
+        help="Remove a position entered by mistake. Not the same as closing one.",
+    )
+    pos_delete.add_argument("id", type=int)
+
+    manage = sub.add_parser(
+        "manage",
+        help="Mark every open position, evaluate triggers, and send new alerts.",
+    )
+    manage.add_argument("--config", type=Path, default=None, help="Config YAML to load.")
+    manage.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Evaluate and print without delivering alerts. Does not consume the once-only send.",
+    )
+    manage.add_argument(
+        "--offline",
+        action="store_true",
+        help=(
+            "Skip the provider. Positions still mark from stored snapshots; beta "
+            "weighting and the event triggers are reported as unchecked."
+        ),
+    )
 
     schedule = sub.add_parser(
         "schedule",
@@ -379,6 +444,136 @@ def _cmd_schedule(settings: Settings, args: argparse.Namespace) -> int:
     return 0 if result.ok else 1
 
 
+def _parse_leg(spec: str, expiry: date, quantity: int):
+    """ACTION:RIGHT:STRIKE:FILL into a PositionLeg.
+
+    Four required fields with no defaults. A leg spec that omitted the fill and took
+    the mid instead would produce a position whose profit and loss is fiction, so the
+    parser refuses rather than helping.
+    """
+    from optscan.models.position import PositionLeg
+
+    parts = spec.split(":")
+    expected = 4
+    if len(parts) != expected:
+        raise ValueError(
+            f"leg {spec!r} must be ACTION:RIGHT:STRIKE:FILL, for example sell:P:700:5.20"
+        )
+    action, right, strike, fill = parts
+    return PositionLeg(
+        action=action.strip().lower(),
+        right=right,
+        strike=float(strike),
+        expiry=expiry,
+        quantity=quantity,
+        fill_price=float(fill),
+    )
+
+
+def _cmd_position(settings: Settings, args: argparse.Namespace) -> int:
+    from optscan.models.position import Position
+    from optscan.storage import db
+    from optscan.storage import positions as store
+
+    with db.session(settings.sqlite_path) as conn:
+        if args.position_command == "list":
+            held = store.list_positions(conn)
+            if not held:
+                print("No open positions. Add one with `optscan position add`.")
+                return 0
+            print(f"{'id':>4}  {'symbol':<6} {'expiry':<10} {'legs':>4}  {'credit':>9}  note")
+            for item in held:
+                legs = ", ".join(f"{leg.action}:{leg.right}:{leg.strike:g}" for leg in item.legs)
+                print(
+                    f"{item.id:>4}  {item.symbol:<6} {item.expiry}  {len(item.legs):>4}  "
+                    f"{item.entry_credit:>9.2f}  {legs}"
+                )
+            return 0
+
+        if args.position_command == "add":
+            expiry = date.fromisoformat(args.expiry)
+            legs = tuple(_parse_leg(spec, expiry, args.quantity) for spec in args.leg)
+            stored = store.add_position(
+                conn,
+                Position(
+                    symbol=args.symbol,
+                    legs=legs,
+                    opened_at=datetime.now(UTC),
+                    strategy=args.strategy,
+                    commission_open=args.commission,
+                    note=args.note,
+                ),
+            )
+            print(f"Recorded position {stored.id}: {stored.symbol} {stored.expiry}")
+            print(f"  entry credit {stored.entry_credit:+.2f}, net {stored.net_credit:+.2f}")
+            return 0
+
+        if args.position_command == "close":
+            closed = store.close_position(conn, args.id, args.value, commission=args.commission)
+            if closed is None:
+                print(f"No position {args.id}.")
+                return 1
+            print(f"Closed {args.id}. Realized {closed.realized:+.2f}")
+            return 0
+
+        if args.position_command == "delete":
+            removed = store.delete_position(conn, args.id)
+            print(f"Deleted {args.id}." if removed else f"No position {args.id}.")
+            return 0 if removed else 1
+
+    return 1
+
+
+def _cmd_manage(settings: Settings, args: argparse.Namespace) -> int:
+    from optscan.jobs.manage import run_manage, summarize
+    from optscan.providers import get_provider
+    from optscan.screener.config import DEFAULT_CONFIG_FILENAME, ScreenConfig
+
+    config = ScreenConfig.load(args.config or (REPO_ROOT / DEFAULT_CONFIG_FILENAME))
+
+    provider = None
+    if not args.offline:
+        try:
+            provider = get_provider(settings)
+        except Exception as error:
+            print(f"Provider unavailable, continuing without it: {error}")
+
+    result = run_manage(settings, config, provider=provider, send_alerts=not args.quiet)
+
+    if not result.portfolio.positions:
+        print("No open positions.")
+        for note in result.notes:
+            print(f"  note: {note}")
+        return 0
+
+    print(f"{'id':>4}  {'symbol':<6} {'expiry':<10} {'dte':>5} {'profit':>11}")
+    for line in summarize(result):
+        print(line)
+
+    book = result.portfolio
+    print()
+    print(f"  unrealized   {book.unrealized:+.2f}")
+    for label, value, unit in (
+        ("delta", book.delta, "shares"),
+        ("theta", book.theta, "per day"),
+        ("vega", book.vega, "per vol point"),
+    ):
+        print(f"  {label:<12} {value:+.2f} {unit}" if value is not None else f"  {label:<12} n/a")
+    weighted = book.beta_weighted_delta
+    print(
+        f"  beta delta   {weighted:+.0f} dollars of {book.reference}"
+        if weighted is not None
+        else "  beta delta   n/a"
+    )
+
+    if result.alerts:
+        print()
+        print(f"  {len(result.alerts)} new alerts delivered")
+    for note in result.notes:
+        print(f"  note: {note}")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     settings = get_settings()
@@ -395,6 +590,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "status": _cmd_status,
         "schedule": _cmd_schedule,
         "serve": _cmd_serve,
+        "position": _cmd_position,
+        "manage": _cmd_manage,
     }
     return handlers[args.command](settings, args)
 

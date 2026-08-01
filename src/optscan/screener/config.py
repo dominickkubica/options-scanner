@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Self
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 DEFAULT_CONFIG_FILENAME = "screen.yaml"
 
@@ -267,6 +267,64 @@ class GapsConfig(StrictModel):
     )
 
 
+class ManagementConfig(StrictModel):
+    """When a held position wants looking at. Phase 7.
+
+    Every number here is a convention rather than a finding. Nothing in this project
+    has been validated against outcomes, which is what Phase 8 is for, so these are
+    starting points a user is expected to change rather than settings that were tuned.
+    """
+
+    profit_target: float = Field(
+        default=0.50,
+        gt=0.0,
+        le=1.0,
+        description=(
+            "Share of maximum profit at which to consider closing. The one management "
+            "rule with a real argument behind it: the last of a credit takes longest "
+            "to collect and carries the same tail risk the whole time."
+        ),
+    )
+    dte_threshold: int = Field(
+        default=21,
+        ge=0,
+        description="Days to expiry at which gamma starts to dominate the position.",
+    )
+    delta_breach: float = Field(
+        default=0.30,
+        gt=0.0,
+        le=1.0,
+        description=(
+            "Absolute delta on a short leg that counts as a breach. Measured per leg, "
+            "since a condor's net delta can read flat while one side is badly tested."
+        ),
+    )
+    alert_min_severity: int = Field(
+        default=3,
+        ge=0,
+        description=(
+            "Severity at or above which a trigger is worth interrupting somebody for. "
+            "Below it the trigger still shows in the dashboard, it just does not chase."
+        ),
+    )
+    mark_convention: str = Field(
+        default="closing",
+        description=(
+            "closing or mid. Closing marks a short leg at the ask, which is what it "
+            "costs to actually get out. Mid overstates a short book by half the spread "
+            "on every leg, which matters most in the range where a profit target fires."
+        ),
+    )
+
+    @field_validator("mark_convention")
+    @classmethod
+    def _known_convention(cls, value: str) -> str:
+        allowed = {"closing", "mid"}
+        if value not in allowed:
+            raise ValueError(f"mark_convention must be one of {sorted(allowed)}, got {value!r}")
+        return value
+
+
 class ScreenConfig(StrictModel):
     """The whole screen, as loaded from YAML."""
 
@@ -276,6 +334,7 @@ class ScreenConfig(StrictModel):
     normalization: ScoringNormalization = ScoringNormalization()
     strategies: StrategyConfig = StrategyConfig()
     gaps: GapsConfig = GapsConfig()
+    management: ManagementConfig = ManagementConfig()
     max_results: int = Field(default=50, gt=0)
 
     @classmethod

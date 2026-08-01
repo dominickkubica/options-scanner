@@ -25,7 +25,16 @@ from fastapi.staticfiles import StaticFiles
 
 from optscan import __version__
 from optscan.api.deps import clear_caches, frontend_dist, live_hub, reset_live_hub, settings_dep
-from optscan.api.routers import health, levels, live, payoff, scan, symbols, watchlist
+from optscan.api.routers import (
+    health,
+    levels,
+    live,
+    payoff,
+    positions,
+    scan,
+    symbols,
+    watchlist,
+)
 from optscan.config import Settings, get_settings
 from optscan.logging import configure_logging, get_logger
 
@@ -103,6 +112,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         payoff.router,
         live.router,
         levels.router,
+        positions.router,
     ):
         app.include_router(router, prefix=API_PREFIX)
 

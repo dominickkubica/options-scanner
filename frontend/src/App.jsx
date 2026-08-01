@@ -6,6 +6,7 @@ import Chain from "./views/Chain.jsx";
 import Levels from "./views/Levels.jsx";
 import Opportunities from "./views/Opportunities.jsx";
 import Payoff from "./views/Payoff.jsx";
+import Positions from "./views/Positions.jsx";
 import Underlying from "./views/Underlying.jsx";
 import { num } from "./format.js";
 
@@ -22,6 +23,7 @@ const VIEWS = [
   { key: "underlying", label: "Underlying" },
   { key: "levels", label: "Levels" },
   { key: "payoff", label: "Payoff" },
+  { key: "positions", label: "Positions" },
 ];
 
 export default function App() {
@@ -166,6 +168,11 @@ export default function App() {
         {view === "underlying" && summary.data && <Underlying summary={summary.data} />}
 
         {view === "levels" && summary.data && <Levels summary={summary.data} />}
+
+        {/* Not gated on a symbol: the portfolio spans every symbol held, and a
+            positions page that went blank because the sidebar selection had no
+            capture would be hiding open risk. */}
+        {view === "positions" && <Positions />}
 
         {view === "payoff" && summary.data && (
           <Payoff

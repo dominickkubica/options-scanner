@@ -226,6 +226,94 @@ class HistoryOut(ApiModel):
     )
 
 
+class PositionLegOut(ApiModel):
+    action: str
+    right: str
+    strike: float
+    expiry: date
+    quantity: int
+    fill_price: float
+    mark: float | None = None
+    iv: float | None = None
+    delta: float | None = None
+    theta: float | None = None
+    vega: float | None = None
+
+
+class TriggerOut(ApiModel):
+    """A condition that has become true. Never a recommendation.
+
+    Phase 8 has not run, so nothing here has been validated against outcomes. The
+    message says what changed and why it might matter, and stops.
+    """
+
+    kind: str
+    message: str
+    severity: int
+    value: float | None = None
+    threshold: float | None = None
+
+
+class PositionOut(ApiModel):
+    id: int
+    symbol: str
+    strategy: str | None = None
+    expiry: date
+    dte: int
+    opened_at: datetime
+    legs: list[PositionLegOut] = Field(default_factory=list)
+    entry_credit: float
+    net_credit: float
+    unrealized: float | None = Field(
+        default=None,
+        description="Null when any leg could not be marked. A partial mark is not a P/L.",
+    )
+    profit_fraction: float | None = Field(
+        default=None, description="Share of maximum profit. Null for a debit position."
+    )
+    delta: float | None = None
+    theta: float | None = None
+    vega: float | None = None
+    beta_weighted_delta: float | None = None
+    tested: bool = False
+    marks_complete: bool = True
+    triggers: list[TriggerOut] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class PortfolioOut(ApiModel):
+    """Every open position and what they add up to.
+
+    The greeks are null unless every position could be marked, while the profit total
+    is a sum over whatever priced. That asymmetry is deliberate: an incomplete profit
+    is still the profit of the positions in it, but a delta that silently omits a
+    position gets used to size a hedge.
+    """
+
+    positions: list[PositionOut] = Field(default_factory=list)
+    asof: date
+    reference: str = "SPY"
+    unrealized: float = 0.0
+    unmarked: int = 0
+    delta: float | None = None
+    theta: float | None = Field(
+        default=None, description="Dollars of decay per calendar day if nothing moves."
+    )
+    vega: float | None = None
+    beta_weighted_delta: float | None = Field(
+        default=None,
+        description=(
+            "Dollars of reference symbol exposure. Null when any position lacks a "
+            "usable beta, which needs enough overlapping history to estimate a slope."
+        ),
+    )
+    notes: list[str] = Field(default_factory=list)
+    disclaimer: str = (
+        "Triggers say a condition became true. They are not advice, and none of them "
+        "has been validated against outcomes."
+    )
+
+
 class LevelOut(ApiModel):
     """One horizontal line on the price chart.
 

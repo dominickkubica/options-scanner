@@ -39,6 +39,57 @@ MIGRATIONS: tuple[str, ...] = (
     );
     CREATE INDEX idx_snapshot_run_symbol_date ON snapshot_run (symbol, session_date);
     """,
+    # 2: positions, added in Phase 7.
+    #
+    # Legs are a child table rather than a JSON blob on the position. A blob would be
+    # less code today and would make every later question awkward: "which positions
+    # have a short strike inside this expiry" is the query a roll trigger wants, and
+    # against JSON it is a full scan and a parse.
+    #
+    # fill_price is NOT NULL with no default on purpose. It is the one number the tool
+    # cannot reconstruct, and a column that quietly accepted a null would let a
+    # position exist whose profit and loss is fiction.
+    """
+    CREATE TABLE position (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        symbol              TEXT NOT NULL,
+        strategy            TEXT,
+        opened_at           TEXT NOT NULL,
+        commission_open     REAL NOT NULL DEFAULT 0,
+        commission_close    REAL NOT NULL DEFAULT 0,
+        status              TEXT NOT NULL DEFAULT 'open',
+        closed_at           TEXT,
+        close_value         REAL,
+        note                TEXT
+    );
+    CREATE TABLE position_leg (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        position_id     INTEGER NOT NULL REFERENCES position(id) ON DELETE CASCADE,
+        action          TEXT NOT NULL,
+        right           TEXT NOT NULL,
+        strike          REAL NOT NULL,
+        expiry          TEXT NOT NULL,
+        quantity        INTEGER NOT NULL,
+        fill_price      REAL NOT NULL,
+        contract_size   INTEGER NOT NULL DEFAULT 100,
+        contract_symbol TEXT
+    );
+    CREATE INDEX idx_position_symbol_status ON position (symbol, status);
+    CREATE INDEX idx_position_leg_position ON position_leg (position_id);
+
+    -- One row per alert that has already fired, so a triggered condition notifies once
+    -- rather than on every poll. The uniqueness is the whole point of the table: an
+    -- alerting tool that repeats itself every thirty seconds gets muted, and a muted
+    -- alert is worse than none because it is believed to be working.
+    CREATE TABLE alert_sent (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        position_id     INTEGER NOT NULL REFERENCES position(id) ON DELETE CASCADE,
+        kind            TEXT NOT NULL,
+        fired_at        TEXT NOT NULL,
+        detail          TEXT
+    );
+    CREATE UNIQUE INDEX idx_alert_once ON alert_sent (position_id, kind);
+    """,
 )
 
 
