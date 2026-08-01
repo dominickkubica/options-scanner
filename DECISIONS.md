@@ -800,3 +800,112 @@ validated against outcomes**. Every threshold in `ManagementConfig` is a convent
 rather than a finding. That is what Phase 8 is for, and the alert JSONL file was chosen
 partly because it is the record Phase 8 will want when it asks whether any of these
 triggers were worth acting on.
+
+## 2026-08-01: Phase 8, validation
+
+**Phase 8 works without the historical backfill, and the reason is worth stating.** The
+scoring needed an option chain. The settling does not: a short option at expiry is worth
+max(strike - spot, 0) or max(spot - strike, 0), which is arithmetic rather than a quote.
+So resolving a logged candidate needs one number, the underlying's close on expiry day,
+which yfinance gives away. The backfill would let history be *scored* retroactively;
+nothing here needs it to be *settled*.
+
+**Every candidate is logged, not just the good ones.** `--limit` exists and warns when
+used. A study that records only what the score already liked measures the trader rather
+than the score, and would confirm whatever they believed going in.
+
+**The score is denormalized onto the log row.** Weights will change, and a resolved
+outcome has to stay attached to the score the candidate was actually given. Re-scoring
+history under new weights is a legitimate and different question, and answering it must
+not overwrite this one. The scan row also carries a digest of the effective config, so a
+later reader can tell whether two runs were even comparable.
+
+### The trap this phase brings, which is the ninth instance in a new costume
+
+Every previous instance was a *measure* with a structural component read as signal.
+This one is a **sample** with a structural component read as evidence.
+
+The rows in the validation log are nowhere near independent. One scan of one chain
+produces forty candidates that share an underlying, a session and a volatility surface,
+so if it rallies every short call in that scan loses together. Consecutive sessions on
+the same symbol and expiry are very nearly the same trade recorded twice. Strikes 700
+and 705 on one chain resolve together almost always.
+
+The first recording run logged **903 candidates from six symbols in one session**. Taken
+at face value that is 903 observations; it is closer to a few dozen. An interval computed
+on the row count is roughly the square root of the cluster size too narrow, which here is
+about a factor of five, and that is more than enough to turn noise into a finding.
+
+So the unit of independence is the **(symbol, expiry) cluster**, never the row. Win rates
+are still reported per row because that is what a person wants to read, every interval is
+widened to the cluster count, and both numbers are printed. Below twenty clusters no
+conclusion is drawn at all.
+
+**Wilson intervals rather than normal.** Short premium lives near a win rate of 0.9,
+where the textbook normal interval produces upper bounds above 1.0. An upper bound above
+certainty is a visible sign of a formula being used outside its range, and the ones that
+are not visible are the problem.
+
+**Calibration is measured on the event, not on profit.** The model predicts where price
+finishes; whether that was survivable is a separate question. A position can be breached
+and still make money, and scoring on profit would let a model be wrong about the event
+and still look calibrated. `probability.py` already states the expected direction of
+error, so finding the far strikes breached more often than predicted is the anticipated
+result rather than a discovery.
+
+**Brier score alongside the reliability table**, because a table can look fine while the
+forecasts carry no information: predicting 0.8 for everything is perfectly calibrated on
+average and completely useless, and the Brier score notices while the table does not.
+
+**Hold to expiry is a counterfactual and is labelled as one on every report.** Nobody
+trades that way, and the whole of Phase 7 is about closing early. It is measured this way
+because probability of profit is defined at expiry, so it is the only policy under which
+calibration means anything, and because it is the pessimistic bound: a winner closed
+early banks less, a loser closed early loses less, so held to expiry is the worse tail.
+
+### A bug the demonstration caught, worth recording
+
+The verdict originally compared the **top score bucket against the bottom bucket**. On a
+synthetic sample built so the score genuinely worked, it reported no separation. The
+quartiles read 67, 40, 95 and 87 percent: the top quartile was not the best quartile, and
+comparing only Q4 against Q1 both threw away the middle half and picked an unlucky pair.
+
+It now compares the **top half against the bottom half**, which uses every observation,
+gives both intervals half the sample instead of a quarter, and answers the question
+actually asked, which is whether high scores do better than low ones rather than whether
+the very top beats the very bottom. A regression test pins the exact shape that failed.
+
+Non overlapping intervals rather than a two proportion test, deliberately: it is the more
+conservative of the two and will call a real effect inconclusive before it calls noise a
+finding, which is the correct direction for a study whose purpose is to stop this tool
+over claiming.
+
+**One more thing the report now says out loud.** When the win rate is above 60 percent
+and the mean profit is negative, it says so in a sentence: the losers are bigger than the
+winners, win rate and expectancy are different questions, and short premium is designed
+to win often. The demonstration produced exactly that shape (72 percent win rate,
+negative expectancy), and it is the single most useful thing this report can tell
+somebody.
+
+### What is verified
+
+Full suite and ruff green, 1143 passing. The pipeline was run end to end:
+
+- `optscan record` scored the watchlist from stored snapshots and logged **903 real
+  candidates** across six symbols. Those rows are left in the database on purpose: this
+  is the same start-on-day-one problem as the IV history, and a candidate never logged
+  when it was scored cannot be settled later.
+- `optscan validate` on that log correctly reports nothing and says why, naming the
+  earliest logged expiry (2026-08-21) so an empty study says when it will stop being
+  empty rather than looking broken.
+- Settlement is exercised offline in tests against hand computed values, including the
+  defined risk floor, an unclamped naked short, and a breach that still made money.
+- Both verdicts were demonstrated on synthetic samples shaped to separate and not to.
+
+**Not verified: a real resolved outcome.** Nothing logged has expired yet, and nothing
+can before 2026-08-21. The settling path is covered by an offline test with a fake
+provider, and the first real run of `optscan resolve` is outstanding.
+
+**Nothing is scheduled.** `optscan record` should run daily like the snapshot job and
+`optscan resolve` weekly, and neither is registered. That is the obvious next small job
+and it is not done.

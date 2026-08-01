@@ -31,9 +31,9 @@ src/optscan/
   models/           pydantic: Quote, Chain, Contract, Snapshot, Opportunity, Position
   storage/          sqlite + duckdb writers, migrations
   analytics/        greeks.py, iv.py, probability.py, levels.py, projection.py,
-                    portfolio.py, triggers.py
+                    portfolio.py, triggers.py, outcomes.py, calibration.py
   screener/         rules/, scoring.py, strategies/
-  jobs/             snapshot.py, scheduler.py, manage.py
+  jobs/             snapshot.py, scheduler.py, manage.py, validate.py
   live/             the polling refresh loop and its delta encoder
   alerts.py         alert sinks, and once-per-condition delivery
   api/              schemas, deps, views, app, routers/
@@ -49,6 +49,8 @@ venv\Scripts\python -m ruff check .   # lint
 venv\Scripts\python -m ruff format .  # format
 venv\Scripts\python -m optscan status # market state, watchlist, recent captures
 venv\Scripts\python -m optscan manage # mark held positions, evaluate, alert once
+venv\Scripts\python -m optscan record # log every scored candidate for validation
+venv\Scripts\python -m optscan validate # does the score actually separate outcomes
 venv\Scripts\python -m optscan serve  # API on 8000, plus the UI if it is built
 npm --prefix frontend run dev         # Vite on 5173, proxying /api to 8000
 npm --prefix frontend run build       # emit frontend/dist for optscan serve
@@ -78,13 +80,14 @@ and `optscan-web` entries in `.claude/launch.json`.
 - Every filter rejection carries a reason, and the tally is printed. An unexplained
   empty result table is how a screener loses its user.
 - Before believing any detector, check whether it is measuring a constant offset. That
-  mistake has now been made eight times, most recently twice in one sitting in
-  `analytics/levels.py`: a swing prominence filter thresholding a quantity that is one
-  ATR by construction, and a touch count that was really measuring pivot density. Run
-  it against tests/fixtures and count the hits before believing any of it. If the
-  measure needs a baseline, the baseline usually has to account for structure rather
-  than being uniform: see `occupancy_share`, where the null is how much time price
-  actually spent at each price.
+  mistake has now been made nine times. Run it against tests/fixtures and count the hits
+  before believing any of it. If the measure needs a baseline, the baseline usually has
+  to account for structure rather than being uniform: see `occupancy_share`, where the
+  null is how much time price actually spent at each price.
+- The ninth instance was not a measure but a **sample**: rows in the validation log share
+  a chain and resolve together, so 903 of them are a few dozen observations. Whenever
+  something is counted, ask what the unit of independence actually is before putting an
+  interval on it. See `cluster_key` in analytics/calibration.py.
 - Two filters aimed at the same thing will hide each other. The confounded one in front
   of the principled one does not merely fail to help, it starves the good one of the
   data it needs.
@@ -95,87 +98,99 @@ and `optscan-web` entries in `.claude/launch.json`.
 
 ## Current phase
 
-**Phases 0 to 7 are complete and committed.** Phase 8 is validation, and it is **not
+**Phases 0 to 8 are complete and committed.** Phase 9 is hardening, and it is **not
 authorized**. Ask before starting it, and before anything later.
 
-Phase 8 is the one the roadmap says not to skip: it logs every scored opportunity,
-resolves outcomes at expiry, and reports whether high scores actually outperform low
-ones. Everything this tool currently asserts is unvalidated, and several modules say so
-in their own docstrings.
+Phase 9 from the roadmap: Task Scheduler entries for the remaining jobs, backup and
+rotation for `data/`, error surfaces in the UI, a README with setup and a "what this
+tool does not do" section, and coverage above 80 percent on analytics and screener.
 
-### What Phase 7 built
+### The state that matters most right now
+
+**The validation study is running and it is empty.** 903 real candidates were logged on
+2026-08-01 and the earliest of them expires 2026-08-21, so `optscan validate` correctly
+reports nothing until then. That is the study working, not a bug.
+
+**Recording has to keep running, for the same reason the snapshot job does.** A
+candidate that was never logged when it was scored cannot be settled later, and there is
+no way to reconstruct what the screen would have surfaced last Tuesday. Every day
+`optscan record` does not run is a permanent hole.
+
+**Neither `record` nor `resolve` is scheduled yet.** Registering them is the obvious next
+piece of work and belongs in Phase 9.
+
+### What Phase 8 built
 
 ```
 src/optscan/
-  models/position.py          Position and PositionLeg, entered by a person
-  storage/positions.py        CRUD plus the alert suppression table
-  analytics/portfolio.py      per position and aggregate greeks, beta weighting
-  analytics/triggers.py       profit target, DTE, delta breach, tested, events
-  screener/positions.py       marking a held position against a solved chain
-  jobs/manage.py              the management run
-  alerts.py                   sinks, and once-per-condition delivery
-  api/routers/positions.py    GET /api/positions, read only
-frontend/src/views/Positions.jsx
+  analytics/outcomes.py       settling a short position at expiry, arithmetic only
+  analytics/calibration.py    buckets, Wilson intervals, reliability, Brier
+  storage/validation.py       the append only log and the outcome table
+  jobs/validate.py            record, resolve, report
 ```
 
 ```
-optscan position add SPY --expiry 2026-09-18 --leg sell:P:700:5.20 --leg buy:P:690:2.10
-optscan position list
-optscan position close 1 --value -86 --commission 1.30
-optscan manage            # mark, evaluate, deliver new alerts
-optscan manage --offline  # no provider: no beta, no event triggers, says so
+optscan record      # score the watchlist and log every candidate
+optscan resolve     # settle logged candidates whose expiry has passed
+optscan validate    # the report, or a refusal to give one
 ```
 
-### Rules Phase 7 adds
+### The thing to understand before touching calibration.py
 
-- **The fill price is required and has no default.** It is the only number in this
-  project that cannot be recomputed, and P/L is measured against it rather than against
-  a mark. The CLI refuses a leg spec without it.
-- **Held positions mark at what it costs to close**, not at the mid: a short leg at the
-  ask, a long leg at the bid. The mid overstates a short book by half the spread on
-  every leg, worst in the range where a profit target fires.
-- **One sign convention.** Credit positive throughout, so profit is always
-  `signed_fill - signed_value` whichever direction the leg is.
-- **Greeks refuse on a missing leg; profit sums over what marked.** A partial delta gets
-  used to size a hedge. A partial profit is still the profit of the positions in it.
-- **Beta is None when it cannot be estimated, never 1.0.** Below sixty overlapping
-  sessions the portfolio withholds its beta weighted delta and says why.
-- **Early assignment is decided by extrinsic against the dividend**, not by moneyness.
-- **Delta breach is per leg.** A condor's net can read flat while one side is tested.
-- **There is no stop loss trigger, deliberately.** See the docstring in triggers.py: on
-  a short option it closes exactly the positions that were about to recover, and
-  shipping it would need Phase 8 evidence.
-- **Alerts fire once per condition, suppressed in the database**, and a delivery that
-  no sink accepted is not recorded, so it retries rather than being lost.
-- **Position entry is CLI only and the API is read only.** A GET that delivered alerts
-  would fire them on every browser refresh.
+**Rows are not observations.** One scan of one chain produces dozens of candidates that
+share an underlying, a session and a surface, so they resolve together. The unit of
+independence is the **(symbol, expiry) cluster**, and every interval in the report is
+widened to the cluster count rather than the row count. On the first real recording run
+that is 903 rows over a few dozen clusters, and an interval on the row count would be
+about five times too narrow.
+
+Below `MIN_CLUSTERS_FOR_A_CLAIM` (20) the report draws no conclusion at all and says so.
+
+**Separation is judged on halves, not on extreme buckets.** Comparing the top quartile
+against the bottom one throws away the middle half and gives both intervals a quarter of
+the sample. It was wrong on a demonstration sample where the score genuinely worked, and
+a regression test now pins that shape.
+
+### Rules Phase 8 adds
+
+- **Log everything the screen surfaces, not the top N.** `--limit` warns when used.
+- **Never overwrite a recorded score or a recorded outcome.** Both tables refuse. A
+  resolved outcome stays attached to the score the candidate was actually given.
+- **Calibration is measured on the event, not on profit.** A position can be breached and
+  still make money; scoring on profit lets a model be wrong and look right.
+- **Hold to expiry is a counterfactual and is labelled on every report.** It is used
+  because probability of profit is defined at expiry, and because it is the worse tail.
+- **A win rate above 60 percent with negative mean profit gets a sentence saying the
+  losers are bigger than the winners.** Short premium is designed to win often.
+- **Settle only against a real close.** A candidate whose expiry close cannot be found
+  stays unresolved rather than being settled at an approximation, because the missing one
+  is visible and the wrong one is not.
 
 ### Watch out for
 
 - **The daily snapshot job must keep running through every phase.** Windows Task
-  Scheduler, `OptscanDailySnapshot`, 12:45 machine time and 15:45 New York. IV rank
-  needs months of history, no free source sells it after the fact, and every day the job
-  does not run is a permanent hole. Check `optscan status` before and after any change
-  touching providers, config, or storage.
-- **`optscan manage` is not scheduled.** It is safe to run repeatedly and would suit a
-  task every fifteen minutes during market hours, but nothing registers it yet. Adding
-  that is a reasonable small piece of work and was not part of Phase 7.
-- **`WebhookSink` has never been run against a real endpoint.** No webhook exists to
-  test against. The payload is deliberately plain rather than shaped for one vendor, so
-  Discord will need its `content` key.
+  Scheduler, `OptscanDailySnapshot`, 12:45 machine time and 15:45 New York. Check
+  `optscan status` before and after any change touching providers, config, or storage.
+- **`optscan record` is not scheduled and needs to be.** See above.
+- **No outcome has ever actually been resolved.** The settling path is covered by an
+  offline test with a fake provider; the first real `optscan resolve` run is outstanding
+  and cannot happen before 2026-08-21.
+- **`WebhookSink` has never been run against a real endpoint.**
 - Two captured sessions exist, so every IV rank still reads `insufficient`.
 - **`OPTSCAN_LIVE_ENABLED` is false by default** and should stay that way until asked.
 - **The Tradier adapter has still never run against Tradier.** No token exists, and
-  `tests/fixtures/tradier/` is built from published schemas rather than captured. The
-  ordered checklist is in the Phase 5 DECISIONS entry.
+  `tests/fixtures/tradier/` is built from published schemas. Checklist in the Phase 5
+  DECISIONS entry.
 - **The SSE endpoint cannot be tested through TestClient.** Starlette buffers the whole
   response. Drive `_events` directly, as `tests/test_api_live.py` does.
-- The gaps thresholds and the vertical mispricing baseline are still uncalibrated and
-  still blocked on history. Phase 8.
-- **A historical options backfill is still the highest leverage thing available.** IV
-  rank needs 180 observations for high confidence and at one capture a day that is nine
-  months out. ThetaData's docs advertise a free year of EOD history while their pricing
-  page shows no zero tier, so it needs an account to settle; their terminal is a local
-  Java jar serving REST on 127.0.0.1:25503. Cboe DataShop's EOD file snapshots at 15:45,
-  exactly this project's own capture time. Buy raw chains and re-solve with our own
-  solver; never adopt a vendor's IV rank.
+- The gaps thresholds and the vertical mispricing baseline are still uncalibrated. They
+  were blocked on history, and Phase 8 is now the mechanism that will eventually
+  calibrate them, but it needs resolved outcomes first.
+- **A historical options backfill is still the highest leverage thing available**, and
+  Phase 8 sharpens why: it would let history be scored retroactively, which is the only
+  way to get resolved outcomes faster than one expiry cycle at a time. Settling does not
+  need it; scoring does. ThetaData's docs advertise a free year of EOD history while
+  their pricing page shows no zero tier, so it needs an account to settle; their terminal
+  is a local Java jar serving REST on 127.0.0.1:25503. Cboe DataShop's EOD file snapshots
+  at 15:45, exactly this project's own capture time. Buy raw chains and re-solve with our
+  own solver; never adopt a vendor's IV rank.

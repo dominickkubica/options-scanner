@@ -90,6 +90,85 @@ MIGRATIONS: tuple[str, ...] = (
     );
     CREATE UNIQUE INDEX idx_alert_once ON alert_sent (position_id, kind);
     """,
+    # 3: the validation log, added in Phase 8.
+    #
+    # Every scored candidate is written at scan time whether or not it is traded. That
+    # is the whole design: a study that only records the trades somebody took measures
+    # the trader, not the score, and it will confirm whatever they already believed.
+    #
+    # The score and its components are denormalized onto the row rather than joined
+    # from config, because the weights will change and a resolved outcome has to stay
+    # attached to the score it was actually given. Re-scoring history under new weights
+    # is a different question and it must not silently overwrite this one.
+    #
+    # scan_id groups the rows written by one run. It is what makes the correlation
+    # between candidates visible: forty rows from one scan of one chain are not forty
+    # independent observations, and the calibration report needs to be able to say so.
+    """
+    CREATE TABLE scan_run (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        ran_at          TEXT NOT NULL,
+        session_date    TEXT NOT NULL,
+        symbols         TEXT NOT NULL,
+        config_digest   TEXT,
+        candidates      INTEGER NOT NULL DEFAULT 0,
+        note            TEXT
+    );
+    CREATE TABLE opportunity_log (
+        id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+        scan_id                 INTEGER NOT NULL REFERENCES scan_run(id) ON DELETE CASCADE,
+        recorded_at             TEXT NOT NULL,
+        session_date            TEXT NOT NULL,
+        symbol                  TEXT NOT NULL,
+        strategy                TEXT NOT NULL,
+        expiry                  TEXT NOT NULL,
+        dte                     INTEGER NOT NULL,
+        underlying_price        REAL NOT NULL,
+        legs                    TEXT NOT NULL,
+        short_strike            REAL,
+        short_right             TEXT,
+        long_strike             REAL,
+        width                   REAL,
+        credit                  REAL NOT NULL,
+        max_profit              REAL NOT NULL,
+        max_loss                REAL,
+        capital                 REAL,
+        commission              REAL NOT NULL DEFAULT 0,
+        probability_of_profit   REAL,
+        probability_of_touch    REAL,
+        short_delta             REAL,
+        iv                      REAL,
+        iv_rank                 REAL,
+        iv_confidence           TEXT,
+        liquidity_score         REAL,
+        has_earnings            INTEGER NOT NULL DEFAULT 0,
+        score                   REAL NOT NULL,
+        component_premium       REAL,
+        component_iv_rank       REAL,
+        component_liquidity     REAL,
+        component_probability   REAL,
+        component_event_risk    REAL
+    );
+    CREATE INDEX idx_opportunity_expiry ON opportunity_log (expiry);
+    CREATE INDEX idx_opportunity_symbol ON opportunity_log (symbol, expiry);
+    CREATE INDEX idx_opportunity_scan ON opportunity_log (scan_id);
+
+    -- Resolution is separate from the log so that re-resolving is possible without
+    -- touching what was recorded. The scored row is the claim; this is the umpire.
+    CREATE TABLE opportunity_outcome (
+        opportunity_id      INTEGER PRIMARY KEY REFERENCES opportunity_log(id) ON DELETE CASCADE,
+        resolved_at         TEXT NOT NULL,
+        settlement_date     TEXT NOT NULL,
+        settlement_price    REAL NOT NULL,
+        settlement_source   TEXT NOT NULL,
+        outcome             TEXT NOT NULL,
+        finished_beyond     INTEGER NOT NULL,
+        profit              REAL NOT NULL,
+        profit_fraction     REAL,
+        note                TEXT
+    );
+    CREATE INDEX idx_outcome_resolved ON opportunity_outcome (settlement_date);
+    """,
 )
 
 

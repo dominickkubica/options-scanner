@@ -159,6 +159,45 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pos_delete.add_argument("id", type=int)
 
+    # Validation. Recording has to start on day one for the same reason the IV history
+    # did: a candidate never logged when it was scored cannot be settled later.
+    record = sub.add_parser(
+        "record",
+        help="Score the watchlist and log every candidate for later validation.",
+    )
+    record.add_argument("--config", type=Path, default=None, help="Config YAML to load.")
+    record.add_argument("--symbols", nargs="*", default=None, help="Defaults to the watchlist.")
+    record.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help=(
+            "Log only the top N. Off by default and biases the study when used: "
+            "recording only what the score already likes cannot test the score."
+        ),
+    )
+
+    resolve = sub.add_parser(
+        "resolve",
+        help="Settle logged candidates whose expiry has passed, from the underlying close.",
+    )
+    resolve.add_argument(
+        "--offline",
+        action="store_true",
+        help="Skip the provider. Nothing can be settled without price history.",
+    )
+
+    validate_cmd = sub.add_parser(
+        "validate",
+        help="Report whether the score actually separates outcomes.",
+    )
+    validate_cmd.add_argument(
+        "--buckets",
+        type=int,
+        default=4,
+        help="Score buckets. Quartiles by default: deciles need far more data than exists.",
+    )
+
     manage = sub.add_parser(
         "manage",
         help="Mark every open position, evaluate triggers, and send new alerts.",
@@ -574,6 +613,111 @@ def _cmd_manage(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_record(settings: Settings, args: argparse.Namespace) -> int:
+    from optscan.jobs.validate import run_record
+    from optscan.screener.config import DEFAULT_CONFIG_FILENAME, ScreenConfig
+
+    config = ScreenConfig.load(args.config or (REPO_ROOT / DEFAULT_CONFIG_FILENAME))
+    result = run_record(settings, config, symbols=args.symbols, limit=args.limit)
+
+    if result.scan_id is None:
+        print("Nothing logged.")
+    else:
+        print(
+            f"Logged {result.recorded} candidates as scan {result.scan_id} "
+            f"across {len(result.symbols)} symbols."
+        )
+    for note in result.notes:
+        print(f"  note: {note}")
+    return 0
+
+
+def _cmd_resolve(settings: Settings, args: argparse.Namespace) -> int:
+    from optscan.jobs.validate import run_resolve
+    from optscan.providers import get_provider
+
+    provider = None
+    if not args.offline:
+        try:
+            provider = get_provider(settings)
+        except Exception as error:
+            print(f"Provider unavailable: {error}")
+
+    result = run_resolve(settings, provider=provider)
+    print(f"Settled {result.resolved}. {result.pending} still waiting.")
+    for note in result.notes:
+        print(f"  note: {note}")
+    return 0
+
+
+def _cmd_validate(settings: Settings, args: argparse.Namespace) -> int:
+    from optscan.analytics.calibration import validate
+    from optscan.jobs.validate import next_settlement, status_counts
+    from optscan.storage import db
+    from optscan.storage import validation as store
+
+    counts = status_counts(settings)
+    print(
+        f"{counts['logged']} logged over {counts['scans']} scans, "
+        f"{counts['resolved']} settled, {counts['pending']} pending."
+    )
+
+    with db.session(settings.sqlite_path) as conn:
+        report = validate(store.resolved(conn), buckets=args.buckets)
+
+    if report.resolved == 0:
+        upcoming = next_settlement(settings)
+        print()
+        for note in report.notes:
+            print(f"  {note}")
+        if upcoming:
+            print(f"  The earliest logged expiry is {upcoming}, so nothing can settle before then.")
+        return 0
+
+    print()
+    print(f"  overall win rate  {report.overall_win_rate}")
+    print(f"  mean profit       {report.mean_profit:+.2f} per contract")
+    print(f"  total profit      {report.total_profit:+.2f}")
+    if report.brier is not None:
+        print(f"  brier score       {report.brier:.4f}  (0.25 is a coin flip, lower is better)")
+
+    if report.buckets:
+        print()
+        print(
+            f"  {'bucket':<8} {'score':<14} {'n':>4} {'clust':>6} {'win rate':<22} {'mean P/L':>10}"
+        )
+        for bucket in report.buckets:
+            span = f"{bucket.low:.3f}-{bucket.high:.3f}"
+            rate = str(bucket.win_rate) if bucket.win_rate else "n/a"
+            print(
+                f"  {bucket.label:<8} {span:<14} {bucket.count:>4} {bucket.clusters:>6} "
+                f"{rate:<22} {bucket.mean_profit:>+10.2f}"
+            )
+
+    if report.calibration:
+        print()
+        print(f"  {'predicted':<12} {'actual':<10} {'n':>4} {'error':>8}")
+        for point in report.calibration:
+            print(
+                f"  {point.predicted:<12.1%} {point.actual:<10.1%} {point.count:>4} "
+                f"{point.error:>+8.1%}"
+            )
+        print("  Positive error means the model was optimistic, which is the expected")
+        print("  direction: lognormal tails are thinner than real ones.")
+
+    print()
+    if report.scores_separate is None:
+        print("  VERDICT: not enough independent data to say whether the score works.")
+    elif report.scores_separate:
+        print("  VERDICT: the score separates outcomes on this sample.")
+    else:
+        print("  VERDICT: this sample does not show the score separating outcomes.")
+
+    for note in report.notes:
+        print(f"  note: {note}")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     settings = get_settings()
@@ -592,6 +736,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "serve": _cmd_serve,
         "position": _cmd_position,
         "manage": _cmd_manage,
+        "record": _cmd_record,
+        "resolve": _cmd_resolve,
+        "validate": _cmd_validate,
     }
     return handlers[args.command](settings, args)
 
