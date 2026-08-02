@@ -909,3 +909,133 @@ provider, and the first real run of `optscan resolve` is outstanding.
 **Nothing is scheduled.** `optscan record` should run daily like the snapshot job and
 `optscan resolve` weekly, and neither is registered. That is the obvious next small job
 and it is not done.
+
+---
+
+## 2026-08-01: Phase 9, hardening
+
+Hardening turned out to be mostly about the difference between a job that is configured
+and a job that runs. Four of the six things below are failures that were already live
+and silent.
+
+### The scheduled task was registered with two settings that could have cost history
+
+`schtasks /Create` was what registered the daily snapshot, and it cannot set the two
+settings that decide whether the job actually runs. Its defaults are wrong for both, and
+Windows own report of the existing task confirmed it: `Power Management: Stop On Battery
+Mode, No Start On Batteries`, and no `StartWhenAvailable` element at all.
+
+So the task as installed would not start on an unplugged laptop, and a machine asleep at
+12:45 skipped the run entirely rather than deferring it. The old module docstring claimed
+the opposite in its own words, that Task Scheduler "will start the job late rather than
+not at all". That was simply false as registered.
+
+This machine has no battery, so the first flag was inert here and no capture was actually
+lost. That is luck rather than design, and the docstring premise was that this runs on a
+laptop.
+
+Registration moved to `Register-ScheduledTask` through PowerShell, which can set both.
+Hand written XML would also work, but the settings element is order sensitive and a
+schema mistake fails at install time on a machine nobody is watching, which is the same
+class of problem being fixed.
+
+**Running late is not free and is still better.** A deferred capture lands at a different
+time of day than 15:45, and IV rank compares today against history sampled at a
+consistent time, so a late run is a slightly worse observation. A missing session is
+invisible and permanent. Take the worse observation.
+
+### Settling could silently record a wrong outcome, permanently
+
+`unresolved` selects `expiry <= today`, so a resolve run on expiry day itself asks the
+vendor for a close it has not published. `_settlement_price` answered that question by
+falling back to the previous trading day and attaching the note "expiry was a holiday".
+Both the price and the label were wrong, `record_outcome` refuses to overwrite, and the
+whole point of Phase 8 is that these rows are the evidence. An intraday run on a Friday
+would have settled every expiring candidate against Thursday.
+
+The fallback is now gated on the expiry not having been a trading day. A trading day with
+no bar yet is missing, not shut: return nothing, leave the candidate pending, settle it
+tomorrow. This is the same rule as everywhere else in the project, and the one place it
+had been quietly broken. It was also completely untested, which is how it survived.
+
+Scheduling follows from the fix rather than the other way round: `resolve` runs at 08:00
+market time, before the open, when every expiry it can see is genuinely finished.
+
+### `manage` is registered but not installed, and the reason is the snapshot
+
+Every fifteen minutes through a session is 26 provider hits a day. yfinance publishes no
+rate limit and throttles silently, and the thing that breaks when it throttles is the
+15:45 capture, whose history cannot be rebuilt. That is the same reasoning that keeps
+`OPTSCAN_LIVE_ENABLED` false. Spending an unmeasurable budget on alerts that currently go
+to a JSONL file nobody reads is the wrong trade, so `--install` skips it and
+`optscan schedule` prints why. `--install manage` is one command when the alerts go
+somewhere real.
+
+### Backups: two things that cannot be refetched, backed up two different ways
+
+Everything this tool computes can be recomputed. The parquet captures and the sqlite
+database cannot be refetched at any price, and they fail differently.
+
+The database is copied through `Connection.backup` rather than the filesystem. A file
+copy can catch a write in progress or catch the file without the write ahead log that
+completes it, and the result opens fine and is missing rows. The copy is then opened and
+integrity checked, because an unverified backup is a file that turns out to be unreadable
+on the one day it matters.
+
+The captures are mirrored incrementally on path plus size, since a capture is written
+once and never edited. A daily run costs a day rather than the history.
+
+**Rotation applies to the database copies and never to the mirror.** Keeping the last 30
+dated copies is a real safety property: a corruption noticed a week late is still
+recoverable. Rotating the mirror would mean deleting captures, which is the exact loss it
+exists to prevent.
+
+**A backup on the same drive is half a backup**, so the command says which one you have
+rather than letting the word imply the stronger claim. The default is a sibling of the
+repo, because a backup under `data/` dies with `data/`.
+
+A Windows detail worth keeping: `with sqlite3.connect(...)` commits the transaction and
+leaves the connection **open**. On Windows the open handle locks the file, and rotation
+then failed to delete copies it had written itself. `closing()` is required, and a test
+pins it. This was found by a test rather than by reasoning.
+
+### The error boundary blanked the page it was added to prevent blanking
+
+The UI already surfaced request failures well. Three things were missing: an unreachable
+server had nowhere to appear, so the sidebar read "connecting" forever; every panel
+repeated the same outage separately; and a render that threw took the whole tree with it
+and left a white page, which for this tool is indistinguishable from a market with
+nothing in it.
+
+The first two were straightforward. The boundary was not, and it is worth recording why,
+because the first version was verified in a browser and **failed in exactly the way it
+was written to prevent**.
+
+It was keyed on `` `${view}:${symbol}` ``, meaning to clear a crashed panel on
+navigation. But the symbol resolves a moment after load, so the key changed while the
+panel was crashed, the boundary remounted with no error, rendered the crashing child
+again, and React escalated a boundary that kept failing to its parent. Blank page, by a
+longer route. Keying on the view alone fixes it.
+
+For the same reason there is no "try again" on the boundary, unlike on the fetch errors.
+A failed request can succeed on a retry; a component that throws on this data will throw
+on it again, so a retry offers the crash back. The button reloads the page, which is the
+thing that actually changes the outcome.
+
+### The coverage floor is per module, because a package total hid an 18
+
+Analytics and screener together reported 90 percent. `screener/positions.py`, the module
+that decides what a held position is actually worth, was at 18. The total was not wrong,
+it was answering a different question, which is the same shape as every measurement
+mistake in this log: an aggregate dominated by structure rather than by the thing being
+asked about.
+
+`scripts/coverage_floor.py` therefore gates every gated file separately and prints the
+aggregate without ever gating on it. The lowest gated module is now `levels.py` at 85.
+
+### What is still not true
+
+Nothing here changes the two facts the README leads with. No outcome has ever been
+resolved against real data, and the Tradier adapter has still never spoken to Tradier.
+Phase 9 makes it more likely the jobs are running when the first expiry passes on
+2026-08-21. It does not bring that date forward.

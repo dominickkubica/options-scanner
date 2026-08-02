@@ -81,14 +81,34 @@ class TestStatusCommand:
 
 
 class TestScheduleCommand:
-    def test_prints_the_command_without_installing(
-        self, isolated: Path, capsys: pytest.CaptureFixture[str]
+    def test_lists_every_job_without_installing(
+        self, isolated: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Registering a scheduled task changes the machine, so it needs a flag."""
+        from optscan.jobs import schedule
+
+        # Stubbed so the listing does not shell out to Windows during the test run.
+        monkeypatch.setattr(schedule, "task_states", lambda names: {})
+
         assert main(["schedule"]) == 0
         out = capsys.readouterr().out
-        assert "schtasks /Create" in out
-        assert "optscan snapshot" in out
+        for key in ("snapshot", "record", "resolve", "backup", "manage"):
+            assert key in out
+        assert "not registered" in out
+        assert "--install" in out
+
+    def test_says_why_manage_is_not_installed_by_default(
+        self, isolated: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The one job with a cost states it, and stays out of the default set."""
+        from optscan.jobs import schedule
+
+        monkeypatch.setattr(schedule, "task_states", lambda names: {})
+
+        assert main(["schedule"]) == 0
+        out = capsys.readouterr().out
+        assert "throttles silently" in out
+        assert "manage" not in out.rsplit("Install with:", 1)[-1]
 
 
 class TestSnapshotCommand:

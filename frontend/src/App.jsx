@@ -1,6 +1,13 @@
 import { useEffect, useState } from "react";
 import { api } from "./api.js";
-import { ConnectionBadge, ErrorBox, Provenance, useAsync } from "./components/common.jsx";
+import {
+  ApiDown,
+  ConnectionBadge,
+  ErrorBoundary,
+  ErrorBox,
+  Provenance,
+  useAsync,
+} from "./components/common.jsx";
 import { CONNECTION, useLive } from "./live.js";
 import Chain from "./views/Chain.jsx";
 import Levels from "./views/Levels.jsx";
@@ -67,6 +74,15 @@ export default function App() {
     setExpiry(null);
   }, [symbol]);
 
+  // /health is the cheapest endpoint there is, so its failure is the clearest evidence
+  // that the server itself is gone rather than one request having gone wrong.
+  const apiDown = Boolean(health.error);
+  const retryConnection = () => {
+    health.reload();
+    watchlist.reload();
+    liveStatus.reload();
+  };
+
   const openPayoff = (opportunity) => {
     setSymbol(opportunity.symbol);
     setHandover(opportunity);
@@ -78,8 +94,12 @@ export default function App() {
       <aside className="sidebar">
         <div className="brand">
           optscan
-          <small>
-            {health.data ? `${health.data.provider} v${health.data.version}` : "connecting"}
+          <small className={health.error ? "bad" : undefined}>
+            {health.data
+              ? `${health.data.provider} v${health.data.version}`
+              : health.error
+                ? "no connection"
+                : "connecting"}
           </small>
         </div>
 
@@ -147,41 +167,56 @@ export default function App() {
           />
         </div>
 
-        <ErrorBox error={watchlist.error} />
-        <ErrorBox error={summary.error} />
+        {/* One cause, one message. When the server is unreachable every panel below
+            fails too, and three stacked copies of the same outage say less than one
+            sentence naming it. */}
+        <ApiDown error={health.error} onRetry={retryConnection} />
+        {!apiDown && <ErrorBox error={watchlist.error} onRetry={watchlist.reload} />}
+        {!apiDown && <ErrorBox error={summary.error} onRetry={summary.reload} />}
         {summary.loading && <div className="loading">Loading {symbol}...</div>}
 
-        {view === "opportunities" && (
-          <Opportunities symbols={symbol ? [symbol] : []} onOpenPayoff={openPayoff} />
-        )}
+        {/* Keyed on the view alone so a crash in one panel clears when you navigate
+            away rather than following you around the app. Deliberately not keyed on
+            the symbol too: the symbol resolves a moment after load, and remounting on
+            it put a crashed panel straight back into the crash, which loops until
+            React escalates past the boundary and blanks the page.
 
-        {view === "chain" && summary.data && (
-          <Chain
-            symbol={symbol}
-            expiries={summary.data.expiries}
-            expiry={expiry}
-            onExpiry={setExpiry}
-            live={live}
-          />
-        )}
+            Not rendered at all during an outage. Every panel fetches from the same
+            server, so leaving them mounted repeats the same failure once per panel
+            underneath the sentence that already explained it. */}
+        <ErrorBoundary key={view}>
+          {!apiDown && view === "opportunities" && (
+            <Opportunities symbols={symbol ? [symbol] : []} onOpenPayoff={openPayoff} />
+          )}
 
-        {view === "underlying" && summary.data && <Underlying summary={summary.data} />}
+          {view === "chain" && summary.data && (
+            <Chain
+              symbol={symbol}
+              expiries={summary.data.expiries}
+              expiry={expiry}
+              onExpiry={setExpiry}
+              live={live}
+            />
+          )}
 
-        {view === "levels" && summary.data && <Levels summary={summary.data} />}
+          {view === "underlying" && summary.data && <Underlying summary={summary.data} />}
 
-        {/* Not gated on a symbol: the portfolio spans every symbol held, and a
-            positions page that went blank because the sidebar selection had no
-            capture would be hiding open risk. */}
-        {view === "positions" && <Positions />}
+          {view === "levels" && summary.data && <Levels summary={summary.data} />}
 
-        {view === "payoff" && summary.data && (
-          <Payoff
-            symbol={symbol}
-            expiries={summary.data.expiries}
-            initialPosition={handover}
-            onConsumed={() => setHandover(null)}
-          />
-        )}
+          {/* Not gated on a symbol: the portfolio spans every symbol held, and a
+              positions page that went blank because the sidebar selection had no
+              capture would be hiding open risk. */}
+          {!apiDown && view === "positions" && <Positions />}
+
+          {view === "payoff" && summary.data && (
+            <Payoff
+              symbol={symbol}
+              expiries={summary.data.expiries}
+              initialPosition={handover}
+              onConsumed={() => setHandover(null)}
+            />
+          )}
+        </ErrorBoundary>
       </main>
     </div>
   );

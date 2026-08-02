@@ -530,3 +530,135 @@ class TestResolveJob:
         result = run_resolve(settings, provider=None)
         assert result.resolved == 0
         assert "nothing could be settled" in " ".join(result.notes)
+
+
+class TestSettlementPrice:
+    """Which close a candidate is settled against, and when there isn't one.
+
+    `unresolved` selects `expiry <= today`, so a run on expiry day itself asks the
+    vendor for a bar it has not published. An ungated fallback to the previous trading
+    day answered that question with yesterday's close and labelled it a holiday. Both
+    were wrong, and `record_outcome` refuses to overwrite, so the error was permanent.
+    """
+
+    @pytest.fixture
+    def settings(self, tmp_settings):
+        return tmp_settings
+
+    def test_the_close_on_expiry_day_is_used(self, settings) -> None:
+        from optscan.jobs.validate import _settlement_price
+
+        friday = date(2026, 8, 21)
+        price, used = _settlement_price({friday: 640.0}, friday, settings)
+
+        assert price == 640.0
+        assert used == friday
+
+    def test_a_trading_day_with_no_bar_yet_stays_unsettled(self, settings) -> None:
+        """The whole point. Missing is not the same as shut."""
+        from optscan.jobs.validate import _settlement_price
+
+        friday = date(2026, 8, 21)
+        thursday = date(2026, 8, 20)
+
+        price, used = _settlement_price({thursday: 631.0}, friday, settings)
+
+        assert price is None
+        assert used == friday
+
+    def test_a_real_holiday_falls_back_one_session(self, settings) -> None:
+        """Good Friday 2026 is 3 April. An expiry on it settles against the Thursday."""
+        from optscan.jobs.validate import _settlement_price
+
+        good_friday = date(2026, 4, 3)
+        thursday = date(2026, 4, 2)
+
+        price, used = _settlement_price({thursday: 610.0}, good_friday, settings)
+
+        assert price == 610.0
+        assert used == thursday
+
+    def test_a_holiday_with_no_prior_close_either_gives_up(self, settings) -> None:
+        from optscan.jobs.validate import _settlement_price
+
+        price, used = _settlement_price({}, date(2026, 4, 3), settings)
+
+        assert price is None
+        assert used == date(2026, 4, 3)
+
+    def test_a_weekend_expiry_falls_back(self, settings) -> None:
+        """Not a real listing, but it must not be treated as a missing trading day."""
+        from optscan.jobs.validate import _settlement_price
+
+        saturday = date(2026, 8, 22)
+        friday = date(2026, 8, 21)
+
+        price, used = _settlement_price({friday: 640.0}, saturday, settings)
+
+        assert price == 640.0
+        assert used == friday
+
+    def test_resolve_leaves_expiry_day_pending_rather_than_settling_it_wrong(
+        self, tmp_settings, frozen_snapshot
+    ) -> None:
+        """End to end: a run on expiry day settles nothing and says why."""
+        from optscan.jobs.validate import run_resolve
+        from tests.conftest import FakeProvider
+
+        settings = tmp_settings
+        settings.ensure_dirs()
+        expiry = date(2026, 8, 21)
+        thursday = date(2026, 8, 20)
+
+        with db.session(settings.sqlite_path) as conn:
+            scan_id = store.start_scan(conn, session_date=date(2026, 8, 1), symbols=["SPY"])
+            conn.execute(
+                """
+                INSERT INTO opportunity_log (
+                    scan_id, recorded_at, session_date, symbol, strategy, expiry, dte,
+                    underlying_price, legs, short_strike, short_right, width,
+                    credit, max_profit, max_loss, commission, score
+                ) VALUES (?, ?, ?, 'SPY', 'put_credit_spread', ?, 20, 740.0, '[]',
+                          700.0, 'P', 10.0, 5.0, 500.0, 500.0, 0.0, 0.8)
+                """,
+                (
+                    scan_id,
+                    datetime(2026, 8, 1, tzinfo=UTC).isoformat(),
+                    date(2026, 8, 1).isoformat(),
+                    expiry.isoformat(),
+                ),
+            )
+            conn.commit()
+
+        class LaggingProvider(FakeProvider):
+            """Has yesterday's bar but not today's, which is the normal state intraday."""
+
+            def get_history(self, symbol: str, days: int) -> list[PriceBar]:
+                moment = datetime(thursday.year, thursday.month, thursday.day, tzinfo=UTC)
+                return [
+                    PriceBar(
+                        symbol=symbol,
+                        ts=moment,
+                        open=631.0,
+                        high=631.0,
+                        low=631.0,
+                        close=631.0,
+                        volume=1,
+                        fetched_at=moment,
+                        source="fake",
+                    )
+                ]
+
+        result = run_resolve(
+            settings,
+            provider=LaggingProvider(frozen_snapshot),
+            asof=expiry,
+        )
+
+        assert result.resolved == 0
+        assert result.unavailable == 1
+        assert result.pending == 1
+        assert "expiry day itself" in " ".join(result.notes)
+
+        with db.session(settings.sqlite_path) as conn:
+            assert store.counts(conn)["resolved"] == 0

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { Component, useCallback, useEffect, useState } from "react";
 import { age, duration } from "../format.js";
 import { CONNECTION, LIVE_STATES, cycleAge, cycleOverdue } from "../live.js";
 
@@ -139,9 +139,89 @@ export function Notes({ items }) {
   );
 }
 
-export function ErrorBox({ error }) {
+export function ErrorBox({ error, onRetry }) {
   if (!error) return null;
-  return <div className="error">{error}</div>;
+  return (
+    <div className="error">
+      <span>{error}</span>
+      {onRetry && (
+        <button type="button" className="retry" onClick={onRetry}>
+          Try again
+        </button>
+      )}
+    </div>
+  );
+}
+
+// The API being unreachable is a different failure from a panel's request failing, and
+// it used to be the only one with nowhere to appear: the sidebar read "connecting"
+// forever and every panel showed its own error, none of which said the server was down.
+export function ApiDown({ error, onRetry }) {
+  if (!error) return null;
+  return (
+    <div className="error banner">
+      <strong>The API is not answering.</strong>{" "}
+      <span>
+        Start it with <code>optscan serve</code>, or check the terminal it is running in.
+      </span>{" "}
+      <span className="detail">{error}</span>
+      {onRetry && (
+        <button type="button" className="retry" onClick={onRetry}>
+          Try again
+        </button>
+      )}
+    </div>
+  );
+}
+
+// A render that throws takes the whole tree with it and leaves a white page, which is
+// the worst possible way for this particular tool to fail: a blank screen is
+// indistinguishable from a market with nothing in it. Errors in the tree stop here and
+// say so, and the rest of the shell keeps working.
+//
+// Two things about this are load bearing and were both learned by watching it fail.
+//
+// The caller must not key this on anything that changes while the app is loading. A key
+// change remounts the boundary with no error, which renders the crashing child again; a
+// deterministic crash then loops, and React escalates a boundary that keeps failing to
+// its parent, which is a blank page by another route. Key it on navigation only.
+//
+// And there is no "try again" here, unlike the fetch errors. A failed request can
+// succeed on a retry. A component that throws on this data will throw on it again, so
+// offering a retry is offering the crash back. Reloading is the thing that actually
+// changes the outcome, so that is what the button does.
+export class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error, info) {
+    // Kept: the stack is the only thing that makes one of these fixable, and the
+    // browser console is where somebody would look for it.
+    console.error("optscan render error", error, info);
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="error banner">
+        <strong>This panel stopped rendering.</strong>{" "}
+        <span>
+          Nothing has been lost: the numbers behind it are stored, and reloading the page
+          brings the view back. The details are in the browser console.
+        </span>{" "}
+        <span className="detail">{String(this.state.error?.message || this.state.error)}</span>
+        <button type="button" className="retry" onClick={() => window.location.reload()}>
+          Reload the page
+        </button>
+      </div>
+    );
+  }
 }
 
 export function Panel({ title, right, children }) {

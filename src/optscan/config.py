@@ -11,13 +11,14 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 HOURS_PER_DAY = 24
 MINUTES_PER_HOUR = 60
+MINUTES_PER_DAY = HOURS_PER_DAY * MINUTES_PER_HOUR
 
 ProviderName = Literal["yfinance", "schwab", "tradier"]
 LogFormat = Literal["console", "json"]
@@ -79,6 +80,30 @@ class Settings(BaseSettings):
     snapshot_max_dte: int = Field(default=400, gt=0)
     snapshot_max_expiries: int = Field(default=16, gt=0)
     snapshot_history_days: int = Field(default=400, gt=0)
+
+    # Recording scores the latest stored snapshot, so it has to run after the capture
+    # rather than alongside it. Early enough to still be inside the session, because a
+    # scan that runs after the close is scoring a chain nobody can trade.
+    record_delay_minutes: int = Field(default=30, ge=0, lt=MINUTES_PER_DAY)
+
+    # Settling runs the next morning rather than after the close. It only needs the
+    # underlying's close on expiry day, and asking for that on expiry day itself asks
+    # for a bar the vendor has not published. Before the open, every expiry it can see
+    # is strictly finished.
+    resolve_time_local: str = "08:00"
+
+    # Position management. Off the schedule by default: see the manage job's entry in
+    # jobs/schedule.py for why polling a free vendor every quarter hour is a risk to
+    # the one job whose history cannot be rebuilt.
+    manage_interval_minutes: int = Field(default=15, gt=0)
+
+    # Backups. None means "beside the repo but not inside it", resolved in backup_path.
+    # Inside data/ would be worthless: the point is surviving the loss of data/.
+    backup_dir: Path | None = None
+
+    # How many dated database copies to keep. The parquet mirror is never rotated,
+    # because deleting from it would delete the history it exists to protect.
+    backup_keep: int = Field(default=30, gt=0)
 
     # Default watchlist, seeded into sqlite the first time the database is created.
     # After that the database is the source of truth and this is ignored.
@@ -152,16 +177,17 @@ class Settings(BaseSettings):
             raise ValueError(f"log_level must be one of {sorted(allowed)}, got {value!r}")
         return level
 
-    @field_validator("snapshot_time_local")
+    @field_validator("snapshot_time_local", "resolve_time_local")
     @classmethod
-    def _valid_clock_time(cls, value: str) -> str:
+    def _valid_clock_time(cls, value: str, info: ValidationInfo) -> str:
         """Parsed here so a typo fails at startup, not at 15:45 with nobody watching."""
+        name = info.field_name
         try:
             hour, minute = (int(part) for part in value.split(":", 1))
         except ValueError as exc:
-            raise ValueError(f"snapshot_time_local must look like HH:MM, got {value!r}") from exc
+            raise ValueError(f"{name} must look like HH:MM, got {value!r}") from exc
         if not (0 <= hour < HOURS_PER_DAY and 0 <= minute < MINUTES_PER_HOUR):
-            raise ValueError(f"snapshot_time_local is not a real time of day: {value!r}")
+            raise ValueError(f"{name} is not a real time of day: {value!r}")
         return f"{hour:02d}:{minute:02d}"
 
     @field_validator("tradier_token", "schwab_client_id", "schwab_client_secret", mode="before")
@@ -189,6 +215,24 @@ class Settings(BaseSettings):
     def snapshot_time(self) -> time:
         """Configured capture time as a time object, in market local time."""
         hour, minute = (int(part) for part in self.snapshot_time_local.split(":", 1))
+        return time(hour=hour, minute=minute)
+
+    @property
+    def record_time(self) -> time:
+        """When the recording job runs, in market local time.
+
+        Derived from the capture time rather than configured on its own, because the
+        two are not independent: recording scores the snapshot, so moving the capture
+        without moving this would silently start scoring yesterday's chain.
+        """
+        minutes = self.snapshot_time.hour * MINUTES_PER_HOUR + self.snapshot_time.minute
+        shifted = (minutes + self.record_delay_minutes) % MINUTES_PER_DAY
+        return time(hour=shifted // MINUTES_PER_HOUR, minute=shifted % MINUTES_PER_HOUR)
+
+    @property
+    def resolve_time(self) -> time:
+        """When the settlement job runs, in market local time."""
+        hour, minute = (int(part) for part in self.resolve_time_local.split(":", 1))
         return time(hour=hour, minute=minute)
 
     @property
@@ -232,6 +276,29 @@ class Settings(BaseSettings):
     def sqlite_path(self) -> Path:
         """Absolute path to the sqlite database file."""
         return self.data_path / self.sqlite_filename
+
+    @property
+    def backup_path(self) -> Path:
+        """Absolute backup directory.
+
+        Defaults beside the repository rather than inside it. A backup under `data/`
+        would be destroyed by everything that destroys `data/`, which is every failure
+        this exists for. Point it at another drive or a synced folder to get a copy
+        that survives losing this one: `backup_path_is_same_volume` reports whether it
+        currently does.
+        """
+        if self.backup_dir is None:
+            return REPO_ROOT.parent / "optscan-backups"
+        return self.backup_dir if self.backup_dir.is_absolute() else REPO_ROOT / self.backup_dir
+
+    @property
+    def backup_path_is_same_volume(self) -> bool:
+        """Whether the backup lands on the same drive as the data it copies.
+
+        Said out loud because a same drive copy protects against the mistakes, which
+        are common, and not against the drive, which is the reason people run backups.
+        """
+        return self.backup_path.anchor.lower() == self.data_path.anchor.lower()
 
     def ensure_dirs(self) -> None:
         """Create the data directories this process writes to."""

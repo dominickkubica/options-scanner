@@ -33,11 +33,12 @@ src/optscan/
   analytics/        greeks.py, iv.py, probability.py, levels.py, projection.py,
                     portfolio.py, triggers.py, outcomes.py, calibration.py
   screener/         rules/, scoring.py, strategies/
-  jobs/             snapshot.py, scheduler.py, manage.py, validate.py
+  jobs/             snapshot.py, schedule.py, manage.py, validate.py, backup.py
   live/             the polling refresh loop and its delta encoder
   alerts.py         alert sinks, and once-per-condition delivery
   api/              schemas, deps, views, app, routers/
 frontend/           React app: src/views, src/components, gitignored node_modules and dist
+scripts/            coverage_floor.py, the per module coverage gate
 tests/              mirrors src layout; fixtures/ holds frozen chains
 data/               gitignored: snapshots, sqlite db
 ```
@@ -51,6 +52,9 @@ venv\Scripts\python -m optscan status # market state, watchlist, recent captures
 venv\Scripts\python -m optscan manage # mark held positions, evaluate, alert once
 venv\Scripts\python -m optscan record # log every scored candidate for validation
 venv\Scripts\python -m optscan validate # does the score actually separate outcomes
+venv\Scripts\python -m optscan schedule # the recurring jobs and whether Windows has them
+venv\Scripts\python -m optscan backup # copy the db, mirror the captures, verify
+venv\Scripts\python scripts/coverage_floor.py  # per module floor, after pytest --cov
 venv\Scripts\python -m optscan serve  # API on 8000, plus the UI if it is built
 npm --prefix frontend run dev         # Vite on 5173, proxying /api to 8000
 npm --prefix frontend run build       # emit frontend/dist for optscan serve
@@ -98,12 +102,8 @@ and `optscan-web` entries in `.claude/launch.json`.
 
 ## Current phase
 
-**Phases 0 to 8 are complete and committed.** Phase 9 is hardening, and it is **not
-authorized**. Ask before starting it, and before anything later.
-
-Phase 9 from the roadmap: Task Scheduler entries for the remaining jobs, backup and
-rotation for `data/`, error surfaces in the UI, a README with setup and a "what this
-tool does not do" section, and coverage above 80 percent on analytics and screener.
+**Phases 0 to 9 are complete and committed.** The roadmap ends at 9. Anything further is
+new scope and is **not authorized**: ask first.
 
 ### The state that matters most right now
 
@@ -111,13 +111,18 @@ tool does not do" section, and coverage above 80 percent on analytics and screen
 2026-08-01 and the earliest of them expires 2026-08-21, so `optscan validate` correctly
 reports nothing until then. That is the study working, not a bug.
 
+**Four jobs are now registered with Windows** and `optscan schedule` prints them and
+their live state: `snapshot` 15:45, `record` 16:15, `backup` 16:30, `resolve` 08:00, all
+market time. `manage` is deliberately not installed; see the Phase 9 DECISIONS entry.
+
 **Recording has to keep running, for the same reason the snapshot job does.** A
 candidate that was never logged when it was scored cannot be settled later, and there is
 no way to reconstruct what the screen would have surfaced last Tuesday. Every day
 `optscan record` does not run is a permanent hole.
 
-**Neither `record` nor `resolve` is scheduled yet.** Registering them is the obvious next
-piece of work and belongs in Phase 9.
+**The backup default is on the same drive as the data.** `optscan backup` says so every
+run. Pointing `OPTSCAN_BACKUP_DIR` at another disk or a synced folder is a one line
+change and the only thing that makes it a real backup.
 
 ### What Phase 8 built
 
@@ -164,14 +169,22 @@ a regression test now pins that shape.
   losers are bigger than the winners.** Short premium is designed to win often.
 - **Settle only against a real close.** A candidate whose expiry close cannot be found
   stays unresolved rather than being settled at an approximation, because the missing one
-  is visible and the wrong one is not.
+  is visible and the wrong one is not. Phase 9 found this was not actually true: the
+  previous session fallback fired whenever the close was merely *missing*, not only when
+  the market was shut, so an intraday run on expiry day settled everything against
+  yesterday and labelled it a holiday. **A trading day with no bar yet is missing, not
+  shut.** The gate is `is_trading_day`, and there is a regression test.
 
 ### Watch out for
 
 - **The daily snapshot job must keep running through every phase.** Windows Task
   Scheduler, `OptscanDailySnapshot`, 12:45 machine time and 15:45 New York. Check
   `optscan status` before and after any change touching providers, config, or storage.
-- **`optscan record` is not scheduled and needs to be.** See above.
+- **Never register a task with `schtasks /Create`.** It cannot set
+  `StartWhenAvailable` or clear the battery restrictions, and its defaults on both mean
+  the job silently does not run. That was live on the snapshot task until Phase 9.
+  Registration goes through `Register-ScheduledTask`, and `jobs/schedule.py` is the only
+  place that does it.
 - **No outcome has ever actually been resolved.** The settling path is covered by an
   offline test with a fake provider; the first real `optscan resolve` run is outstanding
   and cannot happen before 2026-08-21.

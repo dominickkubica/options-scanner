@@ -268,6 +268,46 @@ button {
   padding: 10px 12px;
   margin: 10px 0;
   color: #e9b3b1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+}
+
+/* An outage, as opposed to one request failing. Full border rather than a left rule,
+   because it is about the whole page and not about the panel under it. */
+.error.banner {
+  border: 1px solid var(--bad);
+  border-left-width: 2px;
+}
+
+.error .detail {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.error code {
+  font-size: 12px;
+}
+
+.error .retry {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--bad);
+  color: #e9b3b1;
+  border-radius: 3px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.error .retry:hover {
+  background: rgba(217, 99, 95, 0.15);
+}
+
+.brand small.bad {
+  color: var(--bad);
 }
 
 .empty-state {

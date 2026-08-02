@@ -22,7 +22,7 @@ from optscan.analytics.outcomes import settle
 from optscan.config import Settings
 from optscan.jobs.load import latest_snapshot
 from optscan.logging import get_logger
-from optscan.market_calendar import market_local_date, previous_trading_day
+from optscan.market_calendar import is_trading_day, market_local_date, previous_trading_day
 from optscan.models import PriceBar
 from optscan.providers import MarketDataProvider, ProviderError
 from optscan.screener.config import ScreenConfig
@@ -200,7 +200,8 @@ def run_resolve(
         notes.append(
             f"{unavailable} candidates could not be settled because no close was found "
             "for their expiry date. They stay unresolved rather than being settled at "
-            "an approximation."
+            "an approximation. The usual cause is running on expiry day itself, before "
+            "the vendor has published that session's bar, and the next run settles them."
         )
     log.info("resolved outcomes", resolved=resolved, unavailable=unavailable)
     return ResolveResult(resolved=resolved, pending=remaining, unavailable=unavailable, notes=notes)
@@ -230,9 +231,19 @@ def _settlement_price(
     moves it to the Thursday. Falling back one trading day handles that; falling back
     further would silently settle against a price days away from the real one, so it
     stops after one step.
+
+    The fallback is gated on the expiry not having been a trading day, and that gate is
+    the whole point. `unresolved` selects `expiry <= today`, so a run on expiry day
+    itself asks for a close the vendor has not published yet, and an ungated fallback
+    settled it against yesterday while labelling it a holiday. Both the price and the
+    label were wrong, and `record_outcome` refuses to overwrite, so the error was
+    permanent. A trading day with no close yet is missing, not shut: return None, leave
+    the candidate pending, and settle it tomorrow when the bar exists.
     """
     if expiry in closes:
         return closes[expiry], expiry
+    if is_trading_day(expiry, settings.market_calendar):
+        return None, expiry
     try:
         previous = previous_trading_day(expiry, settings.market_calendar)
     except ValueError:

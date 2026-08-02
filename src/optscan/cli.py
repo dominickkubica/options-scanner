@@ -217,14 +217,28 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    sub.add_parser(
+        "backup",
+        help="Copy the database and mirror the captures to the backup directory.",
+    )
+
     schedule = sub.add_parser(
         "schedule",
-        help="Print or install the Windows Task Scheduler entry for the daily snapshot.",
+        help="Print or install the Windows Task Scheduler entries for the recurring jobs.",
     )
     schedule.add_argument(
         "--install",
         action="store_true",
-        help="Actually register the scheduled task. Without this the command is only printed.",
+        help="Actually register the scheduled tasks. Without this they are only printed.",
+    )
+    schedule.add_argument(
+        "jobs",
+        nargs="*",
+        default=None,
+        help=(
+            "Which jobs to install. Defaults to the ones that protect history it is "
+            "impossible to rebuild: snapshot, record, resolve."
+        ),
     )
 
     return parser
@@ -468,19 +482,47 @@ def _cmd_status(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_schedule(settings: Settings, args: argparse.Namespace) -> int:
-    from optscan.jobs.schedule import install_task, task_command
+def _cmd_backup(settings: Settings, args: argparse.Namespace) -> int:
+    from optscan.jobs.backup import run_backup
 
-    command = task_command(settings)
+    del args
+    result = run_backup(settings)
+
+    if not result.ok:
+        for note in result.notes:
+            print(f"  {note}")
+        return 1
+
+    print(f"database   {result.database}  ({result.database_bytes / 1024:.0f} KB, verified)")
+    print(
+        f"snapshots  {result.files_copied} copied "
+        f"({result.bytes_copied / 1024:.0f} KB), {result.files_present} already there"
+    )
+    if result.rotated:
+        print(
+            f"rotated    {len(result.rotated)} old copies removed, keeping {settings.backup_keep}"
+        )
+    for note in result.notes:
+        print(f"  note: {note}")
+    return 0
+
+
+def _cmd_schedule(settings: Settings, args: argparse.Namespace) -> int:
+    from optscan.jobs.schedule import default_keys, describe, install_all
+
+    selected = args.jobs or None
+
     if not args.install:
-        print("Register the daily snapshot with:\n")
-        print(f"  {command}\n")
-        print("Or run: optscan schedule --install")
+        print("Recurring jobs, their schedule in market time, and whether Windows has them:\n")
+        for line in describe(settings):
+            print(line)
+        print(f"\nInstall with: optscan schedule --install [{' '.join(default_keys(settings))}]")
         return 0
 
-    result = install_task(settings)
-    print(result.message)
-    return 0 if result.ok else 1
+    results = install_all(settings, selected)
+    for result in results:
+        print(result.message)
+    return 0 if all(result.ok for result in results) else 1
 
 
 def _parse_leg(spec: str, expiry: date, quantity: int):
@@ -739,6 +781,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "record": _cmd_record,
         "resolve": _cmd_resolve,
         "validate": _cmd_validate,
+        "backup": _cmd_backup,
     }
     return handlers[args.command](settings, args)
 
