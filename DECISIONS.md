@@ -1175,3 +1175,72 @@ explicitly and colour is off if that fails.
 One incidental finding: the environment this was developed in sets `NO_COLOR=1`, so the
 default-mode test passed or failed depending on who ran it. The colour tests now clear it
 rather than inheriting it.
+
+---
+
+## 2026-08-02: first contact with Tradier
+
+A real sandbox token exists. The adapter written in Phase 5 had never spoken to Tradier;
+it has now, and all four market endpoints work on the first try. `get_events` refuses as
+designed, because Tradier publishes no corporate calendar.
+
+### The recapture instruction in the fixtures README was wrong
+
+It said: when a token exists, recapture these against the sandbox and delete this
+paragraph. Following it would have deleted the reason the fixtures exist.
+
+The constructed files carry deliberate damage that a healthy response never contains: a
+row with no `option_type`, a row with no `strike`, a bar whose close sits outside its own
+high and low. Those pin the adapter's refusals. A real capture has nothing to say about
+any of them, so overwriting would have quietly removed the entire refusal suite while
+every remaining test still passed.
+
+Both sets now exist. The constructed set tests what the adapter does with broken input.
+`tests/fixtures/tradier/live/` tests that the input it will really get is the shape it
+expects, and asserts field by field that every name the constructed fixtures assume is
+actually on the wire. Without that assertion a vendor rename breaks the adapter silently
+while the constructed fixtures keep passing forever, because they encode the old name too.
+
+The chain capture is trimmed to 44 of 340 rows, a near the money window plus both wings,
+because the full response is 464 KB. Rows were kept or dropped, never edited.
+
+### What the wire confirmed, and the one thing it did not
+
+The risky assumptions were right. One symbol really does return an object and two really
+do return an array, which is the quirk most likely to have been a documentation artifact.
+`unmatched_symbols` is the real shape for an unknown ticker. The greeks block and the
+history day match the documentation exactly. Every chain field the adapter reads is
+present, and the wire carries eight more it ignores.
+
+One documented quote field, `lot_size`, is **not** returned. It is unused: contract size
+is read off the chain row, where it is present and is 100.
+
+### The vendor's own volatility is unusable, and now that is measured
+
+`mid_iv` comes back as **10.0** on the deep in the money puts and **0.0** on the deep in
+the money calls. Both are a solver that failed and published its clamp. The 500 put,
+quoted 0.00 by 0.01, comes back at 1.37: a 137 percent volatility manufactured by a one
+cent ask, which is the sixth instance of the constant offset trap appearing in a vendor's
+own numbers rather than in ours.
+
+The model already refused the zeros through `_drop_junk_iv`; this is the first real data
+to exercise it. The 10.0 survives, because it is under the plausibility ceiling. Nothing
+reads it as a volatility, and that is the whole reason the project solves its own and
+keeps `vendor_iv` only to disagree with the solve.
+
+`smv_vol` is worse as a candidate source: it is constant across a whole region of the
+chain, 0.1557 for every strike from 500 to 510 and 0.0598 for every strike from 940 to
+950. It is a smoothed surface value, not a per contract measurement.
+
+### Real crossed quotes exist, on liquid strikes
+
+The captured chain contains two crossed rows near the money: the 744 put at 1.58 by 1.12
+and the 745 call at 4.56 by 3.48, both bid above ask, on a closed market. `is_crossed`
+was written against the possibility. It is now evidence, which promotes every refusal
+downstream of it from defensive to load bearing.
+
+Also worth recording for the closed market case: `quote.price` prefers the mid, and
+Tradier's stale weekend bid and ask put the mid at 744.36 while `last` and the Friday
+close agree at 747.03. A 0.36 percent error in spot, on a closed market only, in the one
+input every probability is a function of. Not acted on: the snapshot job runs at 15:45
+inside the session, where the two sided market is real.
