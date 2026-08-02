@@ -1086,3 +1086,92 @@ be right, and it is the thing that was wrong.
 **The icon is written by hand.** A 32x32 BGRA `.ico` is a small header and a bottom up
 bitmap, which is little enough format that taking on Pillow as a dependency for it would
 be the larger cost. It reuses the dashboard's own palette so the two look related.
+
+---
+
+## 2026-08-02: the job health surface, and colour
+
+`optscan schedule` reported all four tasks as "Ready". That is also true of a task that
+has failed every morning for a week. `optscan status` listed captures only, so a broken
+`record` was invisible. For a project whose central claim is that a missed day is
+permanent, there was nothing that would tell you a day had been missed.
+
+### Two sources, because a green exit code is not evidence of work
+
+**Windows** knows whether it started a process and what it returned. **The new `job_run`
+table** knows whether the work happened. Neither is sufficient and the gap between them
+is the interesting part:
+
+- A job that runs daily, finds nothing to do and exits 0 is a tick in Task Scheduler and
+  a hole in the history.
+- A job that dies on a bad config or a broken install never writes a log row at all, and
+  looks exactly like one that was never scheduled.
+
+So `health` reads both, and where they disagree the disagreement is the finding. The
+sharpest case has its own verdict: Windows ran it, it exited non-zero, and it logged
+nothing, which is reported as failing before it starts rather than as a missed run.
+
+**A row is written at start and closed at finish**, which is why there are two writes
+rather than one. A run killed by the execution time limit, or by the machine going away,
+leaves a row with a start and no finish. One write at the end would leave nothing, which
+is indistinguishable from never having run.
+
+**The log wraps the CLI dispatch, not each job.** One place, uniform across every job,
+and it catches the shape a job is most likely to fail in: returning a non-zero exit code
+without raising. `Tracker.failed` exists so that path closes the run as a failure instead
+of a success.
+
+**Recording can never break the job.** Every entry point swallows its own errors and the
+wrapped block runs even if the database cannot be opened at all. An observability layer
+that can take down the thing it observes converts a survivable outage into a permanent
+one, and permanent is the whole problem.
+
+### Not crying wolf, which took three tries
+
+A monitor that is wrong on weekends gets ignored on Mondays. Three separate versions of
+this were wrong when run against the real machine, and each one would have shipped a
+report that opened with a false alarm.
+
+**The first** reported all five jobs as broken. The `job_run` table had existed for
+ninety seconds, so of course nothing was in it. Fixed by recording
+`meta.job_log_started_at` in its own migration and refusing to make any "it has not run"
+claim about a scheduled time earlier than that. Before the log existed, a missing row is
+missing evidence, not a missed run.
+
+**The second** still reported `resolve` as missing. The floor was being compared at day
+granularity, and resolve fires at 08:00 while the log had started at midday on the same
+date. `expected_at` now carries the time of day, not just the date.
+
+**The third** was a wrong constant. `_parse_task_time` discarded Windows' never-ran
+sentinel using a cutoff of 1980, on the assumption that the sentinel is 1899-12-30. What
+`Get-ScheduledTaskInfo` actually returns is **1999-11-30**, which sailed through and made
+three tasks that had never run look like they had run successfully in the last century.
+Caught by querying a freshly registered task rather than trusting the documentation.
+
+The counterpart matters as much as the silence: when something is genuinely late the
+number of missed sessions is stated, counted over the market calendar. "late" is a shrug.
+"3 sessions missed" is a decision.
+
+### Colour
+
+Not decoration. Every command here prints a table where one or two rows are the point,
+and the whole project is about making a bad state visible rather than plausible.
+
+Three rules, and the first two are about restraint. **Never when the output is not a
+terminal**, because escape codes in a redirected file are corruption. **Never when
+NO_COLOR is set**, read in `config.py`, which remains the only module that touches the
+environment. And **colour is never the only carrier**: every state that has a colour also
+has a word, because about one man in twelve cannot distinguish red from green and a log
+pasted into a chat window arrives as plain text.
+
+`console.pad` exists because `f"{painted:<9}"` pads to the length of the escape sequence
+rather than of the word, so a coloured column is a misaligned column. Anything laying out
+a table pads with it.
+
+Windows Terminal handles ANSI; the older conhost does not unless the console mode is set,
+and unset it prints the codes literally, which is worse than no colour. The flag is set
+explicitly and colour is off if that fails.
+
+One incidental finding: the environment this was developed in sets `NO_COLOR=1`, so the
+default-mode test passed or failed depending on who ran it. The colour tests now clear it
+rather than inheriting it.

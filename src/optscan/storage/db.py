@@ -169,6 +169,46 @@ MIGRATIONS: tuple[str, ...] = (
     );
     CREATE INDEX idx_outcome_resolved ON opportunity_outcome (settlement_date);
     """,
+    # 4: the job run log, added in Phase 9 hardening.
+    #
+    # Windows already knows whether it started a process and what the process returned.
+    # It does not know whether the work happened, and those differ in the case that
+    # matters: a job that runs, finds nothing to do, and exits 0. Task Scheduler calls
+    # that a success. So this table records the work, and health reads both.
+    #
+    # A row is written when a job starts and closed when it finishes. That is the point
+    # of two writes rather than one: a job killed by the execution time limit, or by the
+    # machine going away, leaves a row with a start and no finish. One row written at the
+    # end would leave nothing at all, which is indistinguishable from never having run.
+    """
+    CREATE TABLE job_run (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        job         TEXT NOT NULL,
+        started_at  TEXT NOT NULL,
+        finished_at TEXT,
+        ok          INTEGER,
+        detail      TEXT
+    );
+    CREATE INDEX idx_job_run_job ON job_run (job, started_at);
+    """,
+    # 5: when the run log started.
+    #
+    # Without this the health report blames every job for every day before the log
+    # existed, which on the day it ships is every day. That is the exact failure the
+    # report is supposed to prevent in the other direction: a monitor that opens by
+    # crying wolf teaches its reader to ignore it before it has ever been right.
+    #
+    # A separate migration rather than folded into 4 because 4 has already been applied
+    # to a database holding the validation study, and re-running a migration to add a
+    # row is not a thing this scheme does. Additive only, always.
+    """
+    CREATE TABLE meta (
+        key     TEXT PRIMARY KEY,
+        value   TEXT NOT NULL
+    );
+    INSERT INTO meta (key, value)
+    VALUES ('job_log_started_at', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'));
+    """,
 )
 
 

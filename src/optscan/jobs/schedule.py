@@ -43,6 +43,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from optscan.config import REPO_ROOT, Settings
+from optscan.console import Console
 from optscan.logging import get_logger
 
 log = get_logger("optscan.jobs.schedule")
@@ -96,6 +97,12 @@ class ScheduledJob:
     #: should be a decision rather than a default, and `caution` says what it is.
     default_install: bool = True
     caution: str | None = None
+    #: Whether the job only does real work on a trading day. The task fires every
+    #: calendar day either way, because the jobs decline on their own and encoding the
+    #: market calendar into Task Scheduler would be a second copy of it. This is for
+    #: health: complaining that the capture has not run since Friday, on a Sunday, is
+    #: noise, and a monitor that cries wolf gets ignored exactly when it is right.
+    trading_days_only: bool = True
 
 
 def python_executable() -> Path:
@@ -160,6 +167,9 @@ def jobs(settings: Settings) -> tuple[ScheduledJob, ...]:
                 "Copy the database and mirror the captures. Runs after the capture and "
                 "the recording so the day's work is in the copy, not just yesterday's."
             ),
+            # Backing up is worth doing on a Sunday. Nothing new was captured, but the
+            # database still moved: positions, alerts, and any settling all write to it.
+            trading_days_only=False,
         ),
         ScheduledJob(
             key="resolve",
@@ -170,6 +180,9 @@ def jobs(settings: Settings) -> tuple[ScheduledJob, ...]:
                 "Settle logged candidates whose expiry has passed. Runs before the open "
                 "so every expiry it can see is finished and its close is published."
             ),
+            # Settling is arithmetic over dates that have already passed, so it works on
+            # any calendar day and there is no reason to excuse it on a weekend.
+            trading_days_only=False,
         ),
         ScheduledJob(
             key="manage",
@@ -358,8 +371,9 @@ def task_states(task_names: list[str]) -> dict[str, str]:
     return states
 
 
-def describe(settings: Settings) -> list[str]:
+def describe(settings: Settings, console: Console | None = None) -> list[str]:
     """One block per job, for `optscan schedule` with no --install."""
+    paint = console or Console()
     everything = jobs(settings)
     states = task_states([job.task_name for job in everything])
 
@@ -371,9 +385,21 @@ def describe(settings: Settings) -> list[str]:
             if job.repeat_minutes
             else f"daily {job.at.strftime('%H:%M')}"
         )
-        state = states.get(job.task_name, "not registered")
+        raw = states.get(job.task_name)
+        if raw == "Ready":
+            state = paint.good(raw)
+        elif raw is None:
+            # Not an error for a job that is deliberately not installed, and the caution
+            # line underneath already explains that one.
+            state = (
+                paint.dim("not registered")
+                if not job.default_install
+                else paint.bad("not registered")
+            )
+        else:
+            state = paint.warn(raw)
         lines.append(f"  {job.key:<9} {when:<24} {at} local   {state}")
-        lines.append(f"            {job.summary}")
+        lines.append(f"            {paint.dim(job.summary)}")
         if job.caution:
-            lines.append(f"            {job.caution}")
+            lines.append(f"            {paint.dim(job.caution)}")
     return lines

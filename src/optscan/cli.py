@@ -16,6 +16,11 @@ from optscan.config import REPO_ROOT, Settings, get_settings
 from optscan.logging import configure_logging, get_logger
 from optscan.screener.config import ScreenConfig
 
+#: Commands whose runs are logged, so `optscan health` can say whether the work has
+#: happened. Exactly the scheduled jobs: logging `status` or `config` would bury the
+#: rows that matter under rows nobody asked about.
+TRACKED_JOBS = frozenset({"snapshot", "record", "resolve", "backup", "manage"})
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -112,6 +117,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = sub.add_parser("status", help="Market state, watchlist size, recent captures.")
     status.add_argument("--runs", type=int, default=10, help="How many recent runs to show.")
+
+    health = sub.add_parser(
+        "health",
+        help="Are the recurring jobs actually running? Every day one is missed is permanent.",
+    )
+    health.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Print only what needs attention, and exit 1 if anything does.",
+    )
 
     # Positions. Entry is manual and the fill price is required, because it is the one
     # number the tool cannot reconstruct and the one every P/L is measured against.
@@ -466,10 +481,13 @@ def _cmd_serve(settings: Settings, args: argparse.Namespace) -> int:
 
 
 def _cmd_status(settings: Settings, args: argparse.Namespace) -> int:
+    from optscan.console import Console, pad
+    from optscan.jobs.health import check, needs_attention
     from optscan.jobs.snapshot import describe_state
     from optscan.market_calendar import session_date_for
     from optscan.storage import db
 
+    console = Console.for_stream(settings.color_mode)
     now = datetime.now(UTC)
     print(f"provider     {settings.provider}")
     print(f"market       {describe_state(settings, now)}")
@@ -483,12 +501,27 @@ def _cmd_status(settings: Settings, args: argparse.Namespace) -> int:
         symbols = db.list_watchlist(conn)
         runs = db.recent_runs(conn, args.runs)
 
+    # The headline, because a status page that reports the watchlist and not whether
+    # the jobs ran is reassuring about the wrong thing.
+    urgent = needs_attention(check(settings, now=now))
+    if urgent:
+        summary = console.bad(f"{len(urgent)} needing attention")
+        names = ", ".join(item.key for item in urgent)
+        print(f"jobs         {summary}: {names}. Run optscan health.")
+    else:
+        print(f"jobs         {console.good('all running')}")
+
     print(f"watchlist    {len(symbols)}: {', '.join(symbols) if symbols else 'empty'}")
     print(f"recent runs  {len(runs)}")
     for row in runs:
-        status = "FAIL" if row["error"] else ("partial" if row["partial"] else "ok")
+        if row["error"]:
+            status = console.bad("FAIL")
+        elif row["partial"]:
+            status = console.warn("partial")
+        else:
+            status = console.good("ok")
         detail = row["error"] or f"{row['expiries']} expiries, {row['contracts']} contracts"
-        print(f"  {row['session_date']}  {row['symbol']:<6} {status:<7} {detail}")
+        print(f"  {row['session_date']}  {row['symbol']:<6} {pad(status, 7)} {detail}")
     return 0
 
 
@@ -517,6 +550,51 @@ def _cmd_backup(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_health(settings: Settings, args: argparse.Namespace) -> int:
+    from optscan.console import Console, pad
+    from optscan.jobs.health import check, needs_attention
+
+    console = Console.for_stream(settings.color_mode)
+    results = check(settings)
+    urgent = needs_attention(results)
+
+    if args.quiet:
+        for item in urgent:
+            print(f"{item.verdict.upper():<9} {item.key:<9} {item.detail}")
+        if not urgent:
+            print(console.good("Every job is running."))
+        return 1 if urgent else 0
+
+    width = max((len(item.key) for item in results), default=8)
+    for item in results:
+        label = console.paint(item.verdict.value, item.verdict.tone)
+        print(f"  {item.key:<{width}}  {pad(label, 9)}  {item.detail}")
+
+    from optscan.jobs.health import Verdict
+
+    print()
+    if urgent:
+        print(
+            console.warn(
+                f"{len(urgent)} of {len(results)} jobs need attention. "
+                "A day the capture or the recording does not run cannot be filled in later."
+            )
+        )
+    elif any(item.verdict is Verdict.OK for item in results):
+        print(console.good("Every job is registered and running on time."))
+    else:
+        # Nothing is wrong and nothing has been confirmed right either. Saying the
+        # first without the second is how a monitor earns trust it has not done
+        # anything to deserve.
+        print(
+            console.dim(
+                "Nothing is overdue, and nothing has been observed running yet either. "
+                "Each job reports here after its first scheduled run."
+            )
+        )
+    return 1 if urgent else 0
+
+
 def _cmd_shortcut(settings: Settings, args: argparse.Namespace) -> int:
     from optscan.jobs.launcher import dashboard_url, install_shortcut, remove_shortcut
 
@@ -536,13 +614,15 @@ def _cmd_shortcut(settings: Settings, args: argparse.Namespace) -> int:
 
 
 def _cmd_schedule(settings: Settings, args: argparse.Namespace) -> int:
+    from optscan.console import Console
     from optscan.jobs.schedule import default_keys, describe, install_all
 
+    console = Console.for_stream(settings.color_mode)
     selected = args.jobs or None
 
     if not args.install:
         print("Recurring jobs, their schedule in market time, and whether Windows has them:\n")
-        for line in describe(settings):
+        for line in describe(settings, console):
             print(line)
         print(f"\nInstall with: optscan schedule --install [{' '.join(default_keys(settings))}]")
         return 0
@@ -811,8 +891,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         "validate": _cmd_validate,
         "backup": _cmd_backup,
         "shortcut": _cmd_shortcut,
+        "health": _cmd_health,
     }
-    return handlers[args.command](settings, args)
+    handler = handlers[args.command]
+
+    if args.command not in TRACKED_JOBS:
+        return handler(settings, args)
+
+    # Logged whoever started it. A hole filled by hand is filled, so the health report
+    # asks whether the work happened rather than who asked for it.
+    from optscan.storage import jobs as job_log
+
+    with job_log.track(settings.sqlite_path, args.command) as run:
+        code = handler(settings, args)
+        if code != 0:
+            # A non-zero return is a failure the job reported about itself, and it has
+            # to reach the log the same way an exception does. Otherwise the most likely
+            # way a job goes wrong is the one way health cannot see.
+            run.failed(f"the command exited {code}")
+    return code
 
 
 if __name__ == "__main__":

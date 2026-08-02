@@ -55,6 +55,30 @@ cleared, so a machine that was asleep runs the job late rather than skipping it.
 capture is a slightly worse observation, because IV rank wants a consistent time of day.
 A missing one is invisible and permanent.
 
+### Checking they are still running
+
+```bash
+venv\Scripts\python -m optscan health
+```
+
+Says, per job, whether it is registered, whether it last succeeded, and how many
+sessions have been missed if it has not. `optscan status` carries a one line version of
+the same thing, and `--quiet` prints only what is wrong and exits non-zero, which is the
+form to put in a scheduled task of your own.
+
+It reads two sources because they answer different questions. **Windows** knows whether
+it started a process and what that process returned. **The run log** knows whether the
+work happened. A job that runs daily, finds nothing to do and exits 0 is a green tick in
+Task Scheduler and a hole in the history; a job that dies on a bad config never writes a
+log row at all. Where the two disagree, the disagreement is the finding.
+
+Two things it deliberately does not do. It does not report a missed session over a
+weekend or a market holiday, because it walks the market calendar for the jobs that only
+work on a trading day. And it does not blame a job for any scheduled time before run
+logging existed, because a missing row from before the log was created is missing
+evidence rather than a missed run. A monitor that opens by crying wolf teaches you to
+ignore it before it has ever been right.
+
 ---
 
 ## Setup

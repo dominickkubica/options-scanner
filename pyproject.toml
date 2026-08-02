@@ -77,6 +77,8 @@ ignore = [
     "PLR2004",  # magic values are the point of a test
     "PLC0415",  # a local import keeps a test's setup next to the assertion it serves
     "TID251",   # the adapter tests drive httpx with a mock transport, offline
+    "PLR0917",  # a helper that mirrors the signature it exercises should keep its shape
+    "SIM117",   # nesting `pytest.raises` around the block under test is what it reads as
 ]
 "src/optscan/providers/*" = ["TID251"]        # the one place vendor SDKs are allowed
 # Deferred imports, deliberately: the CLI stays fast to start and a broker SDK is only
@@ -98,6 +100,13 @@ ignore = [
 # Same reason for the screener: each early return is a distinct named refusal or a
 # distinct reason a session cannot contribute to the history.
 "src/optscan/screener/*" = ["PLR0917", "PLR0911"]
+# The verdict function is a taxonomy: one early return per distinct way a job can be
+# unhealthy, each with its own sentence. Collapsing them to satisfy a counter would
+# merge states that a reader has to be able to tell apart, which is the whole point.
+"src/optscan/jobs/health.py" = ["PLR0917", "PLR0911"]
+# ctypes is imported inside the function that enables ANSI on Windows, so importing
+# this module costs nothing on any other platform and cannot fail on one.
+"src/optscan/console.py" = ["PLC0415"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "yfinance".msg = "Market data vendors are only imported inside optscan.providers."

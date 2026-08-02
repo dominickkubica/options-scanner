@@ -6,6 +6,7 @@ outside this one reads os.environ directly, and no module hardcodes a threshold.
 
 from __future__ import annotations
 
+import os
 from datetime import time
 from functools import lru_cache
 from pathlib import Path
@@ -22,6 +23,7 @@ MINUTES_PER_DAY = HOURS_PER_DAY * MINUTES_PER_HOUR
 
 ProviderName = Literal["yfinance", "schwab", "tradier"]
 LogFormat = Literal["console", "json"]
+ColorMode = Literal["auto", "always", "never"]
 TradierEnvironment = Literal["sandbox", "production"]
 
 #: Tradier's documented hosts, verified against docs.tradier.com on 2026-07-31.
@@ -52,6 +54,12 @@ class Settings(BaseSettings):
     # Logging
     log_level: str = "INFO"
     log_format: LogFormat = "console"
+
+    # Terminal colour. "auto" means colour when stdout is a terminal and NO_COLOR is
+    # not set. Escape codes in a redirected file are corruption, so auto is the default
+    # and the two overrides exist for the cases where the guess is wrong: a CI log that
+    # renders them, or a pager that does.
+    color: ColorMode = "auto"
 
     # Storage. Paths are resolved relative to the repo root when given as relative.
     data_dir: Path = Path("data")
@@ -210,6 +218,23 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return tuple(part.strip().upper() for part in value.split(",") if part.strip())
         return value
+
+    @property
+    def color_mode(self) -> ColorMode:
+        """The effective colour mode, after NO_COLOR.
+
+        NO_COLOR is not an OPTSCAN_ variable and pydantic will not pick it up, so it is
+        read here. This module is the only one allowed to look at the environment, which
+        is exactly why the check lives here rather than next to the escape codes.
+
+        An explicit `always` still wins: somebody who set OPTSCAN_COLOR=always after
+        setting NO_COLOR has said the more specific thing more recently.
+        """
+        if self.color == "always":
+            return "always"
+        if os.environ.get("NO_COLOR"):
+            return "never"
+        return self.color
 
     @property
     def snapshot_time(self) -> time:

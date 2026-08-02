@@ -33,8 +33,9 @@ src/optscan/
   analytics/        greeks.py, iv.py, probability.py, levels.py, projection.py,
                     portfolio.py, triggers.py, outcomes.py, calibration.py
   screener/         rules/, scoring.py, strategies/
+  console.py        terminal colour, and the rules about when not to use it
   jobs/             snapshot.py, schedule.py, manage.py, validate.py, backup.py,
-                    launcher.py
+                    launcher.py, health.py
   live/             the polling refresh loop and its delta encoder
   alerts.py         alert sinks, and once-per-condition delivery
   api/              schemas, deps, views, app, routers/
@@ -50,6 +51,7 @@ venv\Scripts\python -m pytest         # tests
 venv\Scripts\python -m ruff check .   # lint
 venv\Scripts\python -m ruff format .  # format
 venv\Scripts\python -m optscan status # market state, watchlist, recent captures
+venv\Scripts\python -m optscan health # are the recurring jobs actually running
 venv\Scripts\python -m optscan manage # mark held positions, evaluate, alert once
 venv\Scripts\python -m optscan record # log every scored candidate for validation
 venv\Scripts\python -m optscan validate # does the score actually separate outcomes
@@ -187,6 +189,17 @@ a regression test now pins that shape.
   the job silently does not run. That was live on the snapshot task until Phase 9.
   Registration goes through `Register-ScheduledTask`, and `jobs/schedule.py` is the only
   place that does it.
+- **A green exit code is not evidence that work happened.** `optscan health` reads the
+  `job_run` log *and* Windows, because a job that runs, finds nothing to do and exits 0
+  is a tick in Task Scheduler and a hole in the history. Where the two disagree, the
+  disagreement is the finding.
+- **A monitor that cries wolf is worse than none.** `health` walks the market calendar
+  so a weekend is not a missed session, and holds back every "it has not run" claim for
+  a scheduled time earlier than `meta.job_log_started_at`, because before the log
+  existed a missing row is missing evidence rather than a missed run.
+- **Colour is never the only carrier.** Every coloured state also has a word, and
+  anything laid out in columns pads with `console.pad`, because f-string padding counts
+  the escape sequence and silently misaligns the table.
 - **No outcome has ever actually been resolved.** The settling path is covered by an
   offline test with a fake provider; the first real `optscan resolve` run is outstanding
   and cannot happen before 2026-08-21.
