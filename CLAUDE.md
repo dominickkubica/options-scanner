@@ -33,7 +33,8 @@ src/optscan/
   analytics/        greeks.py, iv.py, probability.py, levels.py, projection.py,
                     portfolio.py, triggers.py, outcomes.py, calibration.py
   screener/         rules/, scoring.py, strategies/
-  jobs/             snapshot.py, schedule.py, manage.py, validate.py, backup.py
+  jobs/             snapshot.py, schedule.py, manage.py, validate.py, backup.py,
+                    launcher.py
   live/             the polling refresh loop and its delta encoder
   alerts.py         alert sinks, and once-per-condition delivery
   api/              schemas, deps, views, app, routers/
@@ -54,6 +55,7 @@ venv\Scripts\python -m optscan record # log every scored candidate for validatio
 venv\Scripts\python -m optscan validate # does the score actually separate outcomes
 venv\Scripts\python -m optscan schedule # the recurring jobs and whether Windows has them
 venv\Scripts\python -m optscan backup # copy the db, mirror the captures, verify
+venv\Scripts\python -m optscan shortcut # Desktop launcher for the dashboard
 venv\Scripts\python scripts/coverage_floor.py  # per module floor, after pytest --cov
 venv\Scripts\python -m optscan serve  # API on 8000, plus the UI if it is built
 npm --prefix frontend run dev         # Vite on 5173, proxying /api to 8000

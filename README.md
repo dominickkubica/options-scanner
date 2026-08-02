@@ -168,6 +168,25 @@ which one you have rather than letting the word imply the stronger claim.
 ### Dashboard
 
 ```bash
+venv\Scripts\python -m optscan shortcut
+```
+
+Puts an "optscan dashboard" icon on your Desktop. Double click it and the dashboard
+opens in your browser: it starts the server if nothing is serving, waits for it to
+answer, and opens the page. Double clicking again while it is running opens another tab
+rather than a second server.
+
+The minimized console window it leaves in the taskbar **is** the server. Closing it
+stops the dashboard. That is deliberate: starting it with `pythonw` would look tidier
+and leave no way to stop it short of Task Manager.
+
+`optscan shortcut --remove` takes it off the Desktop again. The launcher it generates,
+`scripts/optscan-dashboard.cmd`, is gitignored, because it bakes in this machine's venv
+path and the configured host and port. Re-run `optscan shortcut` after changing either.
+
+Or start it by hand:
+
+```bash
 venv\Scripts\python -m optscan serve
 ```
 

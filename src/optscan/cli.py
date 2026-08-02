@@ -222,6 +222,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Copy the database and mirror the captures to the backup directory.",
     )
 
+    shortcut = sub.add_parser(
+        "shortcut",
+        help="Put a Desktop shortcut that opens the dashboard, no terminal needed.",
+    )
+    shortcut.add_argument(
+        "--remove",
+        action="store_true",
+        help="Take the shortcut off the Desktop again.",
+    )
+
     schedule = sub.add_parser(
         "schedule",
         help="Print or install the Windows Task Scheduler entries for the recurring jobs.",
@@ -507,6 +517,24 @@ def _cmd_backup(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_shortcut(settings: Settings, args: argparse.Namespace) -> int:
+    from optscan.jobs.launcher import dashboard_url, install_shortcut, remove_shortcut
+
+    if args.remove:
+        result = remove_shortcut()
+        print(result.message)
+        return 0 if result.ok else 1
+
+    result = install_shortcut(settings)
+    print(result.message)
+    if result.ok:
+        print(f"It opens {dashboard_url(settings)} and starts the server if nothing is serving.")
+        print("The window it opens is the server. Close it to stop the dashboard.")
+        if result.launcher:
+            print(f"Launcher: {result.launcher}")
+    return 0 if result.ok else 1
+
+
 def _cmd_schedule(settings: Settings, args: argparse.Namespace) -> int:
     from optscan.jobs.schedule import default_keys, describe, install_all
 
@@ -782,6 +810,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "resolve": _cmd_resolve,
         "validate": _cmd_validate,
         "backup": _cmd_backup,
+        "shortcut": _cmd_shortcut,
     }
     return handlers[args.command](settings, args)
 

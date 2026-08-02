@@ -1039,3 +1039,50 @@ Nothing here changes the two facts the README leads with. No outcome has ever be
 resolved against real data, and the Tradier adapter has still never spoken to Tradier.
 Phase 9 makes it more likely the jobs are running when the first expiry passes on
 2026-08-21. It does not bring that date forward.
+
+---
+
+## 2026-08-02: a Desktop launcher for the dashboard
+
+`optscan serve` was the only front door, and it needs a shell, the right working
+directory, the venv interpreter rather than the 3.13 system one, and a window that stays
+open. None of that is hard and all of it is enough friction to stop somebody glancing at
+the board. `optscan shortcut` generates a `.cmd` and puts a shortcut to it on the
+Desktop.
+
+**A console window, not `pythonw`.** Starting the server with `pythonw.exe` would give
+the most app-like result and the worst one: no console at all means no way to stop it
+short of Task Manager. The launcher runs in a window started minimized, so it sits in
+the taskbar and closing it stops the server. That window *is* the app, which is a model
+somebody can reason about without being told.
+
+**The launcher is generated, not committed.** It bakes in the configured host and port
+and this machine's absolute venv path. Config is the single source for those everywhere
+else, and a committed script with 8000 in it would quietly disagree with
+`OPTSCAN_API_PORT` the day anybody changed it. It is gitignored and `optscan shortcut`
+regenerates it.
+
+**It checks health before starting anything.** A second double click should open a tab,
+not a second server fighting for the port.
+
+### Two things that only showed up by looking at the artifact
+
+**The Desktop is not `%USERPROFILE%\Desktop`.** OneDrive folder redirection moves it, and
+on this machine it is redirected to `C:\Users\kubic\OneDrive\Desktop`. Writing to the
+unredirected path *succeeds*, and puts the shortcut somewhere the user never looks, which
+is the worst kind of failure: silent and plausible. The known folder is asked for rather
+than assumed.
+
+**A brace failed to collapse and broke exactly one branch.** The health probe is built by
+f-string, and its second fragment was not marked `f`, so `}}` reached the batch file
+literally. PowerShell rejects it, the probe exits non-zero, and the launcher concludes
+nothing is serving. Cold start looked perfect; the second double click would have started
+a competing server. Found by reading the generated file rather than the generator.
+
+`tests/test_launcher.py` now hands both PowerShell fragments to PowerShell's own parser,
+and the icon to Windows' own icon parser. The generated artifact is the thing that has to
+be right, and it is the thing that was wrong.
+
+**The icon is written by hand.** A 32x32 BGRA `.ico` is a small header and a bottom up
+bitmap, which is little enough format that taking on Pillow as a dependency for it would
+be the larger cost. It reuses the dashboard's own palette so the two look related.
