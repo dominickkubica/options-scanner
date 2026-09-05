@@ -1,16 +1,31 @@
 :root {
-  --bg: #0e1116;
-  --panel: #161b22;
-  --panel-2: #1c232c;
-  --line: #262e39;
-  --text: #d7dee7;
-  --muted: #8b97a6;
-  --dim: #5d6875;
+  /* Surfaces are a ladder, not two shades: page, raised, sunken. Three steps mean a
+     panel can sit on the page and a control can sit inside it without either needing
+     a border to be legible, which is what actually removes the clutter. */
+  --bg: #101626;
+  --panel: #1d2333;
+  --panel-2: #2e3446;
+
+  /* Deliberately faint. The old value drew a visible rule around everything; at this
+     contrast a border reads as an edge only where one is needed and disappears where
+     spacing is already doing the work. */
+  --line: #212b37;
+  --line-strong: #2b3644;
+
+  --text: #dae0e5;
+  --muted: #8e9aa9;
+  --dim: #6b7684;
   --accent: #4c9be8;
   --good: #46b17b;
   --bad: #d9635f;
   --warn: #d9a441;
   --mono: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", monospace;
+
+  /* One radius scale. Every corner in the app comes from here so nothing drifts. */
+  --r-sm: 8px;
+  --r: 12px;
+  --r-lg: 12px;
+  --r-pill: 999px;
 }
 
 * {
@@ -21,7 +36,16 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 13px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* Inter is self hosted through @fontsource-variable, so there is no runtime font
+     request and no flash of fallback text on a dashboard that is opened cold. */
+  font:
+    500 14px/1.5 "Inter Variable",
+    Inter,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
 button {
@@ -36,23 +60,33 @@ button {
 
 .app {
   display: grid;
-  grid-template-columns: 190px 1fr;
+  grid-template-columns: 224px 1fr;
   min-height: 100vh;
+  gap: 16px;
+  padding: 16px;
 }
 
+/* A floating card rather than a flush column with a rule down its edge. The gap is
+   what separates it from the content now, which is one less line on the screen. */
 .sidebar {
   background: var(--panel);
-  border-right: 1px solid var(--line);
-  padding: 14px 0;
+  border: none;
+  border-radius: var(--r);
+  padding: 16px 12px;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 22px;
+  position: sticky;
+  top: 16px;
+  height: calc(100vh - 32px);
+  overflow-y: auto;
 }
 
 .brand {
-  padding: 0 16px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  padding: 4px 10px 0;
+  font-weight: 650;
+  font-size: 15px;
+  letter-spacing: 0.02em;
 }
 
 .brand small {
@@ -63,37 +97,45 @@ button {
 }
 
 .section-label {
-  padding: 0 16px 4px;
+  padding: 0 10px 6px;
   color: var(--dim);
-  font-size: 11px;
+  font-size: 10.5px;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.09em;
 }
 
 .symbol-list,
 .nav-list {
   display: flex;
   flex-direction: column;
+  gap: 4px;
 }
 
+/* Active state is a filled pill, not a rule in the margin. Same information, and it
+   reads as a selected object rather than as one more line on the page. */
 .symbol-btn,
 .nav-btn {
   text-align: left;
-  padding: 6px 16px;
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
   color: var(--muted);
-  border-left: 2px solid transparent;
+  font-size: 15px;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
 }
 
 .symbol-btn:hover,
 .nav-btn:hover {
-  background: var(--panel-2);
+  background: rgba(46, 52, 70, 0.55);
   color: var(--text);
 }
 
+/* Fill only. No accent bar, no border: the filled rectangle is already unambiguous
+   and anything added to it is decoration on a state that was already legible. */
 .symbol-btn.active,
 .nav-btn.active {
   color: var(--text);
-  border-left-color: var(--accent);
   background: var(--panel-2);
 }
 
@@ -101,6 +143,7 @@ button {
   float: right;
   color: var(--dim);
   font-size: 11px;
+  padding-top: 3px;
 }
 
 .symbol-btn.empty {
@@ -108,7 +151,7 @@ button {
 }
 
 .main {
-  padding: 16px 20px 40px;
+  padding: 4px 4px 48px 0;
   min-width: 0;
 }
 
@@ -117,7 +160,8 @@ button {
   align-items: baseline;
   gap: 14px;
   flex-wrap: wrap;
-  margin-bottom: 14px;
+  margin-bottom: 18px;
+  padding: 4px 2px;
 }
 
 .topbar h1 {
@@ -133,21 +177,24 @@ button {
 
 /* Panels ---------------------------------------------------------------- */
 
+/* No border. Separation is surface contrast plus space, which is the whole reason
+   the reference reads as uncluttered: at four panels a screen, four borders are four
+   more lines competing with the numbers inside them. */
 .panel {
   background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 12px 14px;
-  margin-bottom: 14px;
+  border: none;
+  border-radius: var(--r);
+  padding: 20px 24px;
+  margin-bottom: 20px;
 }
 
 .panel h2 {
-  margin: 0 0 10px;
-  font-size: 13px;
+  margin: 0 0 14px;
+  font-size: 11.5px;
   font-weight: 600;
   color: var(--muted);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.09em;
 }
 
 .grid-2 {
@@ -166,8 +213,8 @@ button {
 
 .badge {
   display: inline-block;
-  padding: 1px 6px;
-  border-radius: 3px;
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
   font-size: 11px;
   font-family: var(--mono);
   border: 1px solid var(--line);
@@ -197,9 +244,10 @@ button {
   font-family: var(--mono);
   font-size: 11px;
   color: var(--dim);
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 3px 8px;
+  /* Filled rather than outlined: one less border, and it still reads as chrome. */
+  background: var(--panel);
+  border-radius: var(--r-pill);
+  padding: 6px 12px;
 }
 
 .connection .dot {
@@ -255,8 +303,9 @@ button {
 
 .note {
   border-left: 2px solid var(--warn);
+  border-radius: var(--r-sm);
   background: rgba(217, 164, 65, 0.07);
-  padding: 7px 10px;
+  padding: 9px 13px;
   margin: 8px 0;
   color: var(--muted);
   font-size: 12px;
@@ -264,8 +313,9 @@ button {
 
 .error {
   border-left: 2px solid var(--bad);
+  border-radius: var(--r-sm);
   background: rgba(217, 99, 95, 0.08);
-  padding: 10px 12px;
+  padding: 11px 14px;
   margin: 10px 0;
   color: #e9b3b1;
   display: flex;
@@ -331,11 +381,12 @@ table {
   width: 100%;
   font-family: var(--mono);
   font-size: 12px;
+  font-weight: 400;
 }
 
 th {
   text-align: right;
-  padding: 5px 8px;
+  padding: 7px 10px;
   color: var(--dim);
   font-weight: 500;
   border-bottom: 1px solid var(--line);
@@ -361,8 +412,10 @@ th.sortable:hover {
 
 td {
   text-align: right;
-  padding: 4px 8px;
-  border-bottom: 1px solid rgba(38, 46, 57, 0.5);
+  padding: 7px 10px;
+  /* Barely there. Row separation comes mostly from the extra padding and the hover
+     state; the rule is a hint for long rows, not a grid. */
+  border-bottom: 1px solid rgba(33, 43, 55, 0.55);
   white-space: nowrap;
 }
 
@@ -403,8 +456,8 @@ td.missing {
 .chip {
   background: var(--bg);
   border: 1px solid var(--line);
-  border-radius: 3px;
-  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  padding: 3px 10px;
   font-size: 11px;
   font-family: var(--mono);
   color: var(--muted);
@@ -424,17 +477,26 @@ input[type="text"] {
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--line);
-  border-radius: 3px;
-  padding: 4px 6px;
+  border-radius: var(--r-sm);
+  padding: 6px 9px;
   font: 12px var(--mono);
+}
+
+select:focus,
+input:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 .btn {
   border: 1px solid var(--line);
-  border-radius: 3px;
-  padding: 4px 10px;
+  border-radius: var(--r-sm);
+  padding: 6px 12px;
   color: var(--muted);
   font-size: 12px;
+  transition:
+    border-color 120ms ease,
+    color 120ms ease;
 }
 
 .btn:hover {
@@ -442,9 +504,22 @@ input[type="text"] {
   border-color: var(--accent);
 }
 
+/* Filled, not outlined. The app had no visual hierarchy in its actions: every
+   button was the same outlined grey, so the one that matters had to be found by
+   reading. Accent stays blue rather than taking the reference's green, because green
+   already means profit here and a green button next to a green number is one signal
+   doing two jobs. */
 .btn.primary {
+  background: var(--accent);
   border-color: var(--accent);
-  color: var(--accent);
+  color: #fff;
+  font-weight: 500;
+}
+
+.btn.primary:hover {
+  background: #3f8ad4;
+  border-color: #3f8ad4;
+  color: #fff;
 }
 
 .btn.danger:hover {
@@ -483,7 +558,11 @@ input[type="text"] {
   width: 42px;
   height: 9px;
   border-radius: 2px;
-  background: linear-gradient(90deg, hsla(210, 72%, 48%, 0.2), hsla(0, 72%, 48%, 0.55));
+  background: linear-gradient(
+    90deg,
+    hsla(210, 72%, 48%, 0.2),
+    hsla(0, 72%, 48%, 0.55)
+  );
   vertical-align: middle;
   margin-right: 5px;
 }
@@ -518,4 +597,449 @@ svg text {
   color: var(--dim);
   font-size: 11px;
   margin-top: 6px;
+}
+
+/* Best plays ------------------------------------------------------------ */
+/*
+ * Two card treatments that must never be confused: filled for a candidate that
+ * passed the screen, outlined for one that did not. Near misses are scored by the
+ * same function as passing candidates and often score higher, because the gate that
+ * blocked them is not an input to the score. The fill is the only thing on the screen
+ * carrying "this one is actually tradeable", so nothing else may borrow it.
+ */
+
+.hero-card {
+  background: linear-gradient(160deg, var(--panel-2), #232a3d);
+  border: none;
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r);
+  padding: 22px 24px;
+}
+
+.hero-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.hero-symbol {
+  font-size: 30px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  line-height: 1.1;
+}
+
+.hero-strategy {
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.hero-score {
+  text-align: right;
+}
+
+.hero-score-value {
+  font-family: var(--mono);
+  font-size: 26px;
+  font-weight: 600;
+  color: var(--accent);
+  line-height: 1.1;
+}
+
+.hero-legs {
+  font-family: var(--mono);
+  font-size: 15px;
+  margin-top: 12px;
+  color: var(--text);
+}
+
+.hero-sub {
+  color: var(--dim);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.hero-warnings {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: var(--warn);
+}
+
+.hero-card .btn {
+  margin-top: 14px;
+}
+
+/* The bar is length only. A colour ramp would rank the number against a threshold
+   that no validated result supports yet. */
+.score-bar {
+  height: 4px;
+  background: var(--line);
+  border-radius: 2px;
+  overflow: hidden;
+  margin: 12px 0;
+}
+
+.score-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.score-bar-fill.muted {
+  background: var(--dim);
+}
+
+.metric-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(94px, 1fr));
+  gap: 12px 8px;
+  margin-top: 4px;
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+}
+
+.metric-value {
+  font-family: var(--mono);
+  font-size: 15px;
+  color: var(--text);
+}
+
+.metric-label {
+  color: var(--dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  margin-top: 1px;
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(215px, 1fr));
+  gap: 10px;
+}
+
+.play-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: var(--panel-2);
+  border: 1px solid transparent;
+  border-radius: var(--r);
+  padding: 14px 16px;
+  transition: border-color 120ms ease;
+}
+
+.play-card:hover {
+  border-color: var(--accent);
+}
+
+/* Outlined, dimmed, and never hover-lit: this one is not tradeable. */
+.play-card.blocked {
+  background: transparent;
+  border-color: var(--line-strong);
+  border-style: dashed;
+  cursor: default;
+}
+
+.play-card.blocked:hover {
+  border-color: var(--line-strong);
+}
+
+.play-card.blocked .play-symbol,
+.play-card.blocked .play-score {
+  color: var(--muted);
+}
+
+.play-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.play-symbol {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.play-score {
+  font-family: var(--mono);
+  color: var(--accent);
+}
+
+.play-strategy {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.play-legs {
+  font-family: var(--mono);
+  font-size: 12px;
+  margin-top: 5px;
+  color: var(--text);
+}
+
+.play-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.play-metrics .metric-value {
+  font-size: 12px;
+}
+
+.play-foot {
+  color: var(--dim);
+  font-size: 11px;
+  margin-top: 8px;
+}
+
+.blocker-line {
+  color: var(--warn);
+  font-size: 12px;
+}
+
+.countdown {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.caveat {
+  color: var(--dim);
+  font-size: 12px;
+  line-height: 1.55;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+/* Journal ---------------------------------------------------------------- */
+/*
+ * The sample banner sits above the numbers on purpose. Below them it would be a
+ * footnote to a headline that had already been read.
+ */
+
+.sample-banner {
+  background: rgba(217, 164, 65, 0.09);
+  border: 1px solid rgba(217, 164, 65, 0.35);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--r);
+  padding: 13px 16px;
+  margin-bottom: 12px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.tile-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.tile {
+  background: var(--panel-2);
+  border: none;
+  border-radius: var(--r);
+  padding: 14px 16px;
+}
+
+.tile-value {
+  font-family: var(--mono);
+  font-size: 19px;
+  margin-top: 3px;
+  color: var(--text);
+}
+
+.tile-sub {
+  color: var(--dim);
+  font-size: 11px;
+  margin-top: 3px;
+  line-height: 1.4;
+}
+
+.interval {
+  color: var(--dim);
+  font-size: 11px;
+}
+
+/* Equity curve. One series, so no legend: the panel title names it. */
+.curve-wrap {
+  width: 100%;
+}
+
+.curve {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.grid-line {
+  stroke: rgba(255, 255, 255, 0.05);
+  stroke-width: 1;
+}
+
+.zero-line {
+  stroke: var(--muted);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.curve-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.curve-dot {
+  fill: var(--accent);
+  stroke: var(--panel);
+  stroke-width: 2;
+}
+
+.crosshair {
+  stroke: var(--muted);
+  stroke-width: 1;
+}
+
+.axis-label {
+  fill: var(--dim);
+  font-size: 10px;
+  font-family: var(--mono);
+}
+
+.curve-readout {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  margin-top: 4px;
+  font-size: 12px;
+  min-height: 30px;
+}
+
+/* Calendar. Colour is reinforcement here, never the only channel: the signed value
+   is written into every filled cell, because the gain/loss pair measures ΔE 4.5
+   under deuteranopia and cannot be relied on alone. */
+.calendars {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+}
+
+.calendar {
+  /* Capped, not stretched. A single month allowed to fill a 1100px panel turns a
+     calendar into a wall of tiles with one square coloured in. */
+  min-width: 280px;
+  max-width: 460px;
+  flex: 1 1 300px;
+}
+
+.calendar-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.calendar-head .good,
+.calendar-value.good,
+.tile-value.good,
+td.good {
+  color: var(--good);
+}
+
+.calendar-head .bad,
+.calendar-value.bad,
+.tile-value.bad,
+td.bad {
+  color: var(--bad);
+}
+
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.calendar-weekday {
+  color: var(--dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  text-align: center;
+  padding-bottom: 2px;
+}
+
+.calendar-cell {
+  aspect-ratio: 1;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 3px 4px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  overflow: hidden;
+}
+
+.calendar-cell.empty {
+  border-color: transparent;
+}
+
+.calendar-cell.filled.good {
+  background: rgba(70, 177, 123, 0.14);
+  border-color: rgba(70, 177, 123, 0.45);
+}
+
+.calendar-cell.filled.bad {
+  background: rgba(217, 99, 95, 0.14);
+  border-color: rgba(217, 99, 95, 0.45);
+}
+
+.calendar-day {
+  color: var(--dim);
+  font-size: 10px;
+}
+
+.calendar-value {
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.2;
+  word-break: break-all;
+}
+
+.breakdown-grid {
+  display: grid;
+  /* Two up rather than three. At three the tracks are narrower than the tables and
+     every one of them gets a scrollbar, which is a worse read than fewer columns. */
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 16px 20px;
+}
+
+/* Grid items default to min-width:auto, so a table wider than its track refuses to
+   shrink and paints over the neighbouring column instead. Both halves are needed:
+   the min-width lets the item shrink, the scroll container gives the table somewhere
+   to put the overflow. */
+.breakdown {
+  min-width: 0;
+}
+
+.breakdown-scroll {
+  overflow-x: auto;
+}
+
+.breakdown table {
+  width: 100%;
+  min-width: 290px;
+}
+
+/* Dimmed, not hidden. A group with too few clusters is still evidence of what was
+   sampled; it just cannot carry a reading. */
+tr.under-sampled td {
+  opacity: 0.55;
 }

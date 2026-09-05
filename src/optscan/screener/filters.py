@@ -218,6 +218,38 @@ def evaluate(
     return check_events(candidate, analysis, expiry, config)
 
 
+def evaluate_all(
+    candidate: Candidate,
+    analysis: SymbolAnalysis,
+    expiry: ExpiryAnalysis,
+    config: ScreenConfig,
+) -> list[Rejection]:
+    """Every check group a candidate failed, rather than only the first.
+
+    `evaluate` stops at the first failure because the tally wants the most decisive
+    reason and the scan calls it tens of thousands of times per run. That is the wrong
+    shape for a different question: whether a candidate is one adjustment away from
+    passing. A position blocked by a single gate is worth watching, one blocked by
+    four is not, and a short circuiting check cannot tell them apart.
+
+    Granularity is the check group, not the individual threshold. `check_premium`
+    still returns at its own first failing sub-gate, so a candidate under both the
+    credit floor and the return floor reports one reason here, not two. Read the
+    result as written: "failed exactly one group" means one group, and that group may
+    be hiding a second problem behind the reason it names.
+    """
+    reasons: list[Rejection] = []
+    for check in (check_dte, check_delta, check_premium, check_liquidity):
+        result = check(candidate, config)
+        if not result and result.reason is not None:
+            reasons.append(result.reason)
+
+    events = check_events(candidate, analysis, expiry, config)
+    if not events and events.reason is not None:
+        reasons.append(events.reason)
+    return reasons
+
+
 @dataclass
 class RejectionTally:
     """Counts of why candidates were dropped, for reporting.

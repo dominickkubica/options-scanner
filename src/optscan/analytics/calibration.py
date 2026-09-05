@@ -185,7 +185,7 @@ def count_clusters(items: Sequence) -> int:
     return len({cluster_key(item) for item in items})
 
 
-def _interval(items: Sequence, predicate) -> Interval | None:
+def proportion_interval(items: Sequence, predicate) -> Interval | None:
     """A proportion widened to the cluster count rather than the row count.
 
     The widening is the point of this function. Successes are counted per row because
@@ -246,7 +246,7 @@ def score_buckets(items: Sequence, buckets: int = DEFAULT_BUCKETS) -> list[Bucke
                 count=len(slice_),
                 clusters=count_clusters(slice_),
                 wins=wins,
-                win_rate=_interval(slice_, lambda item: item.profit > 0),
+                win_rate=proportion_interval(slice_, lambda item: item.profit > 0),
                 mean_profit=sum(profits) / len(profits),
                 total_profit=sum(profits),
                 mean_score=sum(item.score for item in slice_) / len(slice_),
@@ -358,8 +358,8 @@ def validate(items: Sequence, *, buckets: int = DEFAULT_BUCKETS) -> ValidationRe
         ordered = sorted(resolved, key=lambda item: item.score)
         middle = len(ordered) // 2
         low_half, high_half = ordered[:middle], ordered[middle:]
-        top = _interval(high_half, lambda item: item.profit > 0)
-        bottom = _interval(low_half, lambda item: item.profit > 0)
+        top = proportion_interval(high_half, lambda item: item.profit > 0)
+        bottom = proportion_interval(low_half, lambda item: item.profit > 0)
 
         if top and bottom:
             # Non overlapping intervals rather than a two proportion test. Deliberately
@@ -380,7 +380,7 @@ def validate(items: Sequence, *, buckets: int = DEFAULT_BUCKETS) -> ValidationRe
             )
 
     mean_profit = sum(profits) / len(profits)
-    win_rate = _interval(resolved, lambda item: item.profit > 0)
+    win_rate = proportion_interval(resolved, lambda item: item.profit > 0)
     if win_rate is not None and win_rate.value > HIGH_WIN_RATE and mean_profit < 0:
         # The classic premium selling trap, and the single most useful thing this report
         # can say. Short premium wins most of the time by construction, so a high win

@@ -25,7 +25,7 @@ from optscan.api.deps import (
     solved_symbol,
 )
 from optscan.api.schemas import GapsOut, RejectionOut, ScanOut
-from optscan.api.views import gap_view, opportunity_view
+from optscan.api.views import gap_view, near_miss_view, opportunity_view
 from optscan.config import Settings
 from optscan.logging import get_logger
 from optscan.screener.config import ScreenConfig
@@ -84,15 +84,20 @@ def scan(
     settings: SettingsDep,
     config: ScreenConfigDep,
     provider_factory: ProviderFactoryDep,
+    *,
     symbols: SymbolsQuery = None,
     limit: Annotated[int, Query(ge=1, le=MAX_LIMIT)] = 50,
+    near_miss: Annotated[
+        bool,
+        Query(description="Also return candidates blocked by exactly one gate."),
+    ] = False,
 ) -> ScanOut:
     solved, _missing, notes = _load(_targets(symbols, settings), settings, config, provider_factory)
 
     combined = ScanResult()
     for item in solved:
         try:
-            result = scan_analysis(item.analysis, config)
+            result = scan_analysis(item.analysis, config, collect_near_misses=near_miss)
         except (ValueError, KeyError) as error:
             message = f"{type(error).__name__}: {error}"
             combined.symbols_failed[item.symbol] = message
@@ -105,6 +110,10 @@ def scan(
 
     return ScanOut(
         opportunities=[opportunity_view(item) for item in combined.top(limit)],
+        near_misses=[
+            near_miss_view(item, config.filters.dte.max_dte)
+            for item in combined.near_misses[:limit]
+        ],
         considered=combined.tally.considered,
         passed=combined.tally.passed,
         rejections=[

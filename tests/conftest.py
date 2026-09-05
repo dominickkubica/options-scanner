@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Iterator
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -58,6 +58,48 @@ def frozen_snapshot_json() -> dict:
 def frozen_snapshot(frozen_snapshot_json: dict) -> ChainSnapshot:
     """A real two expiry SPY capture, parsed back into models."""
     return ChainSnapshot.model_validate(frozen_snapshot_json)
+
+
+@pytest.fixture
+def future_snapshot(frozen_snapshot: ChainSnapshot) -> ChainSnapshot:
+    """The frozen capture, moved forward so its expiries are still ahead of today.
+
+    The fixture is a real chain from 30 July 2026 whose expiries are days out, so it
+    rots by the calendar: any code path that filters expiries to the future stops
+    finding anything in it within a fortnight of the capture. Tests that read stored
+    snapshots never noticed, which is why only the live capture path broke, and it
+    broke on a date rather than on a change.
+
+    Use this fixture wherever the code under test asks "which expiries are still
+    tradeable", and the plain `frozen_snapshot` everywhere else. Shifting the dates
+    would change every DTE and therefore every score, which is exactly what the pinned
+    ranking tests exist to catch, so the shift lives here rather than in the file.
+
+    Whole weeks, so expiries keep their weekday. Contracts move with their chain
+    because the model checks that the two agree.
+    """
+    today = date.today()
+    earliest = min(frozen_snapshot.expiries)
+    lead = timedelta(days=14)
+    if earliest - today >= lead:
+        return frozen_snapshot
+
+    weeks = -(-((today + lead) - earliest).days // 7)
+    shift = timedelta(weeks=weeks)
+
+    chains = tuple(
+        chain.model_copy(
+            update={
+                "expiry": chain.expiry + shift,
+                "contracts": tuple(
+                    contract.model_copy(update={"expiry": contract.expiry + shift})
+                    for contract in chain.contracts
+                ),
+            }
+        )
+        for chain in frozen_snapshot.chains
+    )
+    return frozen_snapshot.model_copy(update={"chains": chains, "session_date": today})
 
 
 class FakeProvider(MarketDataProvider):

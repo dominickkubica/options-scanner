@@ -9,7 +9,9 @@ import {
   useAsync,
 } from "./components/common.jsx";
 import { CONNECTION, useLive } from "./live.js";
+import BestPlays from "./views/BestPlays.jsx";
 import Chain from "./views/Chain.jsx";
+import Journal from "./views/Journal.jsx";
 import Levels from "./views/Levels.jsx";
 import Opportunities from "./views/Opportunities.jsx";
 import Payoff from "./views/Payoff.jsx";
@@ -25,12 +27,14 @@ import { num } from "./format.js";
 // three day old mark as the current market.
 
 const VIEWS = [
+  { key: "best", label: "Best plays" },
   { key: "opportunities", label: "Opportunities" },
   { key: "chain", label: "Chain" },
   { key: "underlying", label: "Underlying" },
   { key: "levels", label: "Levels" },
   { key: "payoff", label: "Payoff" },
   { key: "positions", label: "Positions" },
+  { key: "journal", label: "Journal" },
 ];
 
 export default function App() {
@@ -39,7 +43,7 @@ export default function App() {
   const liveStatus = useAsync(() => api.liveStatus(), []);
 
   const [symbol, setSymbol] = useState(null);
-  const [view, setView] = useState("opportunities");
+  const [view, setView] = useState("best");
   const [expiry, setExpiry] = useState(null);
   const [handover, setHandover] = useState(null);
 
@@ -185,6 +189,13 @@ export default function App() {
             server, so leaving them mounted repeats the same failure once per panel
             underneath the sentence that already explained it. */}
         <ErrorBoundary key={view}>
+          {!apiDown && view === "best" && (
+            <BestPlays
+              onOpenPayoff={openPayoff}
+              onSeeAll={() => setView("opportunities")}
+            />
+          )}
+
           {!apiDown && view === "opportunities" && (
             <Opportunities symbols={symbol ? [symbol] : []} onOpenPayoff={openPayoff} />
           )}
@@ -207,6 +218,8 @@ export default function App() {
               positions page that went blank because the sidebar selection had no
               capture would be hiding open risk. */}
           {!apiDown && view === "positions" && <Positions />}
+
+          {!apiDown && view === "journal" && <Journal />}
 
           {view === "payoff" && summary.data && (
             <Payoff

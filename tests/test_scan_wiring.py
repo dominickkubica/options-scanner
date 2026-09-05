@@ -152,11 +152,15 @@ class TestGather:
         assert len(inputs.snapshots) == 1
 
     def test_live_fetches_from_the_provider_instead_of_disk(
-        self, settings: Settings, frozen_snapshot: ChainSnapshot
+        self, settings: Settings, future_snapshot: ChainSnapshot
     ) -> None:
-        """Nothing is on disk, so anything found came from the provider."""
+        """Nothing is on disk, so anything found came from the provider.
+
+        `future_snapshot` rather than the frozen one: the live path selects expiries
+        that are still ahead, and the frozen capture's are now in the past.
+        """
         settings.ensure_dirs()
-        provider = FakeProvider(frozen_snapshot)
+        provider = FakeProvider(future_snapshot)
         inputs = gather(settings, ["SPY"], live=True, provider=provider, with_events=False)
         assert len(inputs.snapshots) == 1
         assert inputs.snapshots[0].source == "fake"

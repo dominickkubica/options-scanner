@@ -22,20 +22,26 @@ from optscan.api.deps import make_provenance
 from optscan.api.schemas import (
     BarOut,
     BollingerOut,
+    BreakdownOut,
     CandidateStrikeOut,
     ChainOut,
     ConeBandOut,
     ConePointOut,
     ContractOut,
+    DayPointOut,
     DistributionOut,
+    EstimateOut,
     ExpirySummaryOut,
     GapOut,
     HistogramBinOut,
     HistoryOut,
+    IntervalOut,
     IvRankOut,
+    JournalOut,
     LegOut,
     LevelOut,
     LevelsOut,
+    NearMissOut,
     OpportunityOut,
     PayoffOut,
     PayoffPointOut,
@@ -51,6 +57,7 @@ from optscan.api.schemas import (
 )
 from optscan.models import Leg, Opportunity, PriceBar, Right
 from optscan.screener.context import ExpiryAnalysis
+from optscan.screener.filters import Rejection
 from optscan.screener.gaps import Gap
 from optscan.screener.scan import scan_analysis
 
@@ -243,6 +250,24 @@ def opportunity_id(opportunity: Opportunity) -> str:
         for leg in sorted(opportunity.legs, key=lambda leg: (leg.right, leg.strike))
     )
     return f"{opportunity.symbol}:{opportunity.expiry.isoformat()}:{opportunity.strategy}:{legs}"
+
+
+def near_miss_view(near_miss, max_dte: int) -> NearMissOut:
+    """Flatten a near miss, and say when a DTE blocked one becomes eligible.
+
+    The countdown is arithmetic on the calendar, not a forecast: only the DTE ceiling
+    clears purely by waiting. A candidate held back by credit or liquidity needs the
+    market to change, and dating that would be inventing a number.
+    """
+    blocker = near_miss.blocker
+    enters = None
+    if blocker is Rejection.DTE_TOO_LONG:
+        enters = max(near_miss.opportunity.dte - max_dte, 0)
+    return NearMissOut(
+        opportunity=opportunity_view(near_miss.opportunity),
+        blocker=blocker.value,
+        enters_screen_in_days=enters,
+    )
 
 
 def opportunity_view(opportunity: Opportunity) -> OpportunityOut:
@@ -597,3 +622,79 @@ def payoff_view(
 
 def expiry_or_none(solved, expiry: date) -> ExpiryAnalysis | None:
     return solved.analysis.expiry(expiry)
+
+
+def interval_view(interval) -> IntervalOut | None:
+    if interval is None:
+        return None
+    return IntervalOut(
+        value=interval.value,
+        low=interval.low,
+        high=interval.high,
+        observations=interval.observations,
+        clusters=interval.clusters,
+    )
+
+
+def estimate_view(estimate) -> EstimateOut | None:
+    if estimate is None:
+        return None
+    return EstimateOut(
+        value=estimate.value,
+        low=estimate.low,
+        high=estimate.high,
+        observations=estimate.observations,
+        clusters=estimate.clusters,
+        indistinguishable_from_zero=estimate.indistinguishable_from_zero,
+    )
+
+
+def day_point_view(point) -> DayPointOut | None:
+    if point is None:
+        return None
+    return DayPointOut(
+        day=point.day,
+        profit=point.profit,
+        trades=point.trades,
+        clusters=point.clusters,
+        cumulative=point.cumulative,
+    )
+
+
+def breakdown_view(breakdown) -> BreakdownOut:
+    return BreakdownOut(
+        key=breakdown.key,
+        trades=breakdown.trades,
+        clusters=breakdown.clusters,
+        win_rate=interval_view(breakdown.win_rate),
+        total_profit=breakdown.total_profit,
+        mean_profit=breakdown.mean_profit,
+        reportable=breakdown.reportable,
+    )
+
+
+def journal_view(report) -> JournalOut:
+    return JournalOut(
+        trades=report.trades,
+        clusters=report.clusters,
+        settlement_dates=report.settlement_dates,
+        wins=report.wins,
+        losses=report.losses,
+        scratches=report.scratches,
+        win_rate=interval_view(report.win_rate),
+        expectancy=estimate_view(report.expectancy),
+        avg_win=report.avg_win,
+        avg_loss=report.avg_loss,
+        profit_factor=report.profit_factor,
+        total_profit=report.total_profit,
+        max_drawdown=report.max_drawdown,
+        best_day=day_point_view(report.best_day),
+        worst_day=day_point_view(report.worst_day),
+        days=[day_point_view(point) for point in report.days],
+        by_strategy=[breakdown_view(item) for item in report.by_strategy],
+        by_symbol=[breakdown_view(item) for item in report.by_symbol],
+        by_dte=[breakdown_view(item) for item in report.by_dte],
+        by_score=[breakdown_view(item) for item in report.by_score],
+        reportable=report.reportable,
+        notes=report.notes,
+    )

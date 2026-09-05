@@ -51,8 +51,12 @@ export const api = {
     request(`/symbols/${encodeURIComponent(symbol)}/history${query({ days })}`),
   levels: (symbol, days, expiry) =>
     request(`/symbols/${encodeURIComponent(symbol)}/levels${query({ days, expiry })}`),
-  scan: (symbols, limit) => request(`/scan${query({ symbols, limit })}`),
+  // near_miss is opt in on the server because collecting it re-checks every rejected
+  // candidate against every gate. Only the Best plays view asks for it.
+  scan: (symbols, limit, { nearMiss = false } = {}) =>
+    request(`/scan${query({ symbols, limit, near_miss: nearMiss || undefined })}`),
   gaps: (symbols) => request(`/gaps${query({ symbols })}`),
+  journal: ({ symbol, strategy } = {}) => request(`/journal${query({ symbol, strategy })}`),
   payoff: (body) =>
     request("/payoff", {
       method: "POST",

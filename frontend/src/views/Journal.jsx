@@ -1,0 +1,479 @@
+import { useMemo, useState } from "react";
+import { api } from "../api.js";
+import { ErrorBox, Notes, Panel, useAsync } from "../components/common.jsx";
+import { count, money, num, pct } from "../format.js";
+
+// The journal: a trade log's report surface, over settled screen candidates.
+//
+// What this is reporting on is not trades that were taken. Nothing here has been to a
+// broker. Every row is a candidate the screen surfaced and `optscan resolve` settled at
+// expiry, and the banner at the top says so before any number is shown, because a
+// calendar and an equity curve are the two most persuasive objects this app can draw
+// and neither of them knows what it is drawing.
+//
+// Three things are deliberate:
+//
+//   1. The sample banner is above the numbers, not under them. The API returns
+//      `reportable: false` until the cluster count clears the minimum, and at that
+//      point a +$426,644 total is not a result, it is three settlement dates in a calm
+//      stretch. Putting the caveat below the tiles would be printing the headline and
+//      whispering the correction.
+//
+//   2. Calendar cells carry their dollar value as text. The house gain/loss pair is
+//      #46b17b against #d9635f, which measures ΔE 4.5 under deuteranopia: a red/green
+//      colourblind reader cannot separate a winning day from a losing one by hue.
+//      Normal vision separates them fine (ΔE 25.8) so the colours stay, but the value
+//      is written into every cell so colour is reinforcement and never the only channel.
+//
+//   3. Expectancy leads with its interval. It is the number the whole tool exists to
+//      answer and the one most likely to be read as settled. When zero sits inside the
+//      interval the tile says so in words rather than leaving it to be inferred from
+//      two numbers in brackets.
+
+const PAD = { top: 12, right: 14, bottom: 24, left: 58 };
+const CURVE_HEIGHT = 220;
+const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+function signClass(value) {
+  if (value === null || value === undefined || value === 0) return "";
+  return value > 0 ? "good" : "bad";
+}
+
+function signedMoney(value, digits = 0) {
+  if (value === null || value === undefined) return "n/a";
+  return `${value > 0 ? "+" : value < 0 ? "-" : ""}$${Math.abs(value).toFixed(digits)}`;
+}
+
+// A proportion with the interval it actually earned, never the bare number.
+function IntervalText({ interval, digits = 0 }) {
+  if (!interval) return <>n/a</>;
+  return (
+    <>
+      {pct(interval.value, digits)}{" "}
+      <span className="interval">
+        ({pct(interval.low, digits)} to {pct(interval.high, digits)})
+      </span>
+    </>
+  );
+}
+
+function Tile({ label, value, sub, tone }) {
+  return (
+    <div className="tile">
+      <div className="metric-label">{label}</div>
+      <div className={`tile-value ${tone || ""}`}>{value}</div>
+      {sub && <div className="tile-sub">{sub}</div>}
+    </div>
+  );
+}
+
+// Single series, so no legend: the panel title names it. 2px line, recessive grid,
+// crosshair on hover.
+function EquityCurve({ days, width = 720 }) {
+  const [hover, setHover] = useState(null);
+
+  const geom = useMemo(() => {
+    if (days.length === 0) return null;
+    const values = days.map((point) => point.cumulative);
+    let low = Math.min(0, ...values);
+    let high = Math.max(0, ...values);
+    if (low === high) {
+      low -= 1;
+      high += 1;
+    }
+    const pad = (high - low) * 0.08;
+    low -= pad;
+    high += pad;
+
+    const plotW = width - PAD.left - PAD.right;
+    const plotH = CURVE_HEIGHT - PAD.top - PAD.bottom;
+    const x = (index) =>
+      PAD.left +
+      (days.length === 1 ? plotW / 2 : (index / (days.length - 1)) * plotW);
+    const y = (value) =>
+      PAD.top + plotH - ((value - low) / (high - low)) * plotH;
+    return { x, y, low, high, plotW, plotH };
+  }, [days, width]);
+
+  if (!geom) return <div className="empty-state">Nothing has settled yet.</div>;
+
+  const path = days
+    .map(
+      (point, i) =>
+        `${i === 0 ? "M" : "L"}${geom.x(i)},${geom.y(point.cumulative)}`,
+    )
+    .join(" ");
+  const zeroY = geom.y(0);
+  const ticks = [geom.high, (geom.high + geom.low) / 2, geom.low];
+
+  return (
+    <div className="curve-wrap">
+      <svg
+        viewBox={`0 0 ${width} ${CURVE_HEIGHT}`}
+        className="curve"
+        onMouseLeave={() => setHover(null)}
+      >
+        {ticks.map((value, i) => (
+          <g key={i}>
+            <line
+              x1={PAD.left}
+              x2={width - PAD.right}
+              y1={geom.y(value)}
+              y2={geom.y(value)}
+              className="grid-line"
+            />
+            <text
+              x={PAD.left - 8}
+              y={geom.y(value) + 4}
+              className="axis-label"
+              textAnchor="end"
+            >
+              {money(value)}
+            </text>
+          </g>
+        ))}
+
+        {geom.low < 0 && geom.high > 0 && (
+          <line
+            x1={PAD.left}
+            x2={width - PAD.right}
+            y1={zeroY}
+            y2={zeroY}
+            className="zero-line"
+          />
+        )}
+
+        <path d={path} className="curve-line" />
+
+        {days.map((point, i) => (
+          <circle
+            key={point.day}
+            cx={geom.x(i)}
+            cy={geom.y(point.cumulative)}
+            r={4}
+            className="curve-dot"
+          />
+        ))}
+
+        {hover !== null && (
+          <line
+            x1={geom.x(hover)}
+            x2={geom.x(hover)}
+            y1={PAD.top}
+            y2={CURVE_HEIGHT - PAD.bottom}
+            className="crosshair"
+          />
+        )}
+
+        {/* Hit targets wider than the marks, so hovering does not require precision. */}
+        {days.map((point, i) => (
+          <rect
+            key={`hit-${point.day}`}
+            x={geom.x(i) - geom.plotW / Math.max(days.length * 2, 2)}
+            y={PAD.top}
+            width={Math.max(geom.plotW / Math.max(days.length, 1), 24)}
+            height={geom.plotH}
+            fill="transparent"
+            onMouseEnter={() => setHover(i)}
+          />
+        ))}
+      </svg>
+
+      <div className="curve-readout">
+        {hover === null ? (
+          <span className="provenance">
+            {days.length} settlement {days.length === 1 ? "date" : "dates"},
+            cumulative
+          </span>
+        ) : (
+          <>
+            <strong>{days[hover].day}</strong>{" "}
+            <span className={signClass(days[hover].profit)}>
+              {signedMoney(days[hover].profit)}
+            </span>{" "}
+            <span className="provenance">
+              on the day, {signedMoney(days[hover].cumulative)} cumulative,{" "}
+              {count(days[hover].trades)} candidates over{" "}
+              {count(days[hover].clusters)} clusters
+            </span>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Month grids, one per month that actually has a settlement. A full year of empty
+// squares is not a calendar, it is a texture.
+function CalendarPnl({ days }) {
+  const months = useMemo(() => {
+    const byMonth = new Map();
+    for (const point of days) {
+      const key = point.day.slice(0, 7);
+      if (!byMonth.has(key)) byMonth.set(key, new Map());
+      byMonth.get(key).set(point.day, point);
+    }
+    return [...byMonth.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, [days]);
+
+  if (months.length === 0)
+    return <div className="empty-state">Nothing has settled yet.</div>;
+
+  return (
+    <div className="calendars">
+      {months.map(([month, points]) => {
+        const [year, monthIndex] = month.split("-").map(Number);
+        const first = new Date(Date.UTC(year, monthIndex - 1, 1));
+        const daysInMonth = new Date(
+          Date.UTC(year, monthIndex, 0),
+        ).getUTCDate();
+        // Monday-first, matching how a trading week is read.
+        const lead = (first.getUTCDay() + 6) % 7;
+        const total = sumMonth(points);
+
+        return (
+          <div className="calendar" key={month}>
+            <div className="calendar-head">
+              <span>
+                {first.toLocaleString("en-US", {
+                  month: "long",
+                  year: "numeric",
+                  timeZone: "UTC",
+                })}
+              </span>
+              <span className={signClass(total)}>{signedMoney(total)}</span>
+            </div>
+            <div className="calendar-grid">
+              {WEEKDAYS.map((name) => (
+                <div key={name} className="calendar-weekday">
+                  {name}
+                </div>
+              ))}
+              {Array.from({ length: lead }, (_, i) => (
+                <div key={`lead-${i}`} className="calendar-cell empty" />
+              ))}
+              {Array.from({ length: daysInMonth }, (_, i) => {
+                const iso = `${month}-${String(i + 1).padStart(2, "0")}`;
+                const point = points.get(iso);
+                return (
+                  <div
+                    key={iso}
+                    className={`calendar-cell ${point ? `filled ${signClass(point.profit)}` : ""}`}
+                    title={
+                      point
+                        ? `${iso}: ${signedMoney(point.profit)} over ${point.trades} candidates, ${point.clusters} clusters`
+                        : iso
+                    }
+                  >
+                    <span className="calendar-day">{i + 1}</span>
+                    {/* The value, not just the colour. See note 2 at the top. */}
+                    {point && (
+                      <span className="calendar-value">
+                        {signedMoney(point.profit)}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function sumMonth(points) {
+  let total = 0;
+  for (const point of points.values()) total += point.profit;
+  return total;
+}
+
+function BreakdownTable({ title, rows }) {
+  if (rows.length === 0) return null;
+  return (
+    <div className="breakdown">
+      <div className="section-label">{title}</div>
+      <div className="breakdown-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th className="left">{title}</th>
+              <th>n</th>
+              <th>clusters</th>
+              <th>win rate</th>
+              <th>mean</th>
+              <th>total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr
+                key={row.key}
+                className={row.reportable ? "" : "under-sampled"}
+              >
+                <td className="left">{row.key.replace(/_/g, " ")}</td>
+                <td>{count(row.trades)}</td>
+                {/* The number that governs, so it is never the small print. */}
+                <td>{count(row.clusters)}</td>
+                <td>{row.win_rate ? pct(row.win_rate.value, 0) : "n/a"}</td>
+                <td className={signClass(row.mean_profit)}>
+                  {signedMoney(row.mean_profit, 2)}
+                </td>
+                <td className={signClass(row.total_profit)}>
+                  {signedMoney(row.total_profit)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+export default function Journal() {
+  const [symbol, setSymbol] = useState("");
+  const [strategy, setStrategy] = useState("");
+  const { data, error, loading } = useAsync(
+    () => api.journal({ symbol, strategy }),
+    [symbol, strategy],
+  );
+
+  if (loading)
+    return <div className="loading">Aggregating settled candidates...</div>;
+  if (error) return <ErrorBox error={error} />;
+  if (!data) return null;
+
+  const expectancy = data.expectancy;
+  const symbols = data.by_symbol.map((row) => row.key);
+  const strategies = data.by_strategy.map((row) => row.key);
+
+  return (
+    <>
+      {/* Above the numbers, deliberately. */}
+      {!data.reportable && (
+        <div className="sample-banner">
+          <strong>Not a track record.</strong> {count(data.trades)} settled
+          candidates, but only {count(data.clusters)} independent (symbol,
+          expiry) clusters on {count(data.settlement_dates)} settlement{" "}
+          {data.settlement_dates === 1 ? "date" : "dates"}. Everything below is
+          shown so the pipeline can be seen working, not because it supports a
+          conclusion.
+        </div>
+      )}
+
+      <Panel
+        title="Performance"
+        right={
+          <div className="controls">
+            <label>
+              symbol{" "}
+              <select
+                value={symbol}
+                onChange={(event) => setSymbol(event.target.value)}
+              >
+                <option value="">all</option>
+                {symbols.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              strategy{" "}
+              <select
+                value={strategy}
+                onChange={(event) => setStrategy(event.target.value)}
+              >
+                <option value="">all</option>
+                {strategies.map((name) => (
+                  <option key={name} value={name}>
+                    {name.replace(/_/g, " ")}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        }
+      >
+        <div className="tile-row">
+          <Tile
+            label="settled"
+            value={count(data.trades)}
+            sub={`${count(data.clusters)} clusters`}
+          />
+          <Tile
+            label="win rate"
+            value={<IntervalText interval={data.win_rate} />}
+          />
+          <Tile
+            label="expectancy / candidate"
+            value={expectancy ? signedMoney(expectancy.value, 2) : "n/a"}
+            tone={expectancy ? signClass(expectancy.value) : ""}
+            sub={
+              expectancy
+                ? expectancy.low === null
+                  ? "one cluster, no interval"
+                  : expectancy.indistinguishable_from_zero
+                    ? `${signedMoney(expectancy.low, 0)} to ${signedMoney(expectancy.high, 0)} — includes zero`
+                    : `${signedMoney(expectancy.low, 0)} to ${signedMoney(expectancy.high, 0)}`
+                : null
+            }
+          />
+          <Tile
+            label="avg win"
+            value={signedMoney(data.avg_win, 2)}
+            tone="good"
+          />
+          <Tile
+            label="avg loss"
+            value={signedMoney(data.avg_loss, 2)}
+            tone="bad"
+          />
+          <Tile
+            label="profit factor"
+            value={
+              data.profit_factor === null
+                ? "undefined"
+                : num(data.profit_factor, 2)
+            }
+            sub={data.profit_factor === null ? "nothing lost yet" : null}
+          />
+          <Tile
+            label="total"
+            value={signedMoney(data.total_profit)}
+            tone={signClass(data.total_profit)}
+          />
+          <Tile label="max drawdown" value={money(data.max_drawdown)} />
+        </div>
+      </Panel>
+
+      <Panel title="Cumulative profit by settlement date">
+        <EquityCurve days={data.days} />
+      </Panel>
+
+      <Panel title="Calendar">
+        <CalendarPnl days={data.days} />
+      </Panel>
+
+      <Panel title="Breakdowns">
+        <div className="breakdown-grid">
+          <BreakdownTable title="strategy" rows={data.by_strategy} />
+          <BreakdownTable title="symbol" rows={data.by_symbol} />
+          <BreakdownTable title="dte" rows={data.by_dte} />
+          <BreakdownTable title="score" rows={data.by_score} />
+        </div>
+        <div className="caveat">
+          Rows are dimmed where the group has too few independent clusters to
+          support a reading. Note the score bands in particular: if mean profit
+          falls as the score rises, the composite is ranking against outcomes
+          rather than with them, which is the opposite of what it claims.
+        </div>
+      </Panel>
+
+      <Notes items={data.notes} />
+    </>
+  );
+}

@@ -27,6 +27,7 @@ from optscan import __version__
 from optscan.api.deps import clear_caches, frontend_dist, live_hub, reset_live_hub, settings_dep
 from optscan.api.routers import (
     health,
+    journal,
     levels,
     live,
     payoff,
@@ -113,6 +114,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         live.router,
         levels.router,
         positions.router,
+        journal.router,
     ):
         app.include_router(router, prefix=API_PREFIX)
 

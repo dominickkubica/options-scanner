@@ -15,6 +15,7 @@ empty result into a diagnosis.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -23,12 +24,38 @@ from optscan.logging import get_logger
 from optscan.models import ChainSnapshot, Opportunity
 from optscan.screener.config import ScreenConfig
 from optscan.screener.context import SymbolAnalysis, analyze_snapshot
-from optscan.screener.filters import RejectionTally, check_volatility, evaluate
+from optscan.screener.filters import (
+    Rejection,
+    RejectionTally,
+    check_volatility,
+    evaluate,
+    evaluate_all,
+)
 from optscan.screener.gaps import Gap, find_gaps
 from optscan.screener.scoring import score_candidate
 from optscan.screener.strategies import generators_for
 
 log = get_logger("optscan.screener.scan")
+
+#: Near misses kept per blocking gate. Ranking them in one pool and cutting at a
+#: global limit does not work: one gate dominates the top of the list by score and
+#: starves every other, so the gate that clears by waiting was never reaching a caller
+#: that asked for exactly that. Enough per gate to fill a panel, not a table.
+NEAR_MISSES_PER_BLOCKER = 12
+
+
+@dataclass(frozen=True, slots=True)
+class NearMiss:
+    """A candidate that failed exactly one check group, and the group that blocked it.
+
+    Deliberately a separate list rather than an entry in `opportunities` carrying a
+    flag. Everything in that list has passed the screen, and a caller that had to know
+    about a flag to exclude these would eventually not know, and would be sizing
+    positions the screen rejected.
+    """
+
+    opportunity: Opportunity
+    blocker: Rejection
 
 
 @dataclass
@@ -41,6 +68,7 @@ class ScanResult:
     symbols_scanned: list[str] = field(default_factory=list)
     symbols_failed: dict[str, str] = field(default_factory=dict)
     stale_symbols: dict[str, float] = field(default_factory=dict)
+    near_misses: list[NearMiss] = field(default_factory=list)
 
     def top(self, limit: int) -> list[Opportunity]:
         return self.opportunities[:limit]
@@ -52,6 +80,7 @@ class ScanResult:
         self.symbols_scanned.extend(other.symbols_scanned)
         self.symbols_failed.update(other.symbols_failed)
         self.stale_symbols.update(other.stale_symbols)
+        self.near_misses.extend(other.near_misses)
 
     def rank(self, limit: int | None = None) -> None:
         """Sort by score, then by annualized return as a stable tiebreak."""
@@ -63,12 +92,40 @@ class ScanResult:
                 opportunity.expiry,
             )
         )
+        self.near_misses.sort(
+            key=lambda item: (
+                -item.opportunity.score,
+                -(item.opportunity.annualized_return or 0.0),
+                item.opportunity.symbol,
+                item.opportunity.expiry,
+            )
+        )
+        kept: list[NearMiss] = []
+        per_blocker: Counter[Rejection] = Counter()
+        for item in self.near_misses:
+            if per_blocker[item.blocker] >= NEAR_MISSES_PER_BLOCKER:
+                continue
+            per_blocker[item.blocker] += 1
+            kept.append(item)
+        self.near_misses = kept
+
         if limit is not None:
             del self.opportunities[limit:]
 
 
-def scan_analysis(analysis: SymbolAnalysis, config: ScreenConfig) -> ScanResult:
-    """Run the whole pipeline against one already solved symbol."""
+def scan_analysis(
+    analysis: SymbolAnalysis,
+    config: ScreenConfig,
+    *,
+    collect_near_misses: bool = False,
+) -> ScanResult:
+    """Run the whole pipeline against one already solved symbol.
+
+    `collect_near_misses` re-checks every rejected candidate against all the gates
+    instead of stopping at the first, and scores the ones that failed only one. It
+    is off by default because it is pure cost to a caller that only wants the
+    ranked list, and the scan runs the filter tens of thousands of times.
+    """
     result = ScanResult(symbols_scanned=[analysis.symbol])
 
     volatility = check_volatility(analysis, config)
@@ -92,6 +149,8 @@ def scan_analysis(analysis: SymbolAnalysis, config: ScreenConfig) -> ScanResult:
                 verdict = evaluate(candidate, analysis, expiry, config)
                 result.tally.record(verdict)
                 if not verdict:
+                    if collect_near_misses:
+                        _record_near_miss(result, candidate, analysis, expiry, config)
                     continue
 
                 result.opportunities.append(score_candidate(candidate, analysis, expiry, config))
@@ -100,6 +159,35 @@ def scan_analysis(analysis: SymbolAnalysis, config: ScreenConfig) -> ScanResult:
     result.gaps = find_gaps(analysis, config.gaps)
     result.rank()
     return result
+
+
+def _record_near_miss(
+    result: ScanResult,
+    candidate,
+    analysis: SymbolAnalysis,
+    expiry,
+    config: ScreenConfig,
+) -> None:
+    """Keep a rejected candidate if exactly one check group stood in its way.
+
+    Scored with the same function as a passing candidate, so the two lists rank on the
+    same number and a watch item can be compared against a live one. Scoring a
+    candidate the filters dropped can raise on the missing data that got it dropped,
+    and a watch list is not worth failing a scan over, so it is guarded.
+    """
+    blockers = evaluate_all(candidate, analysis, expiry, config)
+    if len(blockers) != 1:
+        return
+    # A contract under the DTE floor is not on its way to qualifying, it is on its way
+    # out: tomorrow it is a day shorter. Listing it beside candidates that qualify by
+    # waiting would put two opposite trajectories under one heading.
+    if blockers[0] is Rejection.DTE_TOO_SHORT:
+        return
+    try:
+        scored = score_candidate(candidate, analysis, expiry, config)
+    except (ValueError, KeyError, ZeroDivisionError, TypeError):
+        return
+    result.near_misses.append(NearMiss(opportunity=scored, blocker=blockers[0]))
 
 
 def scan_snapshot(

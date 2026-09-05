@@ -109,6 +109,66 @@ and `optscan-web` entries in `.claude/launch.json`.
 **Phases 0 to 9 are complete and committed.** The roadmap ends at 9. Anything further is
 new scope and is **not authorized**: ask first.
 
+**Visual pass, 2026-09-05.** Surfaces, radii, spacing and type were re-based on
+measured values rather than taste: page `#101626`, panel `#1d2333`, raised `#2e3446`,
+12px on cards, 8px on controls, Inter at 14px/500 self hosted through
+`@fontsource-variable/inter` so a cold dashboard has no font request and no flash.
+
+Two rules came out of it and should survive future edits:
+
+- **Panels carry no border.** Separation is surface contrast plus space. Four panels a
+  screen meant four more lines competing with the numbers inside them, and removing
+  them is most of what made the app feel calmer. The remaining consequence is worth
+  keeping: a blocked near-miss card is now the only card on any screen with a border
+  at all, which makes that distinction stronger than when everything had one.
+- **The accent stays blue.** Green already means profit here, so a green primary
+  button sitting next to a green P/L figure would be one signal doing two jobs.
+
+`.btn.primary` is now filled rather than outlined; before this every button in the app
+was the same outlined grey and the one that mattered had to be found by reading.
+
+**Exception, authorized 2026-09-05: the Journal view.** A trade journal's report
+surface - KPI tiles, equity curve, calendar P/L, and breakdowns by strategy, symbol,
+DTE and score - built over settled `opportunity_outcome` rows at `GET /api/journal`.
+
+It is **not** a record of trades taken. Nothing in it has been to a broker, and the
+banner above the numbers says so. It measures the screen held to expiry, with no fill,
+no slippage and no early management. `analytics/journal.py` carries the reasoning; the
+short version is that a calendar and an equity curve are the two most persuasive
+objects this app can draw and neither knows what it is drawing, so every aggregate
+carries its cluster count and `reportable` is false until the sample clears the
+`calibration.py` minimum.
+
+Two findings from the first real run, both worth re-checking as the sample grows:
+
+- **The composite score is currently anti-correlated with profit.** Mean profit by
+  score band runs +$478, +$266, +$188, +$102 from the lowest band to the highest. At 14
+  clusters over 3 settlement dates that is not a finding, but it is the opposite of
+  what the score claims and the Best plays view ranks on it.
+- **14 clusters sit on only 3 settlement dates.** Six symbols expiring on one Friday
+  share one market move, so the effective sample is nearer 3 than 14. The report states
+  both numbers rather than letting the cluster count stand alone.
+
+**Exception, authorized 2026-09-05: the Best plays view.** A landing screen that ranks
+the whole watchlist instead of the selected symbol, plus near miss collection behind
+`GET /api/scan?near_miss=true`. Three constraints hold it together and none are
+cosmetic:
+
+- It scans the watchlist, never the sidebar selection. "Best play available" that
+  silently meant "best in NVDA" would be the most misleading screen in the app.
+- Near misses are scored by the same function as passing candidates and **routinely
+  outscore them**, because the gate that blocked them is not an input to the score. In
+  the first run against real captures the top blocked candidate scored 0.976 against
+  0.956 for the best that passed. They are drawn outlined and dimmed and always carry
+  their blocker, and that separation is load bearing, not styling.
+- The score bar is length only. A colour ramp would assert that some threshold is good,
+  and `optscan validate` is still under its own cluster minimum, so no threshold here
+  has earned that.
+
+`enters_screen_in_days` is populated only for a DTE ceiling blocker, because that is the
+only gate that clears by waiting. Everything else needs the market to move, and dating
+that would be inventing a number.
+
 ### The state that matters most right now
 
 **The validation study is running and it is empty.** 903 real candidates were logged on

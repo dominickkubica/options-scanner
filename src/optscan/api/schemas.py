@@ -508,6 +508,21 @@ class OpportunityOut(ApiModel):
     components: ScoreComponentsOut
 
 
+class NearMissOut(ApiModel):
+    """A candidate one check group away from passing the screen.
+
+    `blocker` is the single gate standing in the way. `enters_screen_in_days` is only
+    populated when that gate is the DTE ceiling, because that is the one blocker that
+    clears on its own: a 74 day contract under a 60 day ceiling is tradeable in 14
+    days and nothing has to change for it to be. Every other blocker needs the market
+    to move, so a countdown there would be a promise the screen cannot make.
+    """
+
+    opportunity: OpportunityOut
+    blocker: str
+    enters_screen_in_days: int | None = None
+
+
 class RejectionOut(ApiModel):
     reason: str
     count: int
@@ -529,6 +544,13 @@ class ScanOut(ApiModel):
             "Whether the earnings exclusion actually ran. When false the screen is "
             "weaker than the same config run from the CLI, and saying so is the only "
             "way that difference is visible."
+        ),
+    )
+    near_misses: list[NearMissOut] = Field(
+        default_factory=list,
+        description=(
+            "Candidates blocked by exactly one gate. Empty unless near_miss=true was "
+            "requested, which is not the same as there being none."
         ),
     )
     notes: list[str] = Field(default_factory=list)
@@ -607,3 +629,91 @@ class PayoffOut(ApiModel):
         default=None,
         description="Set when the T+0 curve could not be drawn, with the reason.",
     )
+
+
+class IntervalOut(ApiModel):
+    """A proportion and its interval, carrying both sample sizes.
+
+    `observations` and `clusters` are both present on purpose. The proportion is
+    computed per row and the interval is widened to the cluster count, so a reader
+    given only one of the two numbers cannot tell which one the interval belongs to.
+    """
+
+    value: float
+    low: float
+    high: float
+    observations: int
+    clusters: int
+
+
+class EstimateOut(ApiModel):
+    """A mean in dollars, with an interval built from the spread between clusters."""
+
+    value: float
+    low: float | None
+    high: float | None
+    observations: int
+    clusters: int
+    indistinguishable_from_zero: bool = Field(
+        description=(
+            "Whether zero sits inside the interval. When true, a positive mean has not "
+            "been shown to be positive and must not be presented as an edge."
+        )
+    )
+
+
+class DayPointOut(ApiModel):
+    day: date
+    profit: float
+    trades: int
+    clusters: int
+    cumulative: float
+
+
+class BreakdownOut(ApiModel):
+    key: str
+    trades: int
+    clusters: int
+    win_rate: IntervalOut | None = None
+    total_profit: float
+    mean_profit: float
+    reportable: bool = Field(
+        description="False when the group has too few independent clusters to mean anything."
+    )
+
+
+class JournalOut(ApiModel):
+    """Journal style reporting over settled candidates.
+
+    Not a record of trades taken. See `analytics/journal.py`: every row here is a
+    candidate the screen surfaced and `optscan resolve` settled at expiry, with no
+    fill, no slippage and no early management.
+    """
+
+    trades: int
+    clusters: int
+    settlement_dates: int
+    wins: int
+    losses: int
+    scratches: int
+    win_rate: IntervalOut | None = None
+    expectancy: EstimateOut | None = None
+    avg_win: float | None = None
+    avg_loss: float | None = None
+    profit_factor: float | None = Field(
+        default=None,
+        description="None when nothing lost, which is undefined rather than infinite.",
+    )
+    total_profit: float
+    max_drawdown: float
+    best_day: DayPointOut | None = None
+    worst_day: DayPointOut | None = None
+    days: list[DayPointOut] = Field(default_factory=list)
+    by_strategy: list[BreakdownOut] = Field(default_factory=list)
+    by_symbol: list[BreakdownOut] = Field(default_factory=list)
+    by_dte: list[BreakdownOut] = Field(default_factory=list)
+    by_score: list[BreakdownOut] = Field(default_factory=list)
+    reportable: bool = Field(
+        description="False when the whole sample is under the cluster minimum for a claim."
+    )
+    notes: list[str] = Field(default_factory=list)

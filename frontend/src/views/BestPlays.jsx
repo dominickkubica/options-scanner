@@ -1,0 +1,265 @@
+import { useMemo } from "react";
+import { api } from "../api.js";
+import { ErrorBox, Notes, Panel, useAsync } from "../components/common.jsx";
+import { count, money, num, pct, reasonLabel, strategyLabel } from "../format.js";
+
+// The landing screen: what is worth looking at first, across the whole watchlist.
+//
+// Opportunities is the full ranked table and stays exactly as it is. This view exists
+// because a 200 row table sorted by a composite score answers "what did the screen
+// find" and not "what should I look at", and those are different questions. Here the
+// top candidate is a card rather than the first row of a table, because the first row
+// of a table does not look any more important than the fortieth.
+//
+// Three rules govern everything below, and none of them are styling:
+//
+//   1. This view scans the watchlist, not the selected symbol. A "best play available"
+//      that silently meant "best play in NVDA" would be the most misleading screen in
+//      the app. The sidebar selection deliberately does not reach this component.
+//
+//   2. A near miss is never drawn like a play. Near misses are scored with the same
+//      function as passing candidates and routinely score higher, because the gate
+//      that blocked them is not an input to the score. The top blocked candidate in
+//      testing scored 0.976 against 0.956 for the best that actually passed. Anything
+//      that let those two share a visual language would be actively dangerous, so
+//      blocked cards are outlined and muted and always carry their blocker.
+//
+//   3. The score gets a bar, not a colour band. A green-amber-red ramp would assert
+//      that some threshold is good, and no threshold here has earned that: the
+//      validation study is still under its own cluster minimum. The bar shows the
+//      number relative to the others on screen and claims nothing else.
+
+const TOP_COUNT = 6;
+
+// The one blocker that clears by waiting rather than by the market moving. Everything
+// else in the near miss list needs a price or a spread to change.
+const MATURES_ON_ITS_OWN = "dte_too_long";
+
+function legText(row) {
+  return row.legs
+    .map((leg) => `${leg.action === "sell" ? "-" : "+"}${leg.strike}${leg.right}`)
+    .join(" / ");
+}
+
+function ScoreBar({ score, muted }) {
+  const width = `${Math.max(0, Math.min(1, score)) * 100}%`;
+  return (
+    <div className="score-bar" title={`score ${num(score, 3)}`}>
+      <span className={`score-bar-fill ${muted ? "muted" : ""}`} style={{ width }} />
+    </div>
+  );
+}
+
+function Metric({ label, value, wide }) {
+  return (
+    <div className={`metric ${wide ? "wide" : ""}`}>
+      <span className="metric-value">{value}</span>
+      <span className="metric-label">{label}</span>
+    </div>
+  );
+}
+
+// The single best passing candidate, given the room to actually be read.
+function HeroPlay({ play, onOpenPayoff }) {
+  return (
+    <div className="hero-card">
+      <div className="hero-head">
+        <div>
+          <div className="hero-symbol">{play.symbol}</div>
+          <div className="hero-strategy">{strategyLabel(play.strategy)}</div>
+        </div>
+        <div className="hero-score">
+          <div className="hero-score-value">{num(play.score, 3)}</div>
+          <div className="metric-label">score</div>
+        </div>
+      </div>
+
+      <div className="hero-legs">{legText(play)}</div>
+      <div className="hero-sub">
+        {play.expiry} &middot; {play.dte}d to expiry &middot; spot {num(play.underlying_price)}
+      </div>
+
+      <ScoreBar score={play.score} />
+
+      <div className="metric-row">
+        <Metric label="credit" value={num(play.credit)} />
+        <Metric label="max profit" value={money(play.max_profit)} />
+        <Metric label="max loss" value={money(play.max_loss)} />
+        <Metric label="capital" value={money(play.capital)} />
+        <Metric label="annualized" value={pct(play.annualized_return, 0)} />
+        <Metric label="prob of profit" value={pct(play.probability_of_profit, 0)} />
+        <Metric label="short delta" value={num(play.short_delta)} />
+        <Metric label="liquidity" value={num(play.liquidity_score)} />
+      </div>
+
+      {play.warnings.length > 0 && (
+        <ul className="hero-warnings">
+          {play.warnings.map((warning, index) => (
+            <li key={index}>{warning}</li>
+          ))}
+        </ul>
+      )}
+
+      <button type="button" className="btn primary" onClick={() => onOpenPayoff(play)}>
+        Show payoff
+      </button>
+    </div>
+  );
+}
+
+function PlayCard({ play, onOpenPayoff }) {
+  return (
+    <button type="button" className="play-card" onClick={() => onOpenPayoff(play)}>
+      <div className="play-head">
+        <span className="play-symbol">{play.symbol}</span>
+        <span className="play-score">{num(play.score, 3)}</span>
+      </div>
+      <div className="play-strategy">{strategyLabel(play.strategy)}</div>
+      <div className="play-legs">{legText(play)}</div>
+      <ScoreBar score={play.score} />
+      <div className="play-metrics">
+        <Metric label="credit" value={num(play.credit)} />
+        <Metric label="profit" value={money(play.max_profit)} />
+        <Metric label="ann" value={pct(play.annualized_return, 0)} />
+        <Metric label="pop" value={pct(play.probability_of_profit, 0)} />
+      </div>
+      <div className="play-foot">
+        {play.expiry} &middot; {play.dte}d
+      </div>
+    </button>
+  );
+}
+
+// Outlined, never filled. See rule 2 at the top of the file.
+function BlockedCard({ item }) {
+  const play = item.opportunity;
+  const countdown = item.enters_screen_in_days;
+  return (
+    <div className="play-card blocked">
+      <div className="play-head">
+        <span className="play-symbol">{play.symbol}</span>
+        <span className="play-score">{num(play.score, 3)}</span>
+      </div>
+      <div className="play-strategy">{strategyLabel(play.strategy)}</div>
+      <div className="play-legs">{legText(play)}</div>
+      <ScoreBar score={play.score} muted />
+      <div className="blocker-line">
+        {countdown === null ? "blocked by" : "waiting on"} {reasonLabel(item.blocker)}
+      </div>
+      {countdown !== null && (
+        <div className="countdown">
+          {countdown === 0 ? "eligible now" : `enters the screen in ${countdown}d`}
+        </div>
+      )}
+      <div className="play-foot">
+        {play.expiry} &middot; {play.dte}d
+      </div>
+    </div>
+  );
+}
+
+export default function BestPlays({ onOpenPayoff, onSeeAll }) {
+  // Symbols deliberately null: the server falls back to the whole watchlist, which is
+  // the only thing that makes "best available" a true statement.
+  const { data, error, loading } = useAsync(() => api.scan(null, 200, { nearMiss: true }), []);
+
+  const { hero, runners, maturing, almost } = useMemo(() => {
+    if (!data) return { hero: null, runners: [], maturing: [], almost: [] };
+    const plays = data.opportunities;
+    const near = data.near_misses || [];
+    return {
+      hero: plays[0] || null,
+      runners: plays.slice(1, TOP_COUNT),
+      maturing: near
+        .filter((item) => item.blocker === MATURES_ON_ITS_OWN)
+        .sort((a, b) => a.enters_screen_in_days - b.enters_screen_in_days),
+      almost: near.filter((item) => item.blocker !== MATURES_ON_ITS_OWN).slice(0, TOP_COUNT),
+    };
+  }, [data]);
+
+  if (loading) return <div className="loading">Ranking the watchlist...</div>;
+  if (error) return <ErrorBox error={error} />;
+  if (!data) return null;
+
+  return (
+    <>
+      <Notes items={data.notes} />
+
+      <Panel
+        title="Best play available"
+        right={
+          <span className="provenance">
+            {count(data.passed)} passed of {count(data.considered)} across{" "}
+            {data.symbols_scanned.join(", ") || "no symbols"}
+          </span>
+        }
+      >
+        {hero ? (
+          <>
+            <HeroPlay play={hero} onOpenPayoff={onOpenPayoff} />
+            <div className="caveat">{data.disclaimer}</div>
+          </>
+        ) : (
+          <div className="empty-state">
+            Nothing passed the screen on the last capture. The Opportunities view has
+            the rejection tally, which usually points at a threshold in screen.yaml
+            rather than an empty market.
+          </div>
+        )}
+      </Panel>
+
+      {runners.length > 0 && (
+        <Panel
+          title="Next best"
+          right={
+            <button type="button" className="btn" onClick={onSeeAll}>
+              See all {count(data.opportunities.length)}
+            </button>
+          }
+        >
+          <div className="card-grid">
+            {runners.map((play) => (
+              <PlayCard key={play.id} play={play} onOpenPayoff={onOpenPayoff} />
+            ))}
+          </div>
+        </Panel>
+      )}
+
+      {maturing.length > 0 && (
+        <Panel
+          title="Coming onto the screen"
+          right={<span className="provenance">blocked only by the {"<="} 60 day ceiling</span>}
+        >
+          <div className="card-grid">
+            {maturing.map((item) => (
+              <BlockedCard key={item.opportunity.id} item={item} />
+            ))}
+          </div>
+          <div className="caveat">
+            These clear by the calendar alone: nothing has to happen for them to become
+            eligible, only time. Their credit and liquidity will have moved by then, so
+            the numbers shown are today's, not a forecast of the day they qualify.
+          </div>
+        </Panel>
+      )}
+
+      {almost.length > 0 && (
+        <Panel title="One gate away">
+          <div className="card-grid">
+            {almost.map((item) => (
+              <BlockedCard key={item.opportunity.id} item={item} />
+            ))}
+          </div>
+          <div className="caveat">
+            Each of these failed exactly one check group and needs the market to move to
+            pass. They are shown outlined rather than filled because they can and do
+            outscore everything that passed: the gate blocking them is not an input to
+            the score, so a high number here is not a better trade, it is a trade the
+            screen rejected. A check group can also hide a second problem behind the
+            reason it names.
+          </div>
+        </Panel>
+      )}
+    </>
+  );
+}
