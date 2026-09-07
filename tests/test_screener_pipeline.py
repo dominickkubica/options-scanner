@@ -14,7 +14,7 @@ import pytest
 
 from optscan.analytics.events import EventWindow
 from optscan.models import ChainSnapshot, Right, Strategy
-from optscan.screener.config import ScreenConfig
+from optscan.screener.config import DteFilter, Filters, ScreenConfig
 from optscan.screener.context import analyze_snapshot
 from optscan.screener.gaps import (
     Executability,
@@ -41,10 +41,12 @@ def analysis(frozen_snapshot: ChainSnapshot):
 
 @pytest.fixture
 def wide_config() -> ScreenConfig:
-    """Loose enough that the two week fixture produces candidates at all.
+    """Loose enough that the two week fixture produces candidates on every strategy.
 
-    The frozen chain is 4 and 8 days out, well inside the default 21 day floor, so the
-    default config correctly finds nothing in it.
+    The frozen chain is 4 and 8 days out. That used to sit inside the default 21 day
+    floor, so this fixture existed to get past it; since the band widened to 0 to 45 the
+    defaults admit those expiries too, and what this still relaxes is the annualized
+    return floor so the thinner strategies also generate.
     """
     return ScreenConfig.model_validate(
         {
@@ -297,16 +299,29 @@ class TestGaps:
 
 
 class TestPipeline:
-    def test_default_config_finds_nothing_in_a_two_week_fixture(self, frozen_snapshot) -> None:
-        """Both expiries are inside the 21 day floor, so an empty table is correct.
+    def test_an_empty_table_explains_itself(self, frozen_snapshot) -> None:
+        """An unexplained empty table is how a screener loses its user.
 
-        And the tally has to say why, because an unexplained empty table is how a
-        screener loses its user.
+        The screen is far dated so the emptiness is deliberate. This used to rely on
+        the shipped 21 day floor excluding the fixture's two week expiries, which
+        stopped being true when that floor moved to 0.
         """
-        result = scan_snapshot(frozen_snapshot, ScreenConfig(), rate=RATE)
+        far_dated = ScreenConfig(filters=Filters(dte=DteFilter(min_dte=300, max_dte=400)))
+        result = scan_snapshot(frozen_snapshot, far_dated, rate=RATE)
         assert result.opportunities == []
         assert result.tally.counts
         assert "dte_too_short" in result.tally.summary()
+
+    def test_the_shipped_config_admits_the_two_week_fixture(self, frozen_snapshot) -> None:
+        """The point of widening the band to 0 to 45: short dated expiries now screen.
+
+        Under the old 21 day floor this fixture produced nothing, which is what made it
+        useful as an empty-table case and is exactly why the screen had never surfaced
+        a trade this account would take.
+        """
+        result = scan_snapshot(frozen_snapshot, ScreenConfig(), rate=RATE)
+        assert result.opportunities
+        assert result.tally.passed > 0
 
     def test_widening_the_window_finds_candidates(self, frozen_snapshot, wide_config) -> None:
         result = scan_snapshot(frozen_snapshot, wide_config, rate=RATE)

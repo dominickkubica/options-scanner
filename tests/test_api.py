@@ -78,6 +78,10 @@ WIDE_SCREEN = ScreenConfig(
     )
 )
 
+#: A screen no expiry in the frozen fixture can satisfy, so the result is empty by
+#: construction rather than by coincidence with the shipped DTE band.
+FAR_DATED_SCREEN = ScreenConfig(filters=Filters(dte=DteFilter(min_dte=300, max_dte=400)))
+
 
 class EventfulProvider(FakeProvider):
     """A provider that does have a corporate calendar, unlike the default fake."""
@@ -275,10 +279,17 @@ def test_history_window_is_bounded(client: TestClient) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_scan_explains_an_empty_table(client: TestClient) -> None:
-    """The default screen wants 21 to 60 DTE and the fixture is 4 and 8. An empty
-    result with no explanation is how a screener loses its user."""
-    body = client.get("/api/scan", params={"symbols": ["SPY"]}).json()
+def test_scan_explains_an_empty_table(api_settings: Settings, fake_provider: FakeProvider) -> None:
+    """An empty result with no explanation is how a screener loses its user.
+
+    The emptiness is forced by the screen passed in rather than by whatever the shipped
+    defaults happen to be. This test used to rely on the default 21 day floor excluding
+    the fixture's 4 and 8 day expiries, and it broke the day that floor moved to 0,
+    which is the wrong reason for a test about explaining an empty table to fail.
+    """
+    with build_client(api_settings, fake_provider, FAR_DATED_SCREEN) as client:
+        body = client.get("/api/scan", params={"symbols": ["SPY"]}).json()
+
     assert body["opportunities"] == []
     assert body["considered"] > 0
     reasons = {item["reason"]: item["count"] for item in body["rejections"]}

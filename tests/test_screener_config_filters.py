@@ -17,7 +17,7 @@ from optscan.analytics.events import EventWindow
 from optscan.analytics.ivrank import Confidence, IVRank
 from optscan.analytics.returns import NO_COMMISSIONS, Commissions, short_put_profile
 from optscan.models import Action, Leg, Right, Strategy
-from optscan.screener.config import ScreenConfig
+from optscan.screener.config import DteFilter, Filters, ScreenConfig
 from optscan.screener.filters import (
     Rejection,
     RejectionTally,
@@ -101,7 +101,7 @@ class FakeExpiry:
 class TestConfigLoading:
     def test_defaults_when_there_is_no_file(self, tmp_path: Path) -> None:
         config = ScreenConfig.load(tmp_path / "absent.yaml")
-        assert config.filters.dte.min_dte == 21
+        assert config.filters.dte.min_dte == 0
         assert config.max_results == 50
 
     def test_none_path_is_defaults(self) -> None:
@@ -170,10 +170,19 @@ class TestConfigLoading:
 
 class TestFilters:
     def test_dte_window(self) -> None:
-        config = ScreenConfig()
+        """The band is given explicitly, so this tests the filter and not the default.
+
+        It previously read the shipped 21 to 60 window, which made it fail the day that
+        window was widened to 0 to 45 even though check_dte had not changed.
+        """
+        config = ScreenConfig(filters=Filters(dte=DteFilter(min_dte=21, max_dte=60)))
         assert check_dte(candidate(dte=22), config).passed
         assert check_dte(candidate(dte=5), config).reason is Rejection.DTE_TOO_SHORT
         assert check_dte(candidate(dte=200), config).reason is Rejection.DTE_TOO_LONG
+
+    def test_the_shipped_window_admits_zero_dte(self) -> None:
+        """0 DTE is inside the default band on purpose: it is what the account trades."""
+        assert check_dte(candidate(dte=0), ScreenConfig()).passed
 
     def test_delta_band(self) -> None:
         config = ScreenConfig()
@@ -336,8 +345,11 @@ class TestEventFilter:
 class TestEvaluateAndTally:
     def test_evaluate_reports_the_first_and_most_decisive_failure(self) -> None:
         analysis = FakeAnalysis()
+        # Fails DTE and delta at once. The point is which reason is reported, so the
+        # window is stated here rather than inherited from whatever ships.
+        config = ScreenConfig(filters=Filters(dte=DteFilter(min_dte=21, max_dte=60)))
         bad = candidate(dte=2, legs=(leg(delta=-0.9),))
-        result = evaluate(bad, analysis, analysis.expiries[0], ScreenConfig())
+        result = evaluate(bad, analysis, analysis.expiries[0], config)
         assert result.reason is Rejection.DTE_TOO_SHORT
 
     def test_a_good_candidate_passes_everything(self) -> None:
@@ -348,7 +360,7 @@ class TestEvaluateAndTally:
         """The reason a screener keeps a user's trust when it finds nothing."""
         analysis = FakeAnalysis()
         tally = RejectionTally.empty()
-        config = ScreenConfig()
+        config = ScreenConfig(filters=Filters(dte=DteFilter(min_dte=21, max_dte=60)))
         for dte in (2, 3, 4):
             tally.record(evaluate(candidate(dte=dte), analysis, analysis.expiries[0], config))
         tally.record(evaluate(candidate(), analysis, analysis.expiries[0], config))

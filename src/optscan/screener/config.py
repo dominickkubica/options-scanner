@@ -32,13 +32,25 @@ class StrictModel(BaseModel):
 class DteFilter(StrictModel):
     """Days to expiry window.
 
-    The default 21 to 60 covers the range most premium selling research points at:
-    far enough out that theta is not yet dominated by gamma, near enough that
-    annualized return is worth the capital.
+    Was 21 to 60, the range most premium selling research points at: far enough out
+    that theta is not yet dominated by gamma, near enough that annualized return is
+    worth the capital.
+
+    Widened to 0 to 45 on 2026-09-07 against the imported broker ledger, which showed
+    337 of 380 option legs expiring the day they were opened. The old floor of 21 meant
+    the screen had never once surfaced a trade this account would take, and a
+    validation study of a screen nobody trades measures nothing.
+
+    **Scoring below about five days is not yet trustworthy, and the DTE gate is not the
+    reason.** `annualized_return` is undefined at 0 DTE, so those candidates fall into
+    the branch written for undefined risk positions and are discounted 0.75 for it; and
+    `min_annualized_return` silently stops applying there because the value it compares
+    against is None. Both are recorded in the scoring module. Neither is fixed by
+    changing this window.
     """
 
-    min_dte: int = Field(default=21, ge=0)
-    max_dte: int = Field(default=60, ge=0)
+    min_dte: int = Field(default=0, ge=0)
+    max_dte: int = Field(default=45, ge=0)
 
     @model_validator(mode="after")
     def _ordered(self) -> Self:

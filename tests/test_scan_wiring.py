@@ -225,12 +225,20 @@ class TestScanCommand:
     def test_an_empty_result_still_explains_itself(
         self, stored: Settings, monkeypatch: pytest.MonkeyPatch, capsys, tmp_path: Path
     ) -> None:
-        """The default 21 day floor excludes the whole fixture, and the user has to
-        be told that rather than shown a blank table."""
+        """A blank table with no rejection tally is how a screener loses its user.
+
+        The screen is passed in so the emptiness is deliberate. This test used to lean
+        on the default 21 day floor excluding the fixture, and it broke the day that
+        floor moved to 0, which is the wrong reason for a test about explaining an
+        empty table to fail.
+        """
         from optscan.cli import main
 
         monkeypatch.setenv("OPTSCAN_DATA_DIR", str(tmp_path))
-        assert main(["scan", "--symbol", "SPY", "--no-events"]) == 0
+        config = tmp_path / "far_dated.yaml"
+        config.write_text("filters:\n  dte:\n    min_dte: 300\n    max_dte: 400\n")
+
+        assert main(["scan", "--symbol", "SPY", "--no-events", "--config", str(config)]) == 0
         out = capsys.readouterr().out
         assert "No candidates passed the screen" in out
         assert "dte_too_short" in out

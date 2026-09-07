@@ -10,10 +10,17 @@
 
 filters:
   dte:
-    # Far enough out that theta is not yet dominated by gamma, near enough that the
-    # annualized return is worth the capital.
-    min_dte: 21
-    max_dte: 60
+    # Widened to 0 on 2026-09-07 because the account actually trades 0DTE: 337 of 380
+    # imported option legs expired the day they were opened. The old 21 to 60 band
+    # meant the screen had never once surfaced a trade this account would take.
+    #
+    # Read the warning in scoring.py before trusting the ranking down here. Two things
+    # break below about five days and neither is visible in the output:
+    # annualized return is undefined at 0 DTE and saturates the premium ramp at 1 for
+    # everything above it, and the min_annualized_return gate below stops applying at
+    # 0 DTE because the number it compares against is None.
+    min_dte: 0
+    max_dte: 45
 
   delta:
     # The conventional short premium band. Below it the credit stops paying for the

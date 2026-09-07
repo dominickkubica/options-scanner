@@ -1383,3 +1383,100 @@ they now read the tokens. And `chart/theme.js` carries a fallback table for the 
 where a token resolves empty against the stylesheet, which is a race rather than a
 missing value: a stale entry there would repaint the chart in last month's palette on
 exactly the frames nobody is watching. It mirrors `:root` and has to keep doing so.
+
+---
+
+## 2026-09-07: the broker ledger, and what importing real fills revealed
+
+`optscan import` reads a Robinhood activity export into an append only ledger, and
+`optscan trades` reports what the account actually did. New: `models/broker.py`,
+`imports/robinhood.py`, `analytics/ledger.py`, `storage/ledger.py`, migration 6.
+
+### A ledger, not positions
+
+Statement rows are stored raw and positions are derived. The reason shows up on the
+second import rather than the first: the next export will overlap this one by a month,
+and an importer that wrote positions directly would have to decide, per position,
+whether it had seen it before. Against raw rows with a stable identity a re-import is a
+no-op, verified both in a test and against the real file.
+
+Identity is `(source, digest, dup_index)`, not `(source, digest)`. Two genuinely
+identical fills on one day are two trades and a content hash cannot tell them apart, so
+the importer counts occurrences within a file. Without the index a real trade quietly
+disappears; without the digest the account doubles.
+
+### Three things in the format that would each have produced a wrong number
+
+**Accounting parentheses.** `($34.04)` is cash out. Parsed naively every debit becomes
+a credit.
+
+**Two description shapes.** A trade is `TSLA 9/4/2026 Call $357.50`; an expiration is
+`Option Expiration for IBIT 8/14/2026 Call $37.00`. A parser written against the first
+alone loses every expiration and leaves the position open forever.
+
+**The trailing S, which is not decoded at all.** Robinhood marks one leg of an expiring
+spread `1S`. The first implementation read it as "short" and produced six phantom open
+contracts. In all three expiring spreads in the reference file the S sat on the leg that
+was bought, and also on the higher strike, and three cases cannot separate those two
+rules. So the S is captured and never used: an expiration's direction comes from the
+holding the ledger says was open at that moment, which is right whatever the S means and
+stays right if Robinhood changes it. `signed_quantity` returns None for an expiration
+rather than guessing, and the resolution lives in `analytics/ledger.py`.
+
+### Fees are measured, and only where they can be
+
+Price times multiplier times quantity does not equal the amount, and the gap is the
+regulatory fee: 4 cents a contract on buys, 6 on sells, $24.35 across 380 legs. That is
+the cost input every expectancy question needs and it is now a measurement rather than a
+config guess.
+
+The same arithmetic on shares is nonsense, and it announced itself: fourteen of the
+thirty four share rows produced a **negative** fee. Robinhood rounds the displayed price
+to two decimals while the amount is exact, so `HTZ Buy 100 @ $2.58` shows a gross of
+$258.00 against $257.50 actually paid. The fill was $2.575 and the 50 cent "fee" was the
+rounding, which fractional share quantities make worse. `_fee` now returns None for
+anything that is not an option trade: not zero, because the fee is unknown rather than
+absent, and an unknown averaged in as zero understates every cost built on it. Eleventh
+instance of the constant offset trap, caught by the residual having the wrong sign.
+
+### An unknown transaction code raises
+
+Robinhood has codes this export happened not to contain, assignment and exercise among
+them, and both move real contracts. Skipping what is not recognised would produce a tidy
+profit figure with legs missing from it, which is worse than a crash because nothing
+would ever say so.
+
+### What the first import showed
+
+337 of 380 option legs expired the day they were opened, and 311 of 380 were QQQ. The
+screen's DTE band was 21 to 60, so **it had never once surfaced a trade this account
+would take**, and the validation study has been calibrating a screen nobody trades. The
+band is now 0 to 45, in both `screen.yaml` and the `DteFilter` defaults so the two do
+not drift.
+
+Realized, from real fills: options +$77.65 over 177 closed round trips, equities
+-$17.87 over 9, one position still open and excluded. QQQ alone is -$38.53 over 21
+trading days, 14 up and 7 down, median day +$18.40 against a mean of -$1.83, worst day
+-$241.14. The mean sits 0.13 standard errors from zero. Days are the unit of
+independence here, so that is roughly 21 observations, barely past the 20 cluster
+minimum `calibration.py` already refuses to conclude below.
+
+### Five tests changed, and why that was the right fix
+
+Five tests leaned on the shipped 21 day floor to produce an empty result, one of them
+saying so in its own docstring. They were testing that an empty table explains itself,
+which is still worth pinning, so each now states the window it wants rather than
+inheriting whatever ships. A test about explanations should not fail because a default
+moved.
+
+One incidental repair: `test_live_fetches_from_the_provider_instead_of_disk` had been
+failing on date drift, its frozen expiries having aged past the 21 day floor. Widening
+the band fixed it. It was a real failure with a real cause, and the cause was the floor.
+
+### Open
+
+The Journal still reports `opportunity_outcome`, which is the screen held to expiry with
+no fills and no slippage. That is the wrong surface for an account that closes intraday,
+and the ledger is now the better source. Keeping the two apart matters more than merging
+them: 2,060 hypothetical candidates showing +$426,644 must never share an equity curve
+with 177 real round trips showing +$77.65.

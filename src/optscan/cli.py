@@ -7,6 +7,7 @@ module that is testable without a terminal.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -265,6 +266,39 @@ def build_parser() -> argparse.ArgumentParser:
             "impossible to rebuild: snapshot, record, resolve."
         ),
     )
+
+    import_cmd = sub.add_parser(
+        "import",
+        help="Import a broker activity export into the ledger.",
+        description=(
+            "Reads a broker statement and appends its rows to the ledger. Safe to run "
+            "on overlapping exports: rows already held are counted and skipped, so "
+            "importing this month's download after last month's adds only what is new."
+        ),
+    )
+    import_cmd.add_argument("path", help="Path to the exported CSV.")
+    import_cmd.add_argument(
+        "--broker",
+        default="robinhood",
+        choices=["robinhood"],
+        help="Which broker's export format this is. Default: robinhood.",
+    )
+    import_cmd.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Parse and report, without writing anything to the ledger.",
+    )
+
+    trades = sub.add_parser(
+        "trades",
+        help="Realized results from the imported broker ledger.",
+        description=(
+            "What the account actually did, derived from imported statements. This is "
+            "real fills, unlike `validate`, which measures the screen held to expiry."
+        ),
+    )
+    trades.add_argument("--symbol", default=None, help="Only this underlying.")
+    trades.add_argument("--limit", type=int, default=20, help="Round trips to list. Default 20.")
 
     return parser
 
@@ -868,6 +902,120 @@ def _cmd_validate(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def _money(value: float, console=None) -> str:
+    """A signed dollar figure.
+
+    The sign is written out as well as coloured, because about one man in twelve
+    cannot tell the red from the green and a terminal pasted into a chat window
+    arrives as plain text.
+    """
+    text = f"{'+' if value >= 0 else '-'}${abs(value):,.2f}"
+    if console is None:
+        return text
+    return console.good(text) if value >= 0 else console.bad(text)
+
+
+def _cmd_import(settings: Settings, args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from optscan.imports import RobinhoodParseError, parse_file
+    from optscan.storage import db
+    from optscan.storage.ledger import import_transactions
+
+    path = Path(args.path).expanduser()
+    if not path.is_file():
+        print(f"No such file: {path}")
+        return 1
+
+    try:
+        txns = parse_file(path)
+    except RobinhoodParseError as error:
+        # A parse failure names the row and the reason. It is deliberately fatal: a
+        # partially imported statement is worse than none, because the profit it
+        # produces looks complete.
+        print(f"Could not read {path.name}: {error}")
+        return 1
+
+    kinds = Counter(str(t.kind) for t in txns)
+    print(f"{path.name}: {len(txns)} transaction rows")
+    for kind, count in sorted(kinds.items()):
+        print(f"  {kind:20s} {count:5d}")
+
+    fees = [t.fee for t in txns if t.fee is not None]
+    if fees:
+        print(f"  fees measured on {len(fees)} rows, total ${sum(fees):,.2f}")
+
+    if args.dry_run:
+        print("\nDry run: nothing was written.")
+        return 0
+
+    conn = db.connect(settings.sqlite_path)
+    try:
+        report = import_transactions(conn, txns)
+    finally:
+        conn.close()
+
+    print(f"\n{report.summary()}")
+    if report.already_known:
+        print("Every row was already held. The ledger is unchanged.")
+    return 0
+
+
+def _cmd_trades(settings: Settings, args: argparse.Namespace) -> int:
+    from optscan.analytics.ledger import build_trades, summarize
+    from optscan.console import Console, pad
+    from optscan.storage import db
+    from optscan.storage.ledger import all_transactions
+
+    console = Console.for_stream(settings.color_mode)
+
+    with db.session(settings.sqlite_path) as conn:
+        txns = all_transactions(conn)
+
+    if not txns:
+        print("The broker ledger is empty. Import a statement with `optscan import`.")
+        return 0
+
+    trades = build_trades(txns)
+    summary = summarize(txns, trades)
+
+    if args.symbol:
+        wanted = args.symbol.strip().upper()
+        trades = [t for t in trades if t.key.symbol == wanted]
+
+    print(f"Ledger: {len(txns)} rows from imported statements\n")
+    print(
+        f"  options   {summary.option_trades:4d} closed   "
+        f"{_money(summary.option_realized, console)}   fees ${summary.option_fees:,.2f}"
+    )
+    print(
+        f"  equities  {summary.equity_trades:4d} closed   "
+        f"{_money(summary.equity_realized, console)}"
+    )
+    # Open positions are excluded rather than counted at whatever cash they have taken
+    # in so far, which is how an unclosed loser reads as a winner.
+    print(f"  open      {summary.open_trades:4d}          excluded from the figures above")
+    if summary.cash_flows:
+        flows = ", ".join(f"{k} ${v:,.2f}" for k, v in summary.cash_flows.items())
+        print(f"  cash movements, not results: {flows}")
+
+    closed = [t for t in trades if not t.open_at_end]
+    closed.sort(key=lambda t: t.closed_at or t.opened_at, reverse=True)
+    if closed:
+        print(f"\n  {'closed':<12}{'contract':<32}{'held':>5}  result")
+        for trade in closed[: args.limit]:
+            held = "" if trade.held_days is None else f"{trade.held_days}d"
+            # pad, not an f-string width: padding counts the escape sequence and
+            # silently misaligns every coloured column.
+            print(
+                f"  {trade.closed_at!s:<12}{trade.key!s:<32}{held:>5}  "
+                + pad(_money(trade.cash, console), 12)
+            )
+        if len(closed) > args.limit:
+            print(f"  ... {len(closed) - args.limit} more")
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     settings = get_settings()
@@ -892,6 +1040,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "backup": _cmd_backup,
         "shortcut": _cmd_shortcut,
         "health": _cmd_health,
+        "import": _cmd_import,
+        "trades": _cmd_trades,
     }
     handler = handlers[args.command]
 

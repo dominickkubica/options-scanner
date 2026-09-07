@@ -209,6 +209,73 @@ MIGRATIONS: tuple[str, ...] = (
     INSERT INTO meta (key, value)
     VALUES ('job_log_started_at', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'));
     """,
+    # 6: the broker ledger, added when Robinhood imports arrived.
+    #
+    # Raw statement rows, one per line of the export, kept append only. Positions,
+    # round trips, realized profit and the cash balance are all derived from these in
+    # analytics/ledger.py rather than written here. That is the whole design and it
+    # exists for the second import, not the first: the next export will overlap this
+    # one by a month, and an importer that wrote positions directly would have to
+    # decide per position whether it had already seen it. Against raw rows with a
+    # stable identity, a re-import is a no-op.
+    #
+    # The unique index is (source, digest, dup_index), not (source, digest). Two
+    # genuinely identical fills on one day are two trades and a content hash cannot
+    # tell them apart, so the importer counts occurrences within a file and stores the
+    # index. Collapsing them would quietly delete a real trade.
+    #
+    # Every parsed column sits beside the raw one it came from. The raw text is kept
+    # so a surprising number can always be traced back to the line the broker wrote,
+    # and so a parser fix can be re-run over history without another download.
+    """
+    CREATE TABLE broker_txn (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        source          TEXT NOT NULL,
+        source_file     TEXT,
+        imported_at     TEXT NOT NULL,
+
+        activity_date   TEXT NOT NULL,
+        process_date    TEXT,
+        settle_date     TEXT,
+        instrument      TEXT,
+        description     TEXT NOT NULL,
+        trans_code      TEXT NOT NULL,
+        quantity        REAL,
+        price           REAL,
+        amount          REAL,
+
+        kind            TEXT NOT NULL,
+        symbol          TEXT,
+        expiry          TEXT,
+        right           TEXT,
+        strike          REAL,
+        action          TEXT,
+        effect          TEXT,
+        is_short        INTEGER NOT NULL DEFAULT 0,
+        fee             REAL,
+
+        digest          TEXT NOT NULL,
+        dup_index       INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE UNIQUE INDEX idx_broker_txn_identity
+        ON broker_txn (source, digest, dup_index);
+    CREATE INDEX idx_broker_txn_date ON broker_txn (activity_date);
+    CREATE INDEX idx_broker_txn_symbol ON broker_txn (symbol, expiry);
+
+    -- One row per file taken in, so "where did this number come from" has an answer
+    -- and so a re-import reports how much of the file was already known.
+    CREATE TABLE broker_import (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        source          TEXT NOT NULL,
+        file_name       TEXT,
+        imported_at     TEXT NOT NULL,
+        rows_parsed     INTEGER NOT NULL,
+        rows_inserted   INTEGER NOT NULL,
+        rows_duplicate  INTEGER NOT NULL,
+        first_activity  TEXT,
+        last_activity   TEXT
+    );
+    """,
 )
 
 

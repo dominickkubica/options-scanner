@@ -39,6 +39,7 @@ src/optscan/
   live/             the polling refresh loop and its delta encoder
   alerts.py         alert sinks, and once-per-condition delivery
   api/              schemas, deps, views, app, routers/
+  imports/          broker statement parsers, one module per broker
 frontend/           React app: src/views, src/components, gitignored node_modules and dist
 scripts/            coverage_floor.py, the per module coverage gate
 tests/              mirrors src layout; fixtures/ holds frozen chains
@@ -58,6 +59,8 @@ venv\Scripts\python -m optscan validate # does the score actually separate outco
 venv\Scripts\python -m optscan schedule # the recurring jobs and whether Windows has them
 venv\Scripts\python -m optscan backup # copy the db, mirror the captures, verify
 venv\Scripts\python -m optscan shortcut # Desktop launcher for the dashboard
+venv\Scripts\python -m optscan import <csv> # take in a broker activity export
+venv\Scripts\python -m optscan trades  # realized results from imported statements
 venv\Scripts\python scripts/coverage_floor.py  # per module floor, after pytest --cov
 venv\Scripts\python -m optscan serve  # API on 8000, plus the UI if it is built
 npm --prefix frontend run dev         # Vite on 5173, proxying /api to 8000
@@ -108,6 +111,45 @@ and `optscan-web` entries in `.claude/launch.json`.
 
 **Phases 0 to 9 are complete and committed.** The roadmap ends at 9. Anything further is
 new scope and is **not authorized**: ask first.
+
+**Exception, authorized 2026-09-07: the broker ledger.** `optscan import` reads a
+Robinhood activity export, `optscan trades` reports what the account actually did.
+`models/broker.py`, `imports/robinhood.py`, `analytics/ledger.py`,
+`storage/ledger.py`, migration 6. Full reasoning in the DECISIONS entry of that date.
+
+- **Rows are stored raw and positions are derived.** Exports overlap, so a re-import
+  must be a no-op. Identity is `(source, digest, dup_index)`: the index is there
+  because two identical fills on one day are two trades and a hash cannot tell them
+  apart.
+- **The trailing `S` on an expiring leg is captured and never decoded.** It sat on the
+  bought leg in all three reference spreads and on the higher strike in all three, and
+  three cases cannot separate those rules. An expiration's direction comes from the
+  holding the ledger says was open. `signed_quantity` returns None rather than guessing.
+- **Fees are measured, options only.** 4 cents a contract on buys, 6 on sells. On
+  shares the same arithmetic went negative on 14 of 34 rows because Robinhood rounds the
+  displayed price while the amount is exact, so equity fees are None, not zero.
+- **An unknown transaction code raises.** Assignment and exercise move real contracts,
+  and a skipped row is a profit figure with a hole and nothing to say so.
+
+**The screener's DTE band is now 0 to 45**, in `screen.yaml` and in the `DteFilter`
+defaults so the two cannot drift. It was 21 to 60, and the imported ledger showed 337 of
+380 option legs expiring the day they were opened: the screen had never once surfaced a
+trade this account would take.
+
+**Scoring below about five days is not trustworthy yet, and widening the band did not
+cause it.** `annualized_return` is undefined at 0 DTE so those candidates fall into the
+branch written for undefined risk positions and take a 0.75 discount for it, and
+`min_annualized_return` stops applying there because the value it compares against is
+None.
+
+**Measured against all 10,020 recorded candidates, three of the five score components
+carry no information.** `component_premium` is exactly 1.000 for 88.6% of rows because
+the annualized return ramp ceiling of 0.25 is about 30x below what a credit spread
+produces. `component_event_risk` is 1.000 for 100% of rows, stdev 0.0000, because
+`exclude_earnings` removes every case it would penalise before scoring runs. `iv_rank`
+is null throughout. Only liquidity and probability actually vary, so the composite is
+roughly 5/8 liquidity and 3/8 probability of profit, which is the most likely
+explanation for the score being anti-correlated with profit. **Not yet fixed.**
 
 **Exception, authorized 2026-09-07: the price chart.** `frontend/src/components/chart/`
 replaces the old `Candles.jsx`. Intervals 1D, 1W and 1M, windows per interval, candles
