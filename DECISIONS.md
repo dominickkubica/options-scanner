@@ -1518,3 +1518,143 @@ day with an interval of -$14 to +$17 that includes zero. Worth watching as the s
 grows: same session entries are -$32.47 over 31 days while the handful held overnight or
 longer are +$92.25 over 8. Eight is not a sample and this is not a finding, but it is the
 opposite of what the account is doing most of.
+
+---
+
+## 2026-09-07: a downloaded volatility history, and the two traps it sprang
+
+The user signed up for Market Chameleon and exported its daily history for QQQ and
+AAPL. Each file is 3,188 sessions, 2014-01-02 to 2026-09-04, and carries a column no
+provider this project can reach has ever offered: **IV30, the vendor's own 30 day
+constant maturity implied volatility, for every session.**
+
+That column is the thing this project has been blocked on since it started. IV rank
+needs 20 daily observations and the tool had 8 after weeks of capture, so
+`component_iv_rank` was null on all 10,020 recorded candidates and every rank in the UI
+read `insufficient`. The Phase 8 note calling a historical backfill "the highest
+leverage purchase available" priced it at ThetaData's 40 dollars a month. This was free.
+
+### What was measured before anything was built
+
+Against the full QQQ file, because the standing rule here is to count hits against real
+data before believing anything:
+
+- **3,185 of 3,188 rows carry an IV30**, ranging 8.56 to 79.36, median 17.63. Only 7
+  consecutive identical values in 3,187 pairs, so it is a real daily series rather than
+  something forward filled.
+- **`Adj Close` differs from `Close` on exactly 52 rows**, which is exactly 12.7 years
+  of quarterly dividends. `Change` reconciles with close to close on all but those same
+  52. That reconciliation is what confirms the row ordering and that the adjustment is
+  real, and it is the reason to trust the rest of the file.
+- **The same three sessions are blank in both tickers** (2014-07-02, 2014-07-08,
+  2015-06-23), so those are holes in the vendor's own pipeline and will appear in every
+  symbol. They are stored as None. A zero would be a published number.
+- **Open interest begins 2018-01-30**; option volume is complete throughout.
+- **IV30 exceeds HV30 on 60.1% of days, median ratio 1.07.** Worth recording because it
+  was asserted in conversation to be "nearly everywhere" before it was measured. The
+  variance risk premium is real but modest, and comparing IV/HV against 1.0 would still
+  call 60% of all days rich, which describes the market rather than finding anything.
+- **Put/call volume has a median of 1.39 on QQQ and 0.578 on AAPL.** Same shape of
+  trap: the raw ratio is a property of the instrument, not a signal about the day.
+
+### The format's one real hazard
+
+**There is no symbol column anywhere in the file.** The ticker exists only in the
+filename. A renamed download files twelve years of one instrument under another's name,
+every number downstream is wrong, and nothing anywhere contradicts it. So `parse_file`
+requires the symbol as an argument rather than inferring it, and the import refuses to
+overwrite: a session already stored whose values disagree is counted, never applied.
+The two causes are separated by shape, since a vendor revision touches a handful of
+sessions and a wrong ticker disagrees on nearly all of them. Verified by importing the
+AAPL file as QQQ: 3,188 of 3,188 conflicted, the warning named the likely cause, and
+nothing was written.
+
+### Trap ten, caught because the data arrived
+
+`analyze_snapshot` ranked `expiries[0].atm_iv`, the **front** expiry, against a history
+built at 30 day constant maturity. Those are two different quantities: short dated ATM
+vol is mechanically elevated. Measured on the stored captures, the front expiry solves
+to **43 vol points on QQQ and 83 on AAPL** at 0 DTE, against 30 day points of 17.2 and
+25.5, and against a one year range topping out near 30. That ranks full on the calmest
+day of the year.
+
+It had never fired because no history was ever long enough to produce a rank at all.
+Importing 3,185 observations is precisely what would have made it live, so it was fixed
+in the same change. `atm_iv_near_dte` reads the vol at the history's own tenor and
+returns **None** outside a half-to-double band rather than the nearest available,
+because a rank from a mismatched tenor is worse than no rank: nothing downstream can
+tell it was mismatched. When that happens the UI now gets a sentence saying which of the
+two reasons applies, since a gauge that renders nothing and explains nothing reads as a
+broken feature.
+
+### Trap eleven, which this session created and then removed
+
+The pooling rule says an IV history belongs to one vendor. The obvious reading is about
+concatenating two series. The subtler form appeared immediately: the *current* value was
+still the locally solved ATM vol while the *range* was now Market Chameleon's.
+
+Measured on 2026-09-02, the two vendors disagree by **-3.2% on QQQ and +2.9% on AAPL**,
+in opposite directions, so there is not even a systematic bias that could be corrected.
+Small, until it goes through a rank, which divides by a narrow 52 week range: QQQ's rank
+came out **0.14 cross vendor against 0.181 self consistent**, a 29% relative error from
+a 3% difference in vol. `vendor_iv_history` now splits the vendor's own latest reading
+off as `current`, which also keeps today out of the range it is ranked inside.
+
+### Trap eleven's second half, and the reason a ranking is not a score
+
+Then the real one. `composite` drops a component it cannot compute and renormalizes the
+remaining weights, which is right within one symbol: it stops an unavailable input from
+dragging every score toward zero without changing any order.
+
+Across symbols it is badly wrong, and it *became* wrong the moment a history existed for
+two tickers and not the other four. Renormalizing a missing component silently replaces
+it with the average of that candidate's other components, which for a candidate the
+screen already likes is a high number. Measured on the live config against an otherwise
+identical candidate:
+
+    no IV history at all      0.9387
+    with a real iv_rank 0.18  0.7870   (-0.152)
+    break even                0.9387
+
+**Below an IV rank of 0.939, importing a volatility history lowers a symbol's score.**
+QQQ's honest 0.18 cost it enough to drop out of the Best plays list entirely, for the
+sole reason that its data exists. That is the recurring bug in a new place: a structural
+difference, here which components happen to be computable, read as a difference in
+quality.
+
+`harmonize_scores` rescores a list that will be ranked against itself over the
+**intersection** of components its members share, and every affected row carries a
+warning naming what was dropped. The intersection throws away real information about the
+symbols that have more, and that is the correct direction anyway: a comparison is only as
+good as its weakest common ground. Downloading the remaining four tickers is what widens
+it back, which makes that a data errand with an obvious fix rather than a scoring problem.
+
+**It is applied for display only, never when recording.** `jobs/validate.py` passes no
+config, on purpose: a recorded score must depend only on the candidate, never on which
+other symbols happened to be in the same batch, or the validation study is calibrating a
+number that moves for reasons the market did not.
+
+### Smaller things
+
+- **The two histories are chosen between, never merged.** More observations wins, which
+  is 3,185 against 8 and will not be close within the tool's lifetime. The loser is
+  discarded rather than kept as a fallback for missing days.
+- **`optscan serve` and the CLI now share one loader**, so the dashboard and the terminal
+  cannot rank a symbol against different history.
+- **The IV rank panel's empty state was a lie as of today.** It said a rank "needs months
+  of daily captures and cannot be backfilled", which was true this morning. It now points
+  at `optscan import-history`.
+- **Best plays claimed a 60 day ceiling** while `screen.yaml` had said 45 since the DTE
+  band moved this morning. The number was hardcoded in the JSX. `ScanOut` now echoes
+  `max_dte` and the heading reads it.
+
+### What this does not do
+
+IV30 is a single number, not a surface: no skew, no term structure, no per strike vol.
+It supports a rank, an IV/HV comparison and vol regime context. It cannot price a 20
+delta put and it cannot touch 0DTE, so it does **not** on its own enable a backtest with
+modelled credits. The scoring recalibration is still the next job, and is now better
+armed: `component_iv_rank` has stopped being null, which leaves `component_premium`
+saturated at 1.000 on 88.6% of rows and `component_event_risk` a literal constant.
+
+Downloads are limited to 2 per 24 hours on the trial. SPY and IWM are the next two.

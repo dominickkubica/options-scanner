@@ -106,7 +106,10 @@ def scan(
         result.stale_symbols[item.symbol] = item.age_seconds()
         combined.merge(result)
 
-    combined.rank(config.max_results)
+    # config passed on purpose: this list is displayed ranked across symbols, so
+    # it is rescored on the components they all share. The record job deliberately
+    # does not do this; see harmonize_scores and jobs/validate.py.
+    combined.rank(config.max_results, config=config)
 
     return ScanOut(
         opportunities=[opportunity_view(item) for item in combined.top(limit)],
@@ -122,6 +125,7 @@ def scan(
                 combined.tally.counts.items(), key=lambda pair: (-pair[1], pair[0].value)
             )
         ],
+        max_dte=config.filters.dte.max_dte,
         symbols_scanned=combined.symbols_scanned,
         symbols_failed=combined.symbols_failed,
         stale=combined.stale_symbols,

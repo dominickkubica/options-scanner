@@ -276,6 +276,74 @@ MIGRATIONS: tuple[str, ...] = (
         last_activity   TEXT
     );
     """,
+    # 7: a vendor's own daily history, added when Market Chameleon exports arrived.
+    #
+    # This table exists for one column, iv30. Every other vendor reachable through the
+    # MarketDataProvider interface publishes current implied volatility and nothing
+    # historical, which is why iv_rank has been null on all 10,020 recorded candidates
+    # since the project started: a rank needs a year of daily observations and the only
+    # way to get one was to wait a year. A downloaded file is twelve years of them.
+    #
+    # Identity is (source, symbol, session_date) with no digest, unlike broker_txn. A
+    # day is a day. The broker table needs a content hash and a duplicate index because
+    # two identical fills in one session are two real trades; two rows for one session
+    # of one symbol from one vendor are a mistake, and the unique index says so.
+    #
+    # source is on the identity because an IV history is per vendor and pooling two is
+    # corrupt in a way nothing downstream can detect. Market Chameleon's IV30 and the
+    # ATM vols this project solves out of its own stored chains are two different
+    # series that happen to measure the same idea, and the difference between them is
+    # a level shift, which is exactly what a rank normalizes against.
+    #
+    # Prices are stored as the vendor published them, adjusted and unadjusted side by
+    # side, because which one a calculation should use depends on the calculation. A
+    # return series wants the adjusted close; a strike comparison wants the real one.
+    """
+    CREATE TABLE vendor_daily (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        source              TEXT NOT NULL,
+        symbol              TEXT NOT NULL,
+        session_date        TEXT NOT NULL,
+        source_file         TEXT,
+        imported_at         TEXT NOT NULL,
+
+        open                REAL NOT NULL,
+        high                REAL NOT NULL,
+        low                 REAL NOT NULL,
+        close               REAL NOT NULL,
+        adj_close           REAL,
+        volume              INTEGER,
+        vwap                REAL,
+
+        -- 30 day constant maturity implied vol, as a decimal. The reason for the table.
+        iv30                REAL,
+
+        call_volume         INTEGER,
+        put_volume          INTEGER,
+        call_open_interest  INTEGER,
+        put_open_interest   INTEGER
+    );
+    CREATE UNIQUE INDEX idx_vendor_daily_identity
+        ON vendor_daily (source, symbol, session_date);
+    CREATE INDEX idx_vendor_daily_symbol ON vendor_daily (symbol, session_date);
+
+    -- One row per file taken in, so any number traces back to the download that
+    -- produced it. conflicts counts sessions already held whose values disagreed with
+    -- the incoming file: those are never overwritten, only reported.
+    CREATE TABLE vendor_import (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        source              TEXT NOT NULL,
+        symbol              TEXT NOT NULL,
+        file_name           TEXT,
+        imported_at         TEXT NOT NULL,
+        rows_parsed         INTEGER NOT NULL,
+        rows_inserted       INTEGER NOT NULL,
+        rows_duplicate      INTEGER NOT NULL,
+        rows_conflicting    INTEGER NOT NULL DEFAULT 0,
+        first_session       TEXT,
+        last_session        TEXT
+    );
+    """,
 )
 
 

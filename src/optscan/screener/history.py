@@ -44,6 +44,22 @@ class IvHistory:
     points: list[tuple[date, float]] = field(default_factory=list)
     source: str | None = None
     excluded: dict[str, int] = field(default_factory=dict)
+    #: This vendor's own most recent reading, excluded from `points` above.
+    #:
+    #: A rank places a value inside a range, so the value and the range have to be the
+    #: same quantity measured the same way. Ranking a locally solved ATM vol inside a
+    #: downloaded vendor's range is the pooling rule broken in a new place: measured on
+    #: 2026-09-02 the two disagree by -3.2% on QQQ and +2.9% on AAPL, in opposite
+    #: directions, so there is not even a bias that could be corrected for.
+    #:
+    #: None means the caller should read today's vol off the chain, which is right for
+    #: a series this project solved for itself out of its own captures.
+    current: float | None = None
+    #: Whether this came from an imported file rather than this project's own
+    #: captures. Stated in the UI: every other number on the dashboard says where
+    #: it came from, and a rank sourced from a vendor download while the chain
+    #: beside it comes from somewhere else is exactly the case that needs saying.
+    downloaded: bool = False
 
     def __len__(self) -> int:
         return len(self.points)
@@ -65,6 +81,13 @@ class IvHistory:
         who switched providers last week and sees the confidence drop back to
         insufficient needs to know it is the switch and not a broken job.
         """
+        if self.downloaded:
+            return (
+                f"Ranked against {len(self.points)} sessions of imported {self.source} "
+                "history, including today's reading from the same source. The chain "
+                "shown elsewhere on this page is a different vendor's, so it is not "
+                "mixed in: two vendors' implied vols are not one series."
+            )
         if not self.excluded:
             return None
         others = ", ".join(f"{count} from {name}" for name, count in sorted(self.excluded.items()))
@@ -209,3 +232,57 @@ def _to_datetime(value) -> datetime | None:
     stamp = pd.Timestamp(value)
     stamp = stamp.tz_localize(UTC) if stamp.tzinfo is None else stamp.tz_convert(UTC)
     return stamp.to_pydatetime()
+
+
+def vendor_iv_history(points: list[tuple[date, float]], source: str) -> IvHistory:
+    """Wrap a downloaded vendor series, splitting its latest reading off as `current`.
+
+    Nothing is excluded here because the query that produced the points already
+    filtered on source: a downloaded file is one vendor by construction, unlike the
+    snapshot table, which can hold captures from several.
+
+    The split does two jobs at once and both are required:
+
+      - It gives the rank a current value from the **same vendor** as the range it
+        will be measured against. Ranking a locally solved vol inside a downloaded
+        vendor's range is the pooling rule broken in a new place.
+      - It keeps today out of its own history. `iv_rank` says so explicitly: a value
+        that is part of the range it is being placed in is biased toward the middle,
+        and most so in exactly the calm stretches where the rank should read low.
+    """
+    ordered = sorted(points)
+    if not ordered:
+        return IvHistory(source=source)
+    current = ordered[-1][1]
+    return IvHistory(points=ordered[:-1], source=source, current=current, downloaded=True)
+
+
+def choose_iv_history(own: IvHistory, vendor: IvHistory) -> IvHistory:
+    """Pick one of two vendors' series. Never merge them.
+
+    ## Why this is a choice and not a combination
+
+    The project's hard rule is that an implied vol history belongs to one vendor.
+    Two vendors disagree about the mid of a wide contract, about which strikes are
+    quoted at all, and about what time of day their number represents, and the
+    difference between them is a level shift. A rank is exactly a measure of where a
+    value sits inside a range, so splicing a level shift into the range moves the rank
+    without the market having moved. Concatenating a downloaded twelve year series to
+    eight locally solved sessions would do precisely that, at the join, invisibly.
+
+    ## The rule
+
+    More observations wins, because a rank is only as good as the range it is measured
+    against and nothing else here separates the two series in quality. In practice that
+    is not close: a Market Chameleon export is roughly 3,185 sessions against the 8
+    this project has captured for itself, and the local series will not overtake it
+    within the lifetime of the tool.
+
+    The loser is discarded rather than kept as a fallback for missing days, for the
+    same reason it is not merged.
+    """
+    if not vendor:
+        return own
+    if not own:
+        return vendor
+    return vendor if len(vendor) >= len(own) else own

@@ -1,0 +1,95 @@
+"""A vendor's daily history for one symbol: prices, and the volatility they quoted.
+
+This is the shape of a Market Chameleon daily export, and it is deliberately not the
+shape of `PriceBar`. A `PriceBar` is OHLCV fetched live from a provider through the
+`MarketDataProvider` interface. A row here is a line of a file a human downloaded, and
+it carries something no provider on that interface has ever been able to give us: the
+vendor's own 30 day constant maturity implied volatility, for every session going back
+years.
+
+## Why this arrives as a file instead of through a provider
+
+Because there is no endpoint for it. Every vendor looked at so far publishes current
+implied volatility and nothing historical: Tradier's chain is today's chain, yfinance
+has no vol at all, and the two paid backfills researched in Phase 8 both wanted money
+for raw chains that would then have to be re-solved. IV rank needs a year of daily
+observations and the only way this project could ever get one was to wait a year.
+
+A downloaded file skips the wait. That is its entire value and it is worth the
+awkwardness of an import step.
+
+## Vol is stored as a decimal
+
+The file quotes IV30 as `17.19`, meaning 17.19 vol points. Everything inside this
+project stores volatility as a decimal, `0.1719`, and only `format.js` multiplies by
+100 for display. The conversion happens once, in the parser, and there is a test
+pinning it. A hundredfold error in a volatility is not subtle in a payoff diagram but
+it is completely invisible in a rank, which is where this number is actually going.
+
+## One row per session per vendor per symbol
+
+A day is a day, so identity is `(source, symbol, session_date)` and needs no digest.
+That is the one way this differs from the broker ledger, where two identical fills on
+one day are two real trades and a content hash cannot separate them.
+"""
+
+from __future__ import annotations
+
+from datetime import date
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class VendorDailyBar(BaseModel):
+    """One session of one symbol, as one vendor published it.
+
+    Every field past the close is optional because the coverage genuinely varies
+    within a single file: the QQQ export carries option open interest only from
+    2018-01-30 onward and has three isolated days with no IV30 at all. None means the
+    vendor published nothing, never that it published zero.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    source: str = Field(description="Which vendor published this. Never pool two.")
+    symbol: str
+    session_date: date
+
+    open: float
+    high: float
+    low: float
+    close: float
+    #: Back adjusted for dividends. Returns are computed from this, not from `close`,
+    #: because a dividend is not volatility. Measured on 12.7 years of QQQ the choice
+    #: moves HV30 by 0.002 vol points on average, so it is nearly free rather than
+    #: load bearing, and it is documented here so nobody re-derives that.
+    adj_close: float | None = None
+    volume: int | None = None
+    vwap: float | None = None
+
+    #: 30 day constant maturity implied volatility, as a decimal. The reason this
+    #: model exists.
+    iv30: float | None = None
+
+    call_volume: int | None = None
+    put_volume: int | None = None
+    call_open_interest: int | None = None
+    put_open_interest: int | None = None
+
+    @property
+    def return_close(self) -> float:
+        """The close to use for a return series: adjusted where the vendor gave one."""
+        return self.adj_close if self.adj_close is not None else self.close
+
+    @property
+    def put_call_volume_ratio(self) -> float | None:
+        """Put volume over call volume, or None when either side is missing or zero.
+
+        Raw, and raw is not a signal. QQQ's median is 1.39 over 3,181 sessions because
+        an index is structurally put heavy from hedging, so anything that reads "above
+        one" as bearish is describing the instrument rather than the day. Rank it
+        against its own history before drawing any conclusion from it.
+        """
+        if not self.call_volume or self.put_volume is None:
+            return None
+        return self.put_volume / self.call_volume

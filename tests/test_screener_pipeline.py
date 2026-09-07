@@ -26,6 +26,7 @@ from optscan.screener.gaps import (
     fit_smile,
     implied_forward,
 )
+from optscan.screener.history import IvHistory
 from optscan.screener.scan import scan_analysis, scan_snapshot, scan_snapshots
 from optscan.screener.scoring import composite, ramp, score_premium, score_probability
 from optscan.screener.strategies import GENERATORS, generators_for
@@ -220,7 +221,14 @@ class TestScoring:
 
     def test_thin_history_produces_a_caveat_on_every_row(self, frozen_snapshot) -> None:
         """One session of history cannot support an IV rank, and the row says so."""
-        history = [(date(2026, 7, 29), 0.13), (date(2026, 7, 30), 0.14)]
+        history = IvHistory(
+            points=[(date(2026, 7, 29), 0.13), (date(2026, 7, 30), 0.14)],
+            source="yfinance",
+            # The fixture's expiries are 4 and 8 days out, so nothing on it can be
+            # read at the history's thirty day tenor. current is supplied so this test
+            # stays about the length of the history, which is what it is named for.
+            current=0.14,
+        )
         result = scan_snapshot(
             frozen_snapshot,
             ScreenConfig.model_validate(

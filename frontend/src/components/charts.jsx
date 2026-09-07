@@ -329,7 +329,7 @@ export function SkewCurve({ putSkew, callSkew, spot, atmIv }) {
   );
 }
 
-export function IvRankGauge({ ivRank }) {
+export function IvRankGauge({ ivRank, note }) {
   const width = 260;
   const height = 96;
   const barY = 42;
@@ -338,10 +338,20 @@ export function IvRankGauge({ ivRank }) {
   const right = width - 16;
 
   if (!ivRank) {
+    // Two different absences, and they need different sentences. A tenor mismatch is
+    // about this capture and no amount of waiting fixes it; a missing history is
+    // about this symbol and one download fixes it. Saying "needs months of captures"
+    // for both was true until vendor exports could be imported, and is now advice
+    // that would leave someone waiting for something they can have in a minute.
     return (
       <div className="empty-state">
-        No volatility history for this symbol yet. IV rank needs months of daily captures
-        and cannot be backfilled.
+        {note || (
+          <>
+            No volatility history for this symbol yet. Import a vendor daily export with{" "}
+            <code>optscan import-history</code>, or wait for enough daily captures to
+            accumulate.
+          </>
+        )}
       </div>
     );
   }

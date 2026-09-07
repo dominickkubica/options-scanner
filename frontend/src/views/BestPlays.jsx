@@ -228,7 +228,11 @@ export default function BestPlays({ onOpenPayoff, onSeeAll }) {
       {maturing.length > 0 && (
         <Panel
           title="Coming onto the screen"
-          right={<span className="provenance">blocked only by the {"<="} 60 day ceiling</span>}
+          right={
+            <span className="provenance">
+              blocked only by the {"<="} {data.max_dte ?? "DTE"} day ceiling
+            </span>
+          }
         >
           <div className="card-grid">
             {maturing.map((item) => (

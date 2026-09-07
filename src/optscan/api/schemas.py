@@ -138,6 +138,9 @@ class IvRankOut(ApiModel):
 
 
 class SymbolSummaryOut(ApiModel):
+    #: Why there is no iv_rank, when the reason is the capture rather than the history.
+    #: Set only when iv_rank is null; the gauge renders this sentence in its place.
+    iv_rank_note: str | None = None
     symbol: str
     spot: float
     session_date: date
@@ -544,6 +547,15 @@ class ScanOut(ApiModel):
             "Whether the earnings exclusion actually ran. When false the screen is "
             "weaker than the same config run from the CLI, and saying so is the only "
             "way that difference is visible."
+        ),
+    )
+    max_dte: int | None = Field(
+        default=None,
+        description=(
+            "The screen's DTE ceiling, echoed so the UI can name it instead of "
+            "hardcoding it. It was hardcoded as 60 in the near miss heading and went "
+            "stale the day the band moved to 0-45, which is the whole argument for "
+            "sending it."
         ),
     )
     near_misses: list[NearMissOut] = Field(

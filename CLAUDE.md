@@ -60,6 +60,8 @@ venv\Scripts\python -m optscan schedule # the recurring jobs and whether Windows
 venv\Scripts\python -m optscan backup # copy the db, mirror the captures, verify
 venv\Scripts\python -m optscan shortcut # Desktop launcher for the dashboard
 venv\Scripts\python -m optscan import <csv> # take in a broker activity export
+venv\Scripts\python -m optscan import-history <csv|dir> # vendor daily history, with its IV30
+venv\Scripts\python -m optscan history # what downloaded vendor history is held
 venv\Scripts\python -m optscan trades  # realized results from imported statements
 venv\Scripts\python scripts/coverage_floor.py  # per module floor, after pytest --cov
 venv\Scripts\python -m optscan serve  # API on 8000, plus the UI if it is built
@@ -91,10 +93,19 @@ and `optscan-web` entries in `.claude/launch.json`.
 - Every filter rejection carries a reason, and the tally is printed. An unexplained
   empty result table is how a screener loses its user.
 - Before believing any detector, check whether it is measuring a constant offset. That
-  mistake has now been made nine times. Run it against tests/fixtures and count the hits
+  mistake has now been made eleven times. Run it against tests/fixtures and count the hits
   before believing any of it. If the measure needs a baseline, the baseline usually has
   to account for structure rather than being uniform: see `occupancy_share`, where the
   null is how much time price actually spent at each price.
+- The tenth and eleventh both arrived with the Market Chameleon import and neither was
+  a detector. The tenth was a **tenor mismatch**: ranking a front expiry's vol against a
+  thirty day history compares two quantities that differ structurally, not two levels.
+  The eleventh was about **which components exist**: renormalizing a missing score
+  component across symbols scores "no data" as though it were "excellent", so importing
+  a real but low IV rank made a symbol rank worse. Both are the same shape as the rest.
+  A structural difference read as a quality difference, and both were invisible until
+  real data with uneven coverage arrived. **Whenever coverage is uneven across the
+  things being compared, ask what the comparison does with the gaps.**
 - The ninth instance was not a measure but a **sample**: rows in the validation log share
   a chain and resolve together, so 903 of them are a few dozen observations. Whenever
   something is counted, ask what the unit of independence actually is before putting an
@@ -131,6 +142,64 @@ Robinhood activity export, `optscan trades` reports what the account actually di
 - **An unknown transaction code raises.** Assignment and exercise move real contracts,
   and a skipped row is a profit figure with a hole and nothing to say so.
 
+**Exception, authorized 2026-09-07: downloaded vendor volatility history.** `optscan
+import-history` reads a Market Chameleon daily export, `optscan history` reports what is
+held. `models/vendor.py`, `imports/marketchameleon.py`, `storage/vendor.py`, migration 7.
+Full reasoning in the DECISIONS entry of that date.
+
+**This is what finally makes IV rank real.** One export is 3,188 sessions back to 2014
+carrying the vendor's own IV30, against the 8 daily captures this project had managed
+for itself. `component_iv_rank` was null on all 10,020 recorded candidates and is not
+any more: QQQ now ranks 0.181 at percentile 0.194 on 252 observations, confidence high.
+Held for QQQ and AAPL only. **The trial allows 2 downloads per 24 hours; SPY and IWM are
+the next two.**
+
+Four rules came out of it and none are cosmetic:
+
+- **The format has no symbol column.** The ticker is in the filename and nowhere else,
+  so a renamed file imports the wrong instrument under the right name and nothing
+  contradicts it. The symbol is a required argument, never inferred silently, and an
+  import that disagrees with stored sessions is **counted and refused, never applied**.
+  Verified by importing AAPL as QQQ: 3,188 of 3,188 conflicted and nothing was written.
+- **IV30 is in vol points and this project stores decimals.** 17.19 becomes 0.1719, once,
+  in the parser, with a test on it. A hundredfold vol error is obvious in a payoff
+  diagram and invisible in a rank, which is the only place it goes.
+- **Two vendors' series are chosen between, never merged**, and the *current* value must
+  come from the same vendor as the range it is ranked inside. Ranking a locally solved
+  vol in a downloaded range is the pooling rule broken in a new place: measured, the two
+  disagree by -3.2% on QQQ and +2.9% on AAPL, in opposite directions, and QQQ's rank came
+  out 0.14 that way against 0.181 done properly.
+- **Absent is not zero.** Three sessions have no IV30 in every ticker (they are holes in
+  the vendor's pipeline, not the symbol's), and open interest starts 2018-01-30.
+
+**Trap ten: a rank must read today's vol at the history's own tenor.** `analyze_snapshot`
+used to rank `expiries[0].atm_iv`, the front expiry, against a 30 day history. Short
+dated ATM vol is mechanically elevated: the front expiry solves to 43 vol points on QQQ
+and 83 on AAPL at 0 DTE against 30 day points of 17.2 and 25.5. It never fired only
+because no history was long enough to produce a rank, so importing one is exactly what
+would have made it live. `atm_iv_near_dte` returns None outside a half-to-double band
+rather than the nearest expiry, and `SymbolAnalysis.iv_rank_note` carries the reason so
+the gauge explains itself instead of rendering blank.
+
+**Trap eleven: a cross-symbol ranking may only use components every candidate has.**
+`composite` renormalizes a missing component onto the others, which is right within one
+symbol and badly wrong across them, because it silently replaces the missing value with
+the average of that candidate's other components. Measured on the live config: **below an
+IV rank of 0.939, having imported a history LOWERS a symbol's score.** QQQ's honest 0.18
+cost it 0.152 and dropped it out of Best plays for the sole reason that its data exists.
+
+`scoring.harmonize_scores` rescores a to-be-ranked list over the **intersection** of what
+its members share, and every affected row says what was dropped. It is called from the
+scan router and the CLI display, and deliberately **not** from `jobs/validate.py`: a
+recorded score must depend only on the candidate, never on which symbols shared its
+batch, or the study calibrates a number that moves for reasons the market did not.
+Downloading the other four tickers is what widens the intersection back.
+
+**What it does not do.** IV30 is one number, not a surface. No skew, no term structure,
+no per strike vol. It supports a rank, an IV/HV comparison and vol regime context; it
+cannot price a 20 delta put and cannot touch 0DTE, so it does not on its own enable a
+backtest with modelled credits.
+
 **The screener's DTE band is now 0 to 45**, in `screen.yaml` and in the `DteFilter`
 defaults so the two cannot drift. It was 21 to 60, and the imported ledger showed 337 of
 380 option legs expiring the day they were opened: the screen had never once surfaced a
@@ -147,7 +216,8 @@ carry no information.** `component_premium` is exactly 1.000 for 88.6% of rows b
 the annualized return ramp ceiling of 0.25 is about 30x below what a credit spread
 produces. `component_event_risk` is 1.000 for 100% of rows, stdev 0.0000, because
 `exclude_earnings` removes every case it would penalise before scoring runs. `iv_rank`
-is null throughout. Only liquidity and probability actually vary, so the composite is
+was null throughout, and is now real for any symbol with an imported history (see
+above). Only liquidity and probability actually vary, so the composite is
 roughly 5/8 liquidity and 3/8 probability of profit, which is the most likely
 explanation for the score being anti-correlated with profit. **Not yet fixed.**
 

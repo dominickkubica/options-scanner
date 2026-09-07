@@ -26,6 +26,8 @@ like failures rather than like an unavailable input.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from optscan.analytics.ivrank import Confidence
 from optscan.models import Opportunity, ScoreComponents
 from optscan.screener.config import ScreenConfig
@@ -217,3 +219,89 @@ def score_candidate(
         fetched_at=analysis.asof,
         source=analysis.source,
     )
+
+
+def comparable_components(opportunities: Sequence[Opportunity]) -> set[str]:
+    """The component names every one of these opportunities could compute.
+
+    The intersection, not the union. See `harmonize_scores` for why that direction.
+    """
+    available: set[str] | None = None
+    for opportunity in opportunities:
+        present = {
+            name for name, value in opportunity.components.as_dict().items() if value is not None
+        }
+        available = present if available is None else (available & present)
+    return available or set()
+
+
+def harmonize_scores(
+    opportunities: Sequence[Opportunity], config: ScreenConfig
+) -> list[Opportunity]:
+    """Rescore a set that will be ranked against each other, on components they share.
+
+    ## The bug this exists to prevent
+
+    `composite` drops a component it cannot compute and renormalizes the remaining
+    weights. Within one symbol that is right: it stops an unavailable input from
+    dragging every score toward zero and reordering nothing.
+
+    Across symbols it is badly wrong, and it became wrong the moment a downloaded vol
+    history existed for some tickers and not others. Renormalizing away a missing
+    component silently replaces it with the *average of that candidate's other
+    components*, which for a candidate the screen already likes is a high number. So a
+    symbol with no history is scored as though its IV rank were excellent, and a
+    symbol with a real, honest, low IV rank is scored on the truth.
+
+    Measured on the live config against an otherwise identical candidate: the break
+    even IV rank is 0.939. Below that, having imported a vol history *lowers* a
+    symbol's score. QQQ's real rank of 0.18 cost it 0.152 of composite, enough to drop
+    it out of the Best plays list entirely, for the sole reason that its data exists.
+
+    That is this project's recurring bug in a new place, the eleventh instance: a
+    structural difference, here which components happen to be computable, read as a
+    difference in quality.
+
+    ## The rule
+
+    A ranking may only use what every candidate in it has. The intersection is
+    therefore the right direction, even though it throws away real information about
+    the symbols that have more: a comparison is only as good as its weakest common
+    ground, and ranking on a component half the field is missing is not a comparison
+    at all. Importing history for the rest of the watchlist is what widens it back,
+    and that is a data problem with an obvious fix rather than a scoring one.
+
+    Scores computed for a single symbol are untouched. This is only for a list that
+    will be sorted against itself.
+    """
+    if not opportunities:
+        return list(opportunities)
+
+    shared = comparable_components(opportunities)
+    weights = config.weights.as_dict()
+    dropped = sorted(name for name in weights if name not in shared)
+    if not dropped:
+        return list(opportunities)
+
+    note = (
+        "Ranked without "
+        + ", ".join(dropped)
+        + ": not every symbol compared here could compute it, and a ranking may only "
+        "use what all of its candidates have."
+    )
+
+    rescored = []
+    for opportunity in opportunities:
+        values = opportunity.components.as_dict()
+        total = sum(values[name] * weights[name] for name in shared)
+        weight = sum(weights[name] for name in shared)
+        score = min(max(total / weight, 0.0), 1.0) if weight > 0 else 0.0
+        rescored.append(
+            opportunity.model_copy(
+                update={
+                    "score": score,
+                    "warnings": (*opportunity.warnings, note),
+                }
+            )
+        )
+    return rescored

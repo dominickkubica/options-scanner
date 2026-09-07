@@ -42,15 +42,13 @@ from optscan.analytics.events import EventWindow
 from optscan.api.schemas import Provenance
 from optscan.config import REPO_ROOT, Settings, get_settings
 from optscan.jobs.load import latest_snapshot
-from optscan.jobs.scan import STALE_AFTER_HOURS
+from optscan.jobs.scan import STALE_AFTER_HOURS, load_iv_history
 from optscan.live import LiveHub
 from optscan.logging import get_logger
 from optscan.models import ChainSnapshot, PriceBar, SymbolEvents
 from optscan.providers import MarketDataProvider, ProviderError, get_provider
 from optscan.screener.config import DEFAULT_CONFIG_FILENAME, ScreenConfig
 from optscan.screener.context import SymbolAnalysis, analyze_snapshot
-from optscan.screener.history import IvHistory, atm_iv_history
-from optscan.storage import read_snapshots
 
 log = get_logger("optscan.api.deps")
 
@@ -375,14 +373,10 @@ def _solve(
     with_events: bool,
 ) -> SolvedSymbol:
     """Do the expensive part. Called with the key's solve lock held."""
-    frame = read_snapshots(settings.snapshot_path, symbol=normalized)
-    # Attributed to the snapshot's own source rather than the configured provider, so
-    # that switching vendors does not silently re-rank the captures already on disk.
-    iv_history = (
-        atm_iv_history(frame, rate=settings.risk_free_rate, source=snapshot.source)
-        if not frame.empty
-        else IvHistory(source=snapshot.source)
-    )
+    # The same loader the CLI scan uses, so the dashboard and the terminal can never
+    # rank a symbol against different history. It picks one vendor's series and says
+    # which; it never pools two.
+    iv_history = load_iv_history(settings, normalized, snapshot)
     history = list(iv_history.points)
 
     events: EventWindow | None = None
@@ -401,7 +395,7 @@ def _solve(
     analysis = analyze_snapshot(
         snapshot,
         rate=settings.risk_free_rate,
-        iv_history=history,
+        iv_history=iv_history,
         events=events,
         max_spread_pct=config.filters.liquidity.max_spread_pct,
     )

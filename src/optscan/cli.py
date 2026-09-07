@@ -289,6 +289,47 @@ def build_parser() -> argparse.ArgumentParser:
         help="Parse and report, without writing anything to the ledger.",
     )
 
+    import_history = sub.add_parser(
+        "import-history",
+        help="Import a Market Chameleon daily export, including its IV30 history.",
+        description=(
+            "Reads a downloaded daily history file and stores it as that vendor's own "
+            "series. The reason this exists is the IV30 column: no provider this tool "
+            "can reach publishes historical implied volatility, so IV rank has been "
+            "unavailable since the project started. One file is twelve years of it.\n\n"
+            "The format has no symbol column. The ticker comes from the filename and "
+            "is printed before anything is written; pass --symbol to override it. "
+            "Safe to re-run: sessions already held are counted and skipped, and any "
+            "that disagree are reported rather than overwritten."
+        ),
+    )
+    import_history.add_argument(
+        "path",
+        help="A downloaded CSV, or a directory of them to import in one go.",
+    )
+    import_history.add_argument(
+        "--symbol",
+        default=None,
+        help=(
+            "Which ticker this file is. Defaults to the one in the filename. Required "
+            "when the filename does not carry one, because the file itself does not."
+        ),
+    )
+    import_history.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Parse and report, without writing anything.",
+    )
+
+    sub.add_parser(
+        "history",
+        help="What downloaded vendor history is held, per symbol.",
+        description=(
+            "Coverage of the imported daily histories: how many sessions, how many "
+            "carry an implied vol, and whether that is enough for a rank."
+        ),
+    )
+
     trades = sub.add_parser(
         "trades",
         help="Realized results from the imported broker ledger.",
@@ -401,6 +442,12 @@ def _cmd_scan(settings: Settings, args: argparse.Namespace) -> int:
         hours = age_seconds / 3600.0
         if hours > STALE_AFTER_HOURS:
             print(f"Stale: {symbol} quotes are {hours:.1f} hours old.")
+
+    # Rescored across the symbols actually being compared, for the same reason the
+    # dashboard does it: a component only some symbols can compute makes the ones
+    # without it look better, because the missing weight is renormalized into the
+    # average of their other components. Display only; the record job does not.
+    result.rank(config=config)
 
     rows = result.top(args.limit)
     if not rows:
@@ -961,6 +1008,128 @@ def _cmd_import(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def _import_one_history(conn, file: Path, symbol: str | None, *, dry_run: bool) -> bool:
+    """Import one export. True when it landed cleanly, False when it needs a human."""
+    from optscan.imports.marketchameleon import (
+        MarketChameleonParseError,
+        parse_file,
+        symbol_from_filename,
+    )
+    from optscan.storage.vendor import import_daily_bars
+
+    symbol = symbol or symbol_from_filename(file)
+    if not symbol:
+        print(
+            f"{file.name}: cannot tell which ticker this is. The Market Chameleon "
+            "format has no symbol column, so pass --symbol."
+        )
+        return False
+
+    try:
+        bars = parse_file(file, symbol.upper())
+    except MarketChameleonParseError as error:
+        # Fatal per file, not per run: one unreadable download should not stop the
+        # others in the folder from landing.
+        print(f"{file.name}: {error}")
+        return False
+
+    with_iv = sum(1 for bar in bars if bar.iv30 is not None)
+    print(f"\n{file.name} -> {symbol.upper()}")
+    print(
+        f"  {len(bars)} sessions, {bars[0].session_date} to {bars[-1].session_date}, "
+        f"{with_iv} with an implied vol"
+    )
+    if dry_run:
+        return True
+
+    report = import_daily_bars(conn, bars, file_name=file.name)
+    print(f"  {report.summary()}")
+    warning = report.warning()
+    if warning:
+        print(f"  ! {warning}")
+        for example in report.conflict_examples:
+            print(f"      {example}")
+        return False
+    if report.already_known:
+        print("  Every session was already held. Nothing changed.")
+    return True
+
+
+def _cmd_import_history(settings: Settings, args: argparse.Namespace) -> int:
+    from optscan.imports.marketchameleon import SOURCE
+    from optscan.storage import db
+
+    path = Path(args.path).expanduser()
+    if path.is_dir():
+        files = sorted(path.glob("*.csv"))
+        if not files:
+            print(f"No CSV files in {path}")
+            return 1
+    elif path.is_file():
+        files = [path]
+    else:
+        print(f"No such file or directory: {path}")
+        return 1
+
+    if args.symbol and len(files) > 1:
+        # One --symbol cannot describe several files, and applying it to all of them
+        # would file every ticker under one name.
+        print("--symbol takes a single file, not a directory.")
+        return 1
+
+    conn = db.connect(settings.sqlite_path)
+    try:
+        results = [
+            _import_one_history(conn, file, args.symbol, dry_run=args.dry_run) for file in files
+        ]
+    finally:
+        conn.close()
+
+    if args.dry_run:
+        print("\nDry run: nothing was written.")
+        return 0
+
+    print(f"\nStored as source '{SOURCE}'. Run `optscan history` to see coverage.")
+    return 0 if all(results) else 1
+
+
+def _cmd_history(settings: Settings, args: argparse.Namespace) -> int:
+    from optscan.analytics.ivrank import MIN_OBSERVATIONS
+    from optscan.console import Console, pad
+    from optscan.storage import db
+    from optscan.storage.vendor import coverage
+
+    console = Console.for_stream(settings.color_mode)
+
+    with db.session(settings.sqlite_path) as conn:
+        rows = coverage(conn)
+
+    if not rows:
+        print("No downloaded vendor history has been imported.")
+        print("Get a daily export and run: optscan import-history <file.csv>")
+        return 0
+
+    header = ("symbol", "source", "sessions", "with iv", "first", "last", "rank")
+    widths = (8, 16, 10, 9, 12, 12, 0)
+    print("  ".join(pad(name, width) for name, width in zip(header, widths, strict=True)))
+
+    for row in rows:
+        enough = (row["with_iv30"] or 0) >= MIN_OBSERVATIONS
+        verdict = console.good("yes") if enough else console.bad(f"needs {MIN_OBSERVATIONS}")
+        cells = (
+            pad(row["symbol"], 8),
+            pad(row["source"], 16),
+            pad(str(row["sessions"]), 10),
+            pad(str(row["with_iv30"] or 0), 9),
+            pad(row["first_session"], 12),
+            pad(row["last_session"], 12),
+            verdict,
+        )
+        print("  ".join(cells))
+
+    return 0
+
+
 def _cmd_trades(settings: Settings, args: argparse.Namespace) -> int:
     from optscan.analytics.ledger import build_trades, summarize
     from optscan.console import Console, pad
@@ -1041,6 +1210,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "shortcut": _cmd_shortcut,
         "health": _cmd_health,
         "import": _cmd_import,
+        "import-history": _cmd_import_history,
+        "history": _cmd_history,
         "trades": _cmd_trades,
     }
     handler = handlers[args.command]

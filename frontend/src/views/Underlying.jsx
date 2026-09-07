@@ -78,7 +78,7 @@ export default function Underlying({ summary }) {
 
       <div className="grid-2">
         <Panel title="Implied volatility rank">
-          <IvRankGauge ivRank={summary.iv_rank} />
+          <IvRankGauge ivRank={summary.iv_rank} note={summary.iv_rank_note} />
         </Panel>
 
         <Panel title="Term structure">

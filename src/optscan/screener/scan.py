@@ -32,7 +32,8 @@ from optscan.screener.filters import (
     evaluate_all,
 )
 from optscan.screener.gaps import Gap, find_gaps
-from optscan.screener.scoring import score_candidate
+from optscan.screener.history import IvHistory
+from optscan.screener.scoring import harmonize_scores, score_candidate
 from optscan.screener.strategies import generators_for
 
 log = get_logger("optscan.screener.scan")
@@ -82,8 +83,18 @@ class ScanResult:
         self.stale_symbols.update(other.stale_symbols)
         self.near_misses.extend(other.near_misses)
 
-    def rank(self, limit: int | None = None) -> None:
-        """Sort by score, then by annualized return as a stable tiebreak."""
+    def rank(self, limit: int | None = None, config: ScreenConfig | None = None) -> None:
+        """Sort by score, then by annualized return as a stable tiebreak.
+
+        Pass `config` when the list spans more than one symbol. Scores are then
+        recomputed over the components every candidate here shares, because
+        `composite` renormalizes a missing component into the average of the others,
+        which across symbols reads as a high score for having no data. See
+        `scoring.harmonize_scores`.
+        """
+        if config is not None and len({item.symbol for item in self.opportunities}) > 1:
+            self.opportunities = harmonize_scores(self.opportunities, config)
+
         self.opportunities.sort(
             key=lambda opportunity: (
                 -opportunity.score,
@@ -228,7 +239,7 @@ def scan_snapshots(
     *,
     rate: float,
     dividend_yield: float = 0.0,
-    iv_histories: dict[str, list] | None = None,
+    iv_histories: dict[str, IvHistory] | None = None,
     events: dict[str, EventWindow] | None = None,
     now: datetime | None = None,
 ) -> ScanResult:

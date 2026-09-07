@@ -153,16 +153,23 @@ def test_symbol_summary_solve_rate_is_reported_per_expiry(client: TestClient) ->
     assert front["solved"] < front["contracts"], "a real chain always has unsolvable strikes"
 
 
-def test_iv_rank_is_insufficient_and_says_why(client: TestClient) -> None:
-    """One captured session cannot support a rank, and the UI must be told, not left
-    to render an empty gauge that looks like a bug."""
+def test_no_iv_rank_without_a_comparable_tenor_and_it_says_why(client: TestClient) -> None:
+    """The fixture holds only 4 and 8 day expiries, so no thirty day vol can be read
+    off it and no thirty day rank exists.
+
+    The UI must be told which of the two reasons applies rather than left to render an
+    empty gauge. This capture has the history problem *and* the tenor problem, and the
+    tenor one is reported because it is the one that no amount of waiting fixes.
+
+    This used to rank the front expiry against the history regardless of its tenor,
+    which on a chain with a zero day expiry compares a 43 vol against a range topping
+    out near 30 and reads full every single day."""
     body = client.get("/api/symbols/SPY").json()
-    rank = body["iv_rank"]
-    assert rank is not None
-    assert rank["confidence"] == "insufficient"
-    assert rank["rank"] is None
-    assert rank["percentile"] is None
-    assert "observations" in (rank["caveat"] or "")
+    assert body["iv_rank"] is None
+    note = body["iv_rank_note"]
+    assert note is not None
+    assert "no expiry near it" in note
+    assert "[4, 8]" in note, "the tenors actually on the board belong in the message"
 
 
 def test_missing_symbol_404s_with_something_to_do_about_it(client: TestClient) -> None:

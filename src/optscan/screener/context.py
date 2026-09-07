@@ -12,6 +12,7 @@ Pure. The caller does the I/O and hands in the snapshot, the history, and the ev
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
@@ -36,6 +37,7 @@ from optscan.analytics.surface import (
     summarize_skew,
 )
 from optscan.models import ChainSnapshot, OptionChain, OptionContract, Right
+from optscan.screener.history import IvHistory
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +106,52 @@ class ExpiryAnalysis:
         return min(available, key=lambda strike: (abs(strike - target), strike))
 
 
+#: The tenor an IV history is measured at, and therefore the tenor today's vol has to
+#: be read at before it can be ranked against one. Both series this project can build
+#: are 30 day constant maturity: `screener.history.TARGET_DTE` interpolates stored
+#: chains to 30 days, and Market Chameleon's exported column is literally named IV30.
+DEFAULT_IV_HISTORY_DTE = 30
+
+#: How far from the target tenor an expiry may be and still be called comparable.
+#: Beyond about a factor of two the comparison stops being like for like and starts
+#: being a reading of the term structure.
+_TENOR_BAND = (0.5, 2.0)
+
+
+def atm_iv_near_dte(
+    expiries: Sequence[ExpiryAnalysis],
+    target_dte: int = DEFAULT_IV_HISTORY_DTE,
+) -> float | None:
+    """The ATM implied vol at roughly `target_dte`, or None when nothing is close.
+
+    ## Why this is not just `expiries[0]`
+
+    It used to be, and that was the tenth instance of this project's recurring bug: a
+    quantity with a large structural component read as though it were a level. Very
+    short dated ATM vol is mechanically elevated relative to a thirty day vol, so
+    ranking the front expiry against a thirty day history compares two different
+    quantities and reads high essentially always. On a real AAPL capture the front
+    expiry was a zero day contract at 83 vol points while the thirty day point was
+    25.5, which would have ranked in the hundredth percentile on the calmest day of
+    the year.
+
+    It never fired in production only because the history was always too short to
+    produce a rank at all. Importing twelve years of vendor IV30 is what would have
+    made it live, so it is fixed in the same change.
+
+    None rather than the nearest available: a rank computed from a mismatched tenor is
+    worse than no rank, because nothing downstream can tell it was mismatched.
+    """
+    usable = [item for item in expiries if item.atm_iv is not None and item.dte > 0]
+    if not usable:
+        return None
+    nearest = min(usable, key=lambda item: abs(item.dte - target_dte))
+    low, high = _TENOR_BAND
+    if not low * target_dte <= nearest.dte <= high * target_dte:
+        return None
+    return nearest.atm_iv
+
+
 @dataclass(frozen=True, slots=True)
 class SymbolAnalysis:
     """One underlying across every captured expiry."""
@@ -119,6 +167,8 @@ class SymbolAnalysis:
     term: TermStructure
     events: EventWindow
     iv_rank: IVRank | None = None
+    #: Why there is no rank, when there is history but no comparable tenor.
+    iv_rank_note: str | None = None
     quote_age_seconds: float | None = None
     liquidity: dict[tuple[date, float, Right], LiquidityScore] = field(default_factory=dict)
 
@@ -205,7 +255,8 @@ def analyze_snapshot(
     *,
     rate: float,
     dividend_yield: float = 0.0,
-    iv_history: list[tuple[date, float]] | None = None,
+    iv_history: IvHistory | None = None,
+    iv_history_dte: int = DEFAULT_IV_HISTORY_DTE,
     events: EventWindow | None = None,
     max_spread_pct: float = DEFAULT_MAX_SPREAD_PCT,
     min_price: float = DEFAULT_MIN_PRICE,
@@ -241,10 +292,27 @@ def analyze_snapshot(
     term = build_term_structure(atm_by_expiry, snapshot.session_date)
 
     rank = None
+    rank_note = None
     if iv_history:
-        front_iv = expiries[0].atm_iv if expiries else None
-        if front_iv:
-            rank = iv_rank_from_series(front_iv, iv_history, asof=snapshot.session_date)
+        # A downloaded series brings its own latest reading and that is the one to
+        # rank, because a value and the range it sits inside have to come from the
+        # same vendor. A series solved from this project's own captures has no such
+        # reading, so today's vol is read off the chain at the history's own tenor.
+        current = iv_history.current or atm_iv_near_dte(expiries, iv_history_dte)
+        if current:
+            rank = iv_rank_from_series(current, iv_history.points, asof=snapshot.session_date)
+        else:
+            # There is history but nothing comparable to rank against it. Saying so
+            # matters: a gauge that renders nothing and explains nothing reads as a
+            # broken feature, and the previous behaviour here was worse than either,
+            # ranking whatever the front expiry happened to be.
+            tenors = sorted({item.dte for item in expiries if item.atm_iv is not None})
+            rank_note = (
+                f"No IV rank: the history is measured at {iv_history_dte} days and this "
+                f"capture has no expiry near it (found {tenors or 'none'}). Ranking a "
+                "short dated vol against a thirty day range would read high on almost "
+                "any day."
+            )
 
     liquidity: dict[tuple[date, float, Right], LiquidityScore] = {}
     for analysis in expiries:
@@ -265,6 +333,7 @@ def analyze_snapshot(
         term=term,
         events=events or EventWindow(),
         iv_rank=rank,
+        iv_rank_note=rank_note,
         quote_age_seconds=snapshot.age_seconds(now),
         liquidity=liquidity,
     )

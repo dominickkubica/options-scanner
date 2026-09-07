@@ -109,6 +109,7 @@ def symbol_summary_view(solved, provenance: Provenance) -> SymbolSummaryOut:
         session_date=analysis.session_date,
         provenance=provenance,
         iv_rank=iv_rank_view(analysis.iv_rank, solved.iv_history_note),
+        iv_rank_note=analysis.iv_rank_note,
         term_structure=[
             TermPointOut(expiry=point.expiry, dte=point.dte, iv=point.iv)
             for point in analysis.term.points

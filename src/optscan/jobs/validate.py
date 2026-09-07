@@ -101,6 +101,10 @@ def run_record(
 
         candidates = list(combined.opportunities)
         if limit is not None:
+            # No config, so scores are NOT harmonized across symbols here. A
+            # recorded score must depend only on the candidate, never on which
+            # other symbols happened to be in the same batch, or the study is
+            # calibrating a number that moves for reasons the market did not.
             combined.rank(limit)
             candidates = list(combined.top(limit))
             notes.append(
