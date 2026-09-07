@@ -1480,3 +1480,41 @@ no fills and no slippage. That is the wrong surface for an account that closes i
 and the ledger is now the better source. Keeping the two apart matters more than merging
 them: 2,060 hypothetical candidates showing +$426,644 must never share an equity curve
 with 177 real round trips showing +$77.65.
+
+### The journal now reports the ledger, and the old surface was worse than wrong
+
+`GET /api/journal` reads imported broker statements instead of `opportunity_outcome`.
+The old surface reported candidates the screen surfaced and `optscan resolve` settled by
+holding them to expiry, with no fill, no slippage and no early management. Against an
+account that closes almost everything intraday it was measuring something nobody did.
+
+Its headline was **+$426,644 across 2,060 "trades"**, which is the sum of 2,060
+hypothetical single contract positions that were never held at the same time. It is not
+a large number, it is a meaningless one, and a calendar and an equity curve are the two
+most persuasive objects this app can draw. The calendar keyed on settlement dates, so it
+lit up three squares and none of them were days the account traded.
+
+Those rows still exist and still matter: they are the calibration sample for the score,
+and `optscan validate` is their report. They are simply not a journal.
+
+**The grain is `(symbol, closing day)`, not the contract.** `build_trades` cuts the
+ledger per contract because that is the arithmetic, but a four leg condor closed in one
+afternoon is four contracts and one decision. The day is also the honest unit of
+independence, since everything traded in one underlying on one day shares one market
+move. So trade count and cluster count are equal here by construction. That is the
+point: the screener study has to widen every interval from rows to clusters to avoid
+manufacturing a finding, and here there is nothing to widen because the grain was chosen
+to be the cluster.
+
+Two smaller things fell out of it. `_band` now tolerates a None rather than comparing it
+against a float, because a trade taken at a broker has no score and the breakdown should
+come back empty rather than raise. And the held-time bands were retuned from 0-20,
+21-30, 31-45, 46-60, 61+ (the thirds of the old 21 to 60 screen window) to same session,
+overnight, 2-4, 5-9, 10+. The old ones put every entry in a single bucket against an
+account that trades 0DTE, which is a breakdown that breaks nothing down.
+
+First real read: 39 trading days, +$59.78, win rate 67% (51% to 79%), expectancy $1.53 a
+day with an interval of -$14 to +$17 that includes zero. Worth watching as the sample
+grows: same session entries are -$32.47 over 31 days while the handful held overnight or
+longer are +$92.25 over 8. Eight is not a sample and this is not a finding, but it is the
+opposite of what the account is doing most of.

@@ -3,21 +3,25 @@ import { api } from "../api.js";
 import { ErrorBox, Notes, Panel, useAsync } from "../components/common.jsx";
 import { count, money, num, pct } from "../format.js";
 
-// The journal: a trade log's report surface, over settled screen candidates.
+// The journal: a trade log's report surface, over real fills.
 //
-// What this is reporting on is not trades that were taken. Nothing here has been to a
-// broker. Every row is a candidate the screen surfaced and `optscan resolve` settled at
-// expiry, and the banner at the top says so before any number is shown, because a
-// calendar and an equity curve are the two most persuasive objects this app can draw
-// and neither of them knows what it is drawing.
+// Every number here comes from broker statements taken in by `optscan import`, grouped
+// one entry per underlying per closing day. These are trades that happened, at the
+// prices they actually filled, with the fees the broker actually charged.
+//
+// It used to report settled screen candidates instead, which was a measurement of the
+// screen held to expiry with no fill and no slippage. That produced a +$426,644 total
+// across 2,060 positions that were never held at once and never traded at all, on a
+// calendar keyed to settlement dates rather than to any day the account was open. Those
+// rows still exist and are still the calibration sample for the score; `optscan
+// validate` is their report. They are not a journal.
 //
 // Three things are deliberate:
 //
 //   1. The sample banner is above the numbers, not under them. The API returns
-//      `reportable: false` until the cluster count clears the minimum, and at that
-//      point a +$426,644 total is not a result, it is three settlement dates in a calm
-//      stretch. Putting the caveat below the tiles would be printing the headline and
-//      whispering the correction.
+//      `reportable: false` until the sample clears the minimum, and putting the caveat
+//      below the tiles would be printing the headline and whispering the correction.
+//      It now qualifies how much can be concluded rather than whether it happened.
 //
 //   2. Calendar cells carry their dollar value as text. The house gain/loss pair is
 //      #46b17b against #d9635f, which measures ΔE 4.5 under deuteranopia: a red/green
@@ -95,7 +99,7 @@ function EquityCurve({ days, width = 720 }) {
     return { x, y, low, high, plotW, plotH };
   }, [days, width]);
 
-  if (!geom) return <div className="empty-state">Nothing has settled yet.</div>;
+  if (!geom) return <div className="empty-state">No closed trades yet. Import a broker statement with `optscan import`.</div>;
 
   const path = days
     .map(
@@ -182,8 +186,7 @@ function EquityCurve({ days, width = 720 }) {
       <div className="curve-readout">
         {hover === null ? (
           <span className="provenance">
-            {days.length} settlement {days.length === 1 ? "date" : "dates"},
-            cumulative
+            {days.length} trading {days.length === 1 ? "day" : "days"}, cumulative
           </span>
         ) : (
           <>
@@ -193,8 +196,8 @@ function EquityCurve({ days, width = 720 }) {
             </span>{" "}
             <span className="provenance">
               on the day, {signedMoney(days[hover].cumulative)} cumulative,{" "}
-              {count(days[hover].trades)} candidates over{" "}
-              {count(days[hover].clusters)} clusters
+              {count(days[hover].trades)}{" "}
+              {days[hover].trades === 1 ? "entry" : "entries"}
             </span>
           </>
         )}
@@ -217,7 +220,7 @@ function CalendarPnl({ days }) {
   }, [days]);
 
   if (months.length === 0)
-    return <div className="empty-state">Nothing has settled yet.</div>;
+    return <div className="empty-state">No closed trades yet. Import a broker statement with `optscan import`.</div>;
 
   return (
     <div className="calendars">
@@ -261,7 +264,7 @@ function CalendarPnl({ days }) {
                     className={`calendar-cell ${point ? `filled ${signClass(point.profit)}` : ""}`}
                     title={
                       point
-                        ? `${iso}: ${signedMoney(point.profit)} over ${point.trades} candidates, ${point.clusters} clusters`
+                        ? `${iso}: ${signedMoney(point.profit)} over ${point.trades} ${point.trades === 1 ? "entry" : "entries"}`
                         : iso
                     }
                   >
@@ -341,7 +344,7 @@ export default function Journal() {
   );
 
   if (loading)
-    return <div className="loading">Aggregating settled candidates...</div>;
+    return <div className="loading">Reading the ledger...</div>;
   if (error) return <ErrorBox error={error} />;
   if (!data) return null;
 
@@ -351,15 +354,17 @@ export default function Journal() {
 
   return (
     <>
-      {/* Above the numbers, deliberately. */}
+      {/* Above the numbers, deliberately. The banner now qualifies the sample rather
+          than disowning the source: these are real fills from imported statements, so
+          the caveat is about how much can be concluded, not about whether it happened. */}
       {!data.reportable && (
         <div className="sample-banner">
-          <strong>Not a track record.</strong> {count(data.trades)} settled
-          candidates, but only {count(data.clusters)} independent (symbol,
-          expiry) clusters on {count(data.settlement_dates)} settlement{" "}
-          {data.settlement_dates === 1 ? "date" : "dates"}. Everything below is
-          shown so the pipeline can be seen working, not because it supports a
-          conclusion.
+          <strong>Real fills, small sample.</strong> {count(data.trades)} closed{" "}
+          {data.trades === 1 ? "day" : "days"} of trading across{" "}
+          {count(data.settlement_dates)}{" "}
+          {data.settlement_dates === 1 ? "session" : "sessions"}, below the{" "}
+          minimum this tool will draw a conclusion from. Everything here happened,
+          and none of it is yet enough to tell an edge from noise.
         </div>
       )}
 
@@ -400,7 +405,7 @@ export default function Journal() {
       >
         <div className="tile-row">
           <Tile
-            label="settled"
+            label="trading days"
             value={count(data.trades)}
             sub={`${count(data.clusters)} clusters`}
           />
@@ -409,7 +414,7 @@ export default function Journal() {
             value={<IntervalText interval={data.win_rate} />}
           />
           <Tile
-            label="expectancy / candidate"
+            label="expectancy / day"
             value={expectancy ? signedMoney(expectancy.value, 2) : "n/a"}
             tone={expectancy ? signClass(expectancy.value) : ""}
             sub={
@@ -450,7 +455,7 @@ export default function Journal() {
         </div>
       </Panel>
 
-      <Panel title="Cumulative profit by settlement date">
+      <Panel title="Cumulative profit by closing date">
         <EquityCurve days={data.days} />
       </Panel>
 
@@ -460,16 +465,19 @@ export default function Journal() {
 
       <Panel title="Breakdowns">
         <div className="breakdown-grid">
-          <BreakdownTable title="strategy" rows={data.by_strategy} />
+          <BreakdownTable title="instrument" rows={data.by_strategy} />
           <BreakdownTable title="symbol" rows={data.by_symbol} />
-          <BreakdownTable title="dte" rows={data.by_dte} />
-          <BreakdownTable title="score" rows={data.by_score} />
+          <BreakdownTable title="days held" rows={data.by_dte} />
+          {/* The score breakdown is absent on purpose and the API returns it empty:
+              a trade taken at a broker was never scored by this tool, so a score
+              column over real fills would be invented numbers. Whether the score
+              predicts anything is `optscan validate`, over the candidates it
+              actually scored. */}
         </div>
         <div className="caveat">
-          Rows are dimmed where the group has too few independent clusters to
-          support a reading. Note the score bands in particular: if mean profit
-          falls as the score rises, the composite is ranking against outcomes
-          rather than with them, which is the opposite of what it claims.
+          Rows are dimmed where the group has too few independent days to support a
+          reading. Days held is 0 for a position opened and closed in one session,
+          which is most of this account.
         </div>
       </Panel>
 

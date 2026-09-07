@@ -169,6 +169,85 @@ def _key(txn: BrokerTxn) -> ContractKey | None:
 
 
 @dataclass(frozen=True, slots=True)
+class JournalEntry:
+    """One symbol's closed activity on one day, shaped for `analytics/journal.py`.
+
+    ## The grain is the trading day, not the contract
+
+    `build_trades` cuts the ledger per contract, because that is the arithmetic. A
+    journal wants something else. A four leg condor closed on one afternoon is four
+    contracts and one decision, and listing it as four trades inflates the count by
+    four while telling the reader nothing they did not already know.
+
+    So the entry is `(symbol, day the position closed)`. That is also the honest unit
+    of independence: everything traded in one underlying on one day shares one market
+    move, so it is one observation. Trade count and cluster count are therefore equal
+    here by construction, which is the point. Under the screener study the two differ
+    wildly, and every interval in the report has to be widened from rows to clusters to
+    avoid manufacturing a finding. Here there is nothing to widen, because the grain
+    was chosen to be the cluster.
+
+    ## Why `expiry` holds the closing date
+
+    The field is named for the shape `build_report` reads, where a candidate settles at
+    expiry and that is when the money moves. For a real trade the money moves when it
+    is closed, which for a 0DTE position is the same day it was opened. Keying the
+    calendar and the equity curve on anything else would draw profit on days nothing
+    was realized.
+    """
+
+    symbol: str
+    #: The day the position was closed. Named `expiry` to match what `build_report`
+    #: reads. See the class docstring.
+    expiry: date
+    profit: float
+    strategy: str
+    dte: int
+    #: Always None. A trade taken at a broker was never scored by this tool, and a
+    #: score breakdown over real fills would be a column of invented numbers.
+    score: float | None = None
+    contracts: int = 0
+    fees: float = 0.0
+
+
+def journal_entries(trades: list[Trade]) -> list[JournalEntry]:
+    """Closed round trips folded into one entry per symbol per closing day.
+
+    Open positions are dropped, not counted flat. Cash taken in on a position still
+    running is not a result, and letting it through makes every unclosed loser read as
+    a winner.
+    """
+    buckets: dict[tuple[str, date], list[Trade]] = defaultdict(list)
+    for trade in trades:
+        if trade.open_at_end or trade.closed_at is None:
+            continue
+        buckets[(trade.key.symbol, trade.closed_at)].append(trade)
+
+    entries: list[JournalEntry] = []
+    for (symbol, day), group in buckets.items():
+        options = sum(1 for t in group if t.key.is_option)
+        if options == len(group):
+            strategy = "options"
+        elif options == 0:
+            strategy = "equities"
+        else:
+            strategy = "mixed"
+        entries.append(
+            JournalEntry(
+                symbol=symbol,
+                expiry=day,
+                profit=round(sum(t.cash for t in group), 2),
+                strategy=strategy,
+                dte=max((t.held_days or 0) for t in group),
+                contracts=len(group),
+                fees=round(sum(t.fees for t in group), 2),
+            )
+        )
+    entries.sort(key=lambda e: (e.expiry, e.symbol))
+    return entries
+
+
+@dataclass(frozen=True, slots=True)
 class LedgerSummary:
     """Headline figures, separated by what they can honestly claim."""
 

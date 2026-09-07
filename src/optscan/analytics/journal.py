@@ -58,12 +58,20 @@ from optscan.analytics.calibration import (
 #: Days to expiry bands for the breakdown. Fixed rather than quantiled: the screen's
 #: own window is 21 to 60, so these are the thirds of it a reader already thinks in,
 #: and quantiles would move the edges every time the sample changed.
+#: How long a position was carried, in sessions.
+#:
+#: Retuned when the journal moved from settled candidates to real fills. The old bands
+#: were 0-20, 21-30, 31-45, 46-60, 61+, which were the thirds of the screen's own 21 to
+#: 60 window. Against this account they are useless: it closes almost everything the day
+#: it opens, so every entry landed in a single "0-20" bucket and the breakdown said
+#: nothing. Separating the same session from the overnight is the distinction that
+#: actually exists in the data.
 DTE_BANDS: tuple[tuple[str, int, int], ...] = (
-    ("0-20", 0, 20),
-    ("21-30", 21, 30),
-    ("31-45", 31, 45),
-    ("46-60", 46, 60),
-    ("61+", 61, 10_000),
+    ("same session", 0, 0),
+    ("overnight", 1, 1),
+    ("2-4 days", 2, 4),
+    ("5-9 days", 5, 9),
+    ("10+ days", 10, 10_000),
 )
 
 #: Fewest clusters that have any spread between them. One cluster is a single
@@ -283,7 +291,16 @@ def group_by(items: Sequence, attribute: str) -> list[Breakdown]:
     )
 
 
-def _band(value: float, bands) -> str | None:
+def _band(value: float | None, bands) -> str | None:
+    """Which band a value falls in, or None if it falls in none of them.
+
+    A missing value is banded as None rather than compared, because not every source
+    carries every attribute: a real trade imported from a broker has no score, and
+    comparing that None against a float raises rather than reporting an empty
+    breakdown.
+    """
+    if value is None:
+        return None
     for label, low, high in bands:
         if low <= value <= high:
             return label

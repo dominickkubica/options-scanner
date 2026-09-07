@@ -13,7 +13,7 @@ from datetime import date
 
 import pytest
 
-from optscan.analytics.ledger import ContractKey, build_trades, summarize
+from optscan.analytics.ledger import ContractKey, build_trades, journal_entries, summarize
 from optscan.imports import (
     RobinhoodParseError,
     UnknownTransactionCode,
@@ -291,3 +291,68 @@ class TestLedgerStorage:
         trades = build_trades(all_transactions(conn))
         assert len(trades) == 2
         assert sum(t.cash for t in trades) == pytest.approx(12.80)
+
+
+class TestJournalEntries:
+    """The grain the journal reports on, which is not the grain the ledger stores."""
+
+    def test_one_entry_per_symbol_per_closing_day(self):
+        """A four leg position closed in one afternoon is one decision, not four.
+
+        `build_trades` cuts per contract because that is the arithmetic. Reporting that
+        as four trades would inflate the count while telling the reader nothing.
+        """
+        entries = journal_entries(build_trades(parse_rows(SPREAD)))
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry.symbol == "QQQ"
+        assert entry.expiry == date(2026, 9, 4)
+        assert entry.profit == pytest.approx(12.80)
+        assert entry.contracts == 2
+        assert entry.strategy == "options"
+
+    def test_trades_and_clusters_are_equal_by_construction(self):
+        """Everything in one underlying on one day shares one market move.
+
+        The screener study has to widen every interval from rows to clusters. Here the
+        grain was chosen to be the cluster, so there is nothing to widen.
+        """
+        from optscan.analytics.journal import build_report
+
+        report = build_report(journal_entries(build_trades(parse_rows(SPREAD))))
+        assert report.trades == report.clusters == 1
+
+    def test_the_closing_day_keys_the_calendar_not_the_opening_day(self):
+        """Money moves when the position closes, so that is where it is drawn."""
+        rows = [
+            row("8/3/2026", "GPRO", "Gopro Inc", "Buy", "10", "$2.00", "($20.00)"),
+            row("8/5/2026", "GPRO", "Gopro Inc", "Sell", "10", "$2.50", "$24.98"),
+        ]
+        entry = journal_entries(build_trades(parse_rows(rows)))[0]
+        assert entry.expiry == date(2026, 8, 5)
+        assert entry.dte == 2
+
+    def test_an_open_position_produces_no_entry(self):
+        """Cash taken in so far is not a result."""
+        assert journal_entries(build_trades(parse_rows([SPREAD[0]]))) == []
+
+    def test_entries_carry_no_score(self):
+        """A trade taken at a broker was never scored, so the band must stay empty.
+
+        `_band` has to tolerate the None rather than compare it against a float, which
+        is what makes the score breakdown come back empty instead of raising.
+        """
+        from optscan.analytics.journal import build_report
+
+        entries = journal_entries(build_trades(parse_rows(SPREAD)))
+        assert all(entry.score is None for entry in entries)
+        assert build_report(entries).by_score == []
+
+    def test_options_and_equities_closed_together_are_marked_mixed(self):
+        rows = [
+            *SPREAD,
+            row("9/3/2026", "QQQ", "Invesco QQQ Trust", "Buy", "1", "$700.00", "($700.00)"),
+            row("9/4/2026", "QQQ", "Invesco QQQ Trust", "Sell", "1", "$710.00", "$710.00"),
+        ]
+        entry = next(e for e in journal_entries(build_trades(parse_rows(rows))))
+        assert entry.strategy == "mixed"
