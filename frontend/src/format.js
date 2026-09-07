@@ -34,6 +34,18 @@ export function count(value) {
   return absent(value) ? MISSING : Number(value).toLocaleString();
 }
 
+// A count short enough to sit in a chart header. `count` is right in a table, where
+// 39,551,200 lines up under its neighbours; it is wrong in a readout row where the
+// only question is the order of magnitude. Same null rule as everything else here.
+export function compact(value) {
+  if (absent(value)) return MISSING;
+  const size = Math.abs(Number(value));
+  if (size >= 1e9) return `${(Number(value) / 1e9).toFixed(2)}B`;
+  if (size >= 1e6) return `${(Number(value) / 1e6).toFixed(1)}M`;
+  if (size >= 1e3) return `${(Number(value) / 1e3).toFixed(1)}K`;
+  return String(Math.round(Number(value)));
+}
+
 export function age(seconds) {
   if (absent(seconds)) return MISSING;
   const minutes = seconds / 60;

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "../api.js";
-import Candles from "../components/Candles.jsx";
+import PriceChart from "../components/chart/PriceChart.jsx";
 import { IvRankGauge, SkewCurve, TermStructure } from "../components/charts.jsx";
 import { ErrorBox, Note, Panel, Provenance, Stat, useAsync } from "../components/common.jsx";
 import { count, num, pct, vol } from "../format.js";
@@ -14,7 +14,9 @@ import { count, num, pct, vol } from "../format.js";
 // the reason instead of a bar at zero.
 
 export default function Underlying({ summary }) {
-  const [days, setDays] = useState(180);
+  // Sessions of history, not calendar days: the endpoint returns one bar per unit. 126
+  // is six months of trading, and is the chart's default window.
+  const [days, setDays] = useState(126);
   // Null lets the server pick the first screenable expiry. The front week's smile is
   // dominated by gamma and is the least useful one to open on.
   const [skewExpiry, setSkewExpiry] = useState(null);
@@ -51,29 +53,26 @@ export default function Underlying({ summary }) {
         </div>
       </Panel>
 
+      {/* The window control lives inside the chart now, alongside the interval and the
+          indicators, because they are one decision made in one place. The panel title
+          therefore names the series rather than the window. */}
       <Panel
-        title={`Price, last ${days} days`}
+        title="Price"
         right={<Provenance provenance={history.data?.provenance} label="fetched" />}
       >
-        <div className="controls">
-          <label>
-            window{" "}
-            <select value={days} onChange={(event) => setDays(Number(event.target.value))}>
-              {[30, 90, 180, 365, 730].map((value) => (
-                <option key={value} value={value}>
-                  {value} days
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        {history.loading && <div className="loading">Fetching candles...</div>}
         <ErrorBox error={history.error} />
         {history.data?.note && <Note>{history.data.note}</Note>}
-        {history.data && <Candles bars={history.data.bars} />}
+        <PriceChart
+          symbol={summary.symbol}
+          bars={history.data?.bars}
+          loading={history.loading}
+          days={days}
+          onDaysChange={setDays}
+        />
         <div className="chart-note">
           Candles come from the vendor at request time, not from the stored snapshot.
-          They are the one thing on this page that is not the last capture.
+          They are the one thing on this page that is not the last capture. Weekly and
+          monthly candles are those same daily bars grouped, not a second series.
         </div>
       </Panel>
 

@@ -26,6 +26,22 @@
   --r: 12px;
   --r-lg: 12px;
   --r-pill: 999px;
+
+  /* Chart palette. Separate tokens rather than reusing --good and --bad directly,
+     because a rising candle and a profitable trade are two different statements that
+     happen to share a colour today. Given their own names they can diverge later
+     without anything hunting through JS for a hex value.
+
+     The canvas charts cannot read CSS, so charts.js resolves these at mount through
+     getComputedStyle. That keeps this block the single source of truth for both the
+     SVG charts and the lightweight-charts canvas. */
+  --chart-up: #3fb98a;
+  --chart-down: #e26762;
+  --chart-grid: rgba(255, 255, 255, 0.045);
+  --chart-axis: #7b8899;
+  --chart-crosshair: #6b7684;
+  --chart-ma-fast: #d9a441;
+  --chart-ma-slow: #9d7bd8;
 }
 
 * {
@@ -597,6 +613,191 @@ svg text {
   color: var(--dim);
   font-size: 11px;
   margin-top: 6px;
+}
+
+/* Price chart ------------------------------------------------------------ */
+/*
+ * The chart carries its own chrome: a fixed readout header, one control row, and the
+ * canvas. There is deliberately no tooltip styling here, because there is no tooltip.
+ * Hovered values are written into the header, which keeps the numbers in one place and
+ * leaves the candles unobscured.
+ */
+
+.chart-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.chart-head-main {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.chart-symbol {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+.chart-last {
+  font-family: var(--mono);
+  font-size: 19px;
+}
+
+.chart-last.dim {
+  color: var(--dim);
+  font-size: 14px;
+}
+
+/* The sign is written out as text as well as coloured, so the direction survives a
+   reader who cannot separate the red from the green. */
+.chart-change {
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.chart-change.pos {
+  color: var(--good);
+}
+
+.chart-change.neg {
+  color: var(--bad);
+}
+
+.chart-ohlc {
+  display: flex;
+  gap: 14px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+  flex-wrap: wrap;
+}
+
+.chart-ohlc em {
+  font-style: normal;
+  color: var(--dim);
+  margin-right: 2px;
+}
+
+.chart-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+/* Segmented control rather than a select. Three or five options each fit in the space
+   a dropdown's closed state occupies, and the current value is readable without a
+   click. */
+.seg {
+  display: inline-flex;
+  background: var(--bg);
+  border-radius: var(--r-sm);
+  padding: 2px;
+  gap: 2px;
+}
+
+.seg-btn {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--dim);
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.seg-btn:hover {
+  color: var(--text);
+}
+
+.seg-btn.active {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.chip-toggles {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+/* Off by default, so the resting state is the quiet one. An enabled chip takes its own
+   series colour, which is the legend: no separate key box on the canvas. */
+.chip-toggle {
+  padding: 4px 9px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--dim);
+  transition:
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+.chip-toggle:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  color: var(--muted);
+}
+
+.chip-toggle.on {
+  border-color: currentColor;
+}
+
+/* An indicator with too little history is shown and explained rather than hidden. A
+   chip that vanishes reads as a bug; one that says why reads as an answer. */
+.chip-toggle.unavailable {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.chip-reason {
+  color: var(--dim);
+}
+
+.chart-canvas {
+  width: 100%;
+  position: relative;
+  min-height: 340px;
+}
+
+/* Same height as the chart, so the panel does not jump when the candles arrive. */
+.chart-skeleton {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--r-sm);
+  background: linear-gradient(
+    100deg,
+    rgba(255, 255, 255, 0.02) 30%,
+    rgba(255, 255, 255, 0.05) 50%,
+    rgba(255, 255, 255, 0.02) 70%
+  );
+  background-size: 220% 100%;
+  animation: chart-shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes chart-shimmer {
+  from {
+    background-position: 140% 0;
+  }
+  to {
+    background-position: -40% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chart-skeleton {
+    animation: none;
+  }
 }
 
 /* Best plays ------------------------------------------------------------ */

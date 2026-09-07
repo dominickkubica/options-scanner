@@ -109,6 +109,31 @@ and `optscan-web` entries in `.claude/launch.json`.
 **Phases 0 to 9 are complete and committed.** The roadmap ends at 9. Anything further is
 new scope and is **not authorized**: ask first.
 
+**Exception, authorized 2026-09-07: the price chart.** `frontend/src/components/chart/`
+replaces the old `Candles.jsx`. Intervals 1D, 1W and 1M, windows per interval, candles
+or area, and MA20/MA50/MA200 toggleable and off by default. Full reasoning in the
+DECISIONS entry of the same date. Five things there should survive future edits:
+
+- **No floating tooltip.** Hovered values go in the fixed header above the canvas. A
+  tooltip covers the candles the reader is pointing at.
+- **No vertical gridlines, no axis borders, and the price axis is locked to autoscale.**
+  The lock is not fussiness: dragging the axis can flatten a thirty percent move into a
+  straight line, which is the chart lying because of a slip of the mouse.
+- **The wheel belongs to the page.** A chart may capture it when it owns the screen.
+  This one is a panel among five, and capturing it blocked page scrolling and silently
+  drifted the view off the latest bar.
+- **`days` on the history endpoint is a bar count, not calendar days.** Measured:
+  `days=730` returns 730 sessions starting 2023-10-09. Window sizes come from
+  `SESSIONS_PER_YEAR` so the label matches the span. The first version got this wrong in
+  the same direction on every window, which is why it looked consistent.
+- **A partial moving average is never drawn**, and an indicator that cannot draw says
+  why on its chip instead of disappearing. Same rule as the vol solver and IV rank.
+
+Indicators live in a registry at `chart/indicators.js`. Adding one means adding an entry
+there and touching nothing else; an entry may declare several plots, which is what lets
+a Bollinger band or MACD arrive without reopening the chart component. Intraday
+intervals are deliberately deferred, see the DECISIONS entry.
+
 **Visual pass, 2026-09-05.** Surfaces, radii, spacing and type were re-based on
 measured values rather than taste: page `#101626`, panel `#1d2333`, raised `#2e3446`,
 12px on cards, 8px on controls, Inter at 14px/500 self hosted through

@@ -1244,3 +1244,112 @@ Tradier's stale weekend bid and ask put the mid at 744.36 while `last` and the F
 close agree at 747.03. A 0.36 percent error in spot, on a closed market only, in the one
 input every probability is a function of. Not acted on: the snapshot job runs at 15:45
 inside the session, where the two sided market is real.
+
+---
+
+## 2026-09-07: the price chart
+
+Rebuilt the underlying price chart. `Candles.jsx` is gone and
+`frontend/src/components/chart/` replaces it: `PriceChart.jsx` draws, `indicators.js`
+is a registry, `aggregate.js` resamples, `theme.js` bridges the CSS palette into the
+canvas. Intervals 1D, 1W and 1M; windows per interval; candles or area; MA20, MA50 and
+MA200 toggleable and off by default.
+
+### Three removals, not additions
+
+**There is no floating tooltip.** Hovered values are written into a fixed header above
+the canvas and it snaps back to the last bar on mouse out. A tooltip that follows the
+cursor covers the candles the reader is pointing at and moves the numbers to a
+different place on every frame.
+
+**There are no vertical gridlines and no axis borders.** A price chart already has a
+strong horizontal structure, and every vertical rule competes with the candles for the
+same lines. This was the single largest visible declutter.
+
+**The price axis is locked to autoscale.** Dragging the axis to squash or stretch the
+price range buys nothing on a daily chart, and it lets a stray gesture flatten a thirty
+percent move into a straight line. That is the chart lying because of a slip of the
+mouse. Horizontal zoom stays, on the time axis.
+
+### The wheel belongs to the page
+
+Found by hitting it rather than by reasoning. Scrolling the page with the pointer
+anywhere over the chart zoomed the chart instead, which both blocked the scroll and
+left the view drifted away from the latest bar with no visible cause. A chart may
+capture the wheel when it owns the screen; this one is a panel stacked among five
+others. `handleScale.mouseWheel` and `handleScroll.mouseWheel` are both off, and zoom
+is reachable by dragging the time axis.
+
+### `days` is a bar count, not calendar days
+
+The history endpoint's `days` parameter returns that many **bars**. Measured against
+the running API: `days=730` comes back with 730 sessions starting 2023-10-09, which is
+nearly three years. The first version of the window table treated the parameter as
+calendar days, so the button reading "6M" was showing 8.7 months and "5Y" was showing
+7.2 years, a systematic overstatement of about forty five percent on every window.
+
+Windows are now sized in sessions off a `SESSIONS_PER_YEAR` constant, so the label is
+the calendar span the sessions actually cover. This is the constant offset trap in its
+smallest form: a number that was wrong by a fixed ratio everywhere, and therefore
+looked internally consistent.
+
+### Candles degrade to a line past 400 bars
+
+At two years of daily bars a candle is under two pixels wide and the chart is a smear
+with no readable body or wick. Past 400 displayed bars the area series is drawn
+whatever the toggle says, and the chart states the count and the reason. Chosen on
+total displayed bars rather than on the visible range: reacting to zoom would flip the
+rendering mid gesture, which is worse than a stable rule the reader can predict and
+step around by picking a coarser interval.
+
+### A partial moving average is never drawn
+
+`sma` leads with nothing until its window is full. A twenty bar average computed over
+seven bars is a different statistic wearing the same label, and on the same axis it is
+indistinguishable from the real thing. Where an indicator cannot draw at all the chip
+stays visible and says why, for example `MA200 needs 200 bars, have 126`, rather than
+disappearing. A chip that vanishes reads as a bug; one that states the shortfall reads
+as an answer.
+
+MA200 is unavailable on every monthly window and that is correct rather than a cap to
+raise: 200 months is about seventeen years.
+
+### Weekly and monthly candles are resampled, not fetched
+
+The API serves daily bars and nothing else. Aggregating in the browser costs one pass
+over data already in memory, while a second interval on the wire would mean more
+requests against a vendor that throttles silently and whose throttling would take the
+15:45 snapshot job down with it. The existing `(symbol, days)` cache is doing the rest.
+
+Two rules inside the aggregation. **A partial trailing period is kept and unmarked**,
+because the current week or month is real and forming and dropping it would hide the
+most recent price action. **A period containing any unknown volume has unknown volume**,
+because summing only the bars that carry a number publishes a partial total as if it
+were the period's, which is the null-is-not-zero rule in its most tempting form.
+
+### Indicators are a registry
+
+Adding one should mean adding an entry to `indicators.js` and touching nothing else.
+An entry declares its plots and computes them; `PriceChart` iterates the registry,
+creates whatever series each entry asks for, and knows nothing about what any of them
+mean. Multiple plots per indicator is the part that matters: it is what lets a
+Bollinger band or a MACD arrive later without reopening the chart component. An
+oscillator wanting its own pane is the one extension the registry cannot absorb alone.
+
+### Intraday deferred, deliberately
+
+1m through 1h would need the provider interface extended, an `interval` parameter on
+the history endpoint, and yfinance-specific window caps. The real cost is request
+volume against a silently throttling vendor, and the 15:45 snapshot builds a history
+that cannot be backfilled at any price. The interval control is shaped to take intraday
+later as wiring rather than a redesign. If it is built, Tradier's `timesales` is the
+safer source, at the price of a sandbox token that expires unless the account is
+funded.
+
+### One bug worth naming
+
+The interval state setter was first written as `setInterval`, which shadows the global
+timer function. Renaming the setter left one call site pointing at the real
+`setInterval`, so clicking an interval scheduled a no-op timer with a string argument
+and silently did nothing, with no error anywhere. Do not name a state setter after a
+global.
