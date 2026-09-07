@@ -1353,3 +1353,33 @@ timer function. Renaming the setter left one call site pointing at the real
 `setInterval`, so clicking an interval scheduled a no-op timer with a string argument
 and silently did nothing, with no error anywhere. Do not name a state setter after a
 global.
+
+### Palette rebased on Webull, same day
+
+The 2026-09-05 visual pass took surfaces, radii and type from TraderVue. The colour
+now comes from Webull mobile instead, measured off screenshots rather than guessed.
+Three changes carry the whole difference and none of them is structural:
+
+- **The ground is darker and blue rather than grey.** `#101626` to `#0a1020`, with the
+  panel ladder moved to match. This is most of the effect on its own.
+- **Up is a bright mint, not a sage green.** `#46b17b` to `#1fd9a0`.
+- **Down is a vivid pink, not a salmon.** `#d9635f` to `#ff3b69`.
+
+The accent also went more saturated, `#4c9be8` to `#3b7ded`, and it stays blue for the
+reason recorded in the last pass: green already means profit here, so a green primary
+button beside a green P/L figure would be one signal doing two jobs. Webull's own
+accent is blue, so the reference agrees.
+
+Incidental benefit worth recording against the Journal calendar note: mint against
+pink separates further under deuteranopia than sage against salmon did, because the
+pair now differs in lightness and in the blue channel rather than mostly in hue. The
+"colour is never the only carrier" rule is unchanged and every signed value is still
+written out.
+
+Two sources of drift were closed in the same change rather than left to rot. The hand
+rolled SVG charts held nine hardcoded hex literals for colours the tokens already
+named, so they would have kept the old palette while everything around them moved;
+they now read the tokens. And `chart/theme.js` carries a fallback table for the case
+where a token resolves empty against the stylesheet, which is a race rather than a
+missing value: a stale entry there would repaint the chart in last month's palette on
+exactly the frames nobody is watching. It mirrors `:root` and has to keep doing so.

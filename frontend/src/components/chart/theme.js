@@ -10,19 +10,23 @@
 // so a value that changed after mount would be a stylesheet edit during development,
 // and a reload covers that.
 
+// Must mirror the :root block in styles.css. It is only reached when a token resolves
+// empty, which means a race against the stylesheet rather than a missing value, so a
+// stale entry here would repaint the chart in last month's palette on exactly the
+// frames nobody is watching for it.
 const FALLBACK = {
-  "--chart-up": "#3fb98a",
-  "--chart-down": "#e26762",
-  "--chart-grid": "rgba(255,255,255,0.045)",
-  "--chart-axis": "#7b8899",
-  "--chart-crosshair": "#6b7684",
-  "--chart-ma-fast": "#d9a441",
-  "--chart-ma-slow": "#9d7bd8",
-  "--accent": "#4c9be8",
-  "--panel": "#1d2333",
-  "--panel-2": "#2e3446",
-  "--text": "#dae0e5",
-  "--dim": "#6b7684",
+  "--chart-up": "#1fd9a0",
+  "--chart-down": "#ff3b69",
+  "--chart-grid": "rgba(255,255,255,0.04)",
+  "--chart-axis": "#7a8699",
+  "--chart-crosshair": "#6a7386",
+  "--chart-ma-fast": "#f0a63c",
+  "--chart-ma-slow": "#a855f7",
+  "--accent": "#3b7ded",
+  "--panel": "#141b2c",
+  "--panel-2": "#212b42",
+  "--text": "#e6ebf2",
+  "--dim": "#6a7386",
 };
 
 // A token read before the stylesheet has applied comes back empty rather than throwing,

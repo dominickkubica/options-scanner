@@ -76,7 +76,7 @@ function Axes({ scale, width, height, formatY, formatX, ticks = 4 }) {
             x2={width - PAD.right}
             y1={scale.y(value)}
             y2={scale.y(value)}
-            stroke="#262e39"
+            stroke="var(--line)"
             strokeDasharray="2 3"
           />
           <text x={PAD.left - 6} y={scale.y(value) + 3} textAnchor="end">
@@ -127,7 +127,7 @@ export function PayoffChart({ payoff, height = 300 }) {
           x2={width - PAD.right}
           y1={scale.y(0)}
           y2={scale.y(0)}
-          stroke="#5d6875"
+          stroke="var(--muted)"
         />
 
         <line
@@ -135,10 +135,10 @@ export function PayoffChart({ payoff, height = 300 }) {
           x2={scale.x(payoff.spot)}
           y1={PAD.top}
           y2={height - PAD.bottom}
-          stroke="#4c9be8"
+          stroke="var(--accent)"
           strokeDasharray="3 3"
         />
-        <text x={scale.x(payoff.spot) + 4} y={PAD.top + 10} fill="#4c9be8">
+        <text x={scale.x(payoff.spot) + 4} y={PAD.top + 10} fill="var(--accent)">
           spot {num(payoff.spot)}
         </text>
 
@@ -149,10 +149,10 @@ export function PayoffChart({ payoff, height = 300 }) {
               x2={scale.x(value)}
               y1={PAD.top}
               y2={height - PAD.bottom}
-              stroke="#d9a441"
+              stroke="var(--warn)"
               strokeDasharray="1 4"
             />
-            <text x={scale.x(value) + 4} y={height - PAD.bottom - 4} fill="#d9a441">
+            <text x={scale.x(value) + 4} y={height - PAD.bottom - 4} fill="var(--warn)">
               BE {num(value)}
             </text>
           </g>
@@ -164,7 +164,7 @@ export function PayoffChart({ payoff, height = 300 }) {
             scale,
           )}
           fill="none"
-          stroke="#8b97a6"
+          stroke="var(--muted)"
           strokeWidth="1.5"
           strokeDasharray="4 3"
         />
@@ -174,7 +174,7 @@ export function PayoffChart({ payoff, height = 300 }) {
             scale,
           )}
           fill="none"
-          stroke="#46b17b"
+          stroke="var(--good)"
           strokeWidth="2"
         />
       </svg>
@@ -216,7 +216,7 @@ export function TermStructure({ points, backwardated, slope }) {
             scale,
           )}
           fill="none"
-          stroke="#4c9be8"
+          stroke="var(--accent)"
           strokeWidth="2"
         />
         {points.map((point) => (
@@ -225,7 +225,7 @@ export function TermStructure({ points, backwardated, slope }) {
             cx={scale.x(point.dte)}
             cy={scale.y(point.iv)}
             r="3"
-            fill="#4c9be8"
+            fill="var(--accent)"
           />
         ))}
       </svg>
@@ -291,7 +291,7 @@ export function SkewCurve({ putSkew, callSkew, spot, atmIv }) {
           x2={scale.x(spot)}
           y1={PAD.top}
           y2={height - PAD.bottom}
-          stroke="#4c9be8"
+          stroke="var(--accent)"
           strokeDasharray="3 3"
         />
         <path
@@ -300,7 +300,7 @@ export function SkewCurve({ putSkew, callSkew, spot, atmIv }) {
             scale,
           )}
           fill="none"
-          stroke="#d9635f"
+          stroke="var(--bad)"
           strokeWidth="1.8"
         />
         <path
@@ -309,7 +309,7 @@ export function SkewCurve({ putSkew, callSkew, spot, atmIv }) {
             scale,
           )}
           fill="none"
-          stroke="#46b17b"
+          stroke="var(--good)"
           strokeWidth="1.8"
         />
       </svg>
@@ -351,7 +351,7 @@ export function IvRankGauge({ ivRank }) {
   return (
     <div>
       <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height} role="img">
-        <rect x={left} y={barY} width={right - left} height={barH} rx="3" fill="#1c232c" />
+        <rect x={left} y={barY} width={right - left} height={barH} rx="3" fill="var(--panel-2)" />
         {usable && (
           <>
             <rect
@@ -360,9 +360,9 @@ export function IvRankGauge({ ivRank }) {
               width={(right - left) * ivRank.rank}
               height={barH}
               rx="3"
-              fill="#4c9be8"
+              fill="var(--accent)"
             />
-            <text x={left} y={barY - 8} fill="#d7dee7" style={{ fontSize: 15 }}>
+            <text x={left} y={barY - 8} fill="var(--text)" style={{ fontSize: 15 }}>
               {pct(ivRank.rank, 0)} rank
             </text>
             <text x={right} y={barY - 8} textAnchor="end">
@@ -371,7 +371,7 @@ export function IvRankGauge({ ivRank }) {
           </>
         )}
         {!usable && (
-          <text x={left} y={barY - 8} fill="#8b97a6" style={{ fontSize: 14 }}>
+          <text x={left} y={barY - 8} fill="var(--muted)" style={{ fontSize: 14 }}>
             no rank published
           </text>
         )}
