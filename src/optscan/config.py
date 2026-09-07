@@ -7,7 +7,7 @@ outside this one reads os.environ directly, and no module hardcodes a threshold.
 from __future__ import annotations
 
 import os
-from datetime import time
+from datetime import date, time
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
@@ -21,10 +21,11 @@ HOURS_PER_DAY = 24
 MINUTES_PER_HOUR = 60
 MINUTES_PER_DAY = HOURS_PER_DAY * MINUTES_PER_HOUR
 
-ProviderName = Literal["yfinance", "schwab", "tradier"]
+ProviderName = Literal["yfinance", "schwab", "tradier", "alpaca"]
 LogFormat = Literal["console", "json"]
 ColorMode = Literal["auto", "always", "never"]
 TradierEnvironment = Literal["sandbox", "production"]
+AlpacaFeed = Literal["indicative", "opra"]
 
 #: Tradier's documented hosts, verified against docs.tradier.com on 2026-07-31.
 TRADIER_HOSTS: dict[str, str] = {
@@ -37,6 +38,22 @@ TRADIER_HOSTS: dict[str, str] = {
 #: property of the tier, not something the responses announce, so it is recorded here
 #: and shown in the UI rather than inferred from a timestamp.
 SANDBOX_DELAY_MINUTES = 15
+
+#: Alpaca splits trading and market data across two hosts, and the one people paste
+#: from their dashboard is the trading host. Every endpoint this project uses is on
+#: the data host; sending a market data request to paper-api returns a 404 that reads
+#: like a missing symbol rather than a wrong host.
+ALPACA_DATA_URL = "https://data.alpaca.markets"
+
+#: Alpaca began collecting option data here. Requesting bars before it returns an
+#: empty series rather than an error, which is indistinguishable from a contract that
+#: did not trade, so the boundary is checked before the request rather than after.
+ALPACA_OPTIONS_START = date(2024, 2, 1)
+
+#: The free tier serves options through a derivative of OPRA delayed by this much, and
+#: refuses OPRA for recent timestamps outright. Same shape as the Tradier sandbox
+#: delay: a documented property of the tier that no response announces.
+ALPACA_INDICATIVE_DELAY_MINUTES = 15
 
 
 class Settings(BaseSettings):
@@ -130,6 +147,8 @@ class Settings(BaseSettings):
     tradier_token: SecretStr | None = None
     schwab_client_id: SecretStr | None = None
     schwab_client_secret: SecretStr | None = None
+    alpaca_key_id: SecretStr | None = None
+    alpaca_secret_key: SecretStr | None = None
 
     # Tradier. The environment decides the host and, more importantly, whether the
     # data can be called real time at all: sandbox is documented as 15 minutes delayed.
@@ -146,6 +165,23 @@ class Settings(BaseSettings):
     # sandbox, enforced per minute per access token. The default is the lower one
     # because exceeding it is worse than being slower than necessary.
     tradier_requests_per_minute: int = Field(default=60, gt=0)
+
+    # Alpaca. The feed decides both the delay and how far back option data may be
+    # asked for. `indicative` is the free tier: a derivative of OPRA, delayed fifteen
+    # minutes, and the plan refuses OPRA for recent timestamps rather than silently
+    # downgrading. Defaulted to the free one because a wrong guess upward produces an
+    # authorization error on every request, which looks like a bad key.
+    alpaca_feed: AlpacaFeed = "indicative"
+
+    # Whether the account carries a paid market data entitlement. Nothing in a response
+    # says so, exactly as with Tradier, so it is asked rather than inferred and it
+    # defaults to the answer that cannot mislead.
+    alpaca_realtime_entitled: bool = False
+
+    # Documented Basic plan limit, 200 requests per minute. Algo Trader Plus raises it
+    # to 10,000; the default is the lower one because being throttled costs a capture
+    # and being slow does not.
+    alpaca_requests_per_minute: int = Field(default=200, gt=0)
 
     # Live feed. Off by default: Phases 0 to 4 are a stored snapshot tool and must keep
     # behaving like one until somebody asks for live data.
@@ -198,7 +234,14 @@ class Settings(BaseSettings):
             raise ValueError(f"{name} is not a real time of day: {value!r}")
         return f"{hour:02d}:{minute:02d}"
 
-    @field_validator("tradier_token", "schwab_client_id", "schwab_client_secret", mode="before")
+    @field_validator(
+        "tradier_token",
+        "schwab_client_id",
+        "schwab_client_secret",
+        "alpaca_key_id",
+        "alpaca_secret_key",
+        mode="before",
+    )
     @classmethod
     def _blank_secret_is_unset(cls, value: object) -> object:
         """An empty .env entry means unset, not set to the empty string.
@@ -259,6 +302,33 @@ class Settings(BaseSettings):
         """When the settlement job runs, in market local time."""
         hour, minute = (int(part) for part in self.resolve_time_local.split(":", 1))
         return time(hour=hour, minute=minute)
+
+    @property
+    def alpaca_data_url(self) -> str:
+        """Host for market data, which is not the host people paste from the dashboard.
+
+        Alpaca's paper trading URL, `paper-api.alpaca.markets`, is the *trading* API.
+        Every endpoint this project uses lives on the data host, and sending a market
+        data request to the trading host returns a 404 whose body reads like a missing
+        route rather than a wrong base URL.
+        """
+        return ALPACA_DATA_URL
+
+    @property
+    def alpaca_is_realtime(self) -> bool:
+        """Whether Alpaca option data on this configuration may be called real time.
+
+        The indicative feed never can: it is documented as fifteen minutes delayed.
+        OPRA only can when the account holder has said they hold the entitlement,
+        because a response from a plan without it is an error rather than a slower
+        number, and nothing in a successful response distinguishes the two feeds.
+        """
+        return self.alpaca_feed == "opra" and self.alpaca_realtime_entitled
+
+    @property
+    def alpaca_credentials_set(self) -> bool:
+        """Both halves of the key pair present. One without the other is not usable."""
+        return self.alpaca_key_id is not None and self.alpaca_secret_key is not None
 
     @property
     def tradier_base_url(self) -> str:
@@ -339,10 +409,17 @@ class Settings(BaseSettings):
             "data_path": str(self.data_path),
             "risk_free_rate": self.risk_free_rate,
             "tradier_environment": self.tradier_environment,
+            "alpaca_feed": self.alpaca_feed,
             "live_enabled": self.live_enabled,
             "credentials_set": sorted(
                 name
-                for name in ("tradier_token", "schwab_client_id", "schwab_client_secret")
+                for name in (
+                    "tradier_token",
+                    "schwab_client_id",
+                    "schwab_client_secret",
+                    "alpaca_key_id",
+                    "alpaca_secret_key",
+                )
                 if getattr(self, name) is not None
             ),
         }

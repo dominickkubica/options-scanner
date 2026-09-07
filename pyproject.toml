@@ -115,6 +115,7 @@ ignore = [
 # a router or a job would have to import. Same rule as yfinance, one layer down.
 "httpx".msg = "Vendor HTTP calls are only made inside optscan.providers."
 "optscan.providers.tradier".msg = "Build providers through get_provider, not by importing the adapter."
+"optscan.providers.alpaca".msg = "Build providers through get_provider, not by importing the adapter."
 
 [tool.ruff.format]
 quote-style = "double"

@@ -1658,3 +1658,122 @@ armed: `component_iv_rank` has stopped being null, which leaves `component_premi
 saturated at 1.000 on 88.6% of rows and `component_event_risk` a literal constant.
 
 Downloads are limited to 2 per 24 hours on the trial. SPY and IWM are the next two.
+
+---
+
+## 2026-09-07: the Alpaca adapter, and five things the docs get wrong
+
+Alpaca paper keys arrived, free Basic plan. `providers/alpaca.py` implements the full
+`MarketDataProvider` interface plus `get_option_bars`, which is outside it.
+
+Everything below was measured against the live API rather than read. That was not
+diligence for its own sake: **five behaviours differ from the documentation and every
+one of them fails silently**, returning 200 and a plausible number.
+
+### 1. The host people paste is the wrong host
+
+`paper-api.alpaca.markets` is the trading API. Market data is on
+`data.alpaca.markets`. A data request to the trading host 404s with "Not Found", which
+reads like a delisted symbol.
+
+Both are used deliberately: quotes, bars and chains come from the data host, and
+**open interest exists only on the trading host** at `/v2/options/contracts`. The
+screen filters on open interest, so a chain is assembled by joining the two per
+contract. 99 of 100 sampled QQQ contracts carried one.
+
+### 2. The feed name differs per endpoint, and each is rejected where the other works
+
+Measured on QQQ:
+
+    endpoint    iex              sip                    delayed_sip
+    bars        200, 376k vol    200, 23.6m vol         400 invalid feed
+    snapshot    200, 553k vol    403 recent SIP         200, 33.2m vol
+
+So bars take `sip` and snapshots take `delayed_sip`, and neither is a preference: the
+other value is an error or a wrong number.
+
+**`feed=iex` is the trap.** It returns 200 with about 1.8 percent of consolidated
+volume and a close six cents off, and nothing in the response says which exchange it
+covered. A screener reading it would see plausible prices and volume wrong by 50x.
+
+`delayed_sip` is fifteen minutes behind and is still the right choice for a quote here:
+this tool reads the last stored capture rather than deciding a fill, and it already
+reports quote age on every screen. Being late is visible; being 2 percent of the market
+is not.
+
+### 3. The contracts endpoint silently answers for four expiries
+
+The one that would have done real damage. `/v2/options/contracts` with no expiry
+bounds returns 1,606 QQQ contracts across exactly **4 expiries**, 200 OK, with no
+`next_page_token`. It is not pagination: `limit=100` walks 17 pages to the same 1,606
+rows. With explicit bounds, 90 days gives 20 expiries and two years gives 33.
+
+An undocumented default window, and the result looks complete. The adapter now always
+sends `expiration_date_gte`/`lte`, and a test pins that it does. Without it a screener
+would conclude QQQ lists options for the next four days.
+
+### 4. Greeks and implied vol ARE on the free feed
+
+The docs imply they need OPRA, and a first probe agreed, because a `limit=2` chain
+request returns the two deepest contracts, which have never traded and so carry a
+quote and nothing else. Filtered to a real expiry, snapshots carry `greeks`,
+`impliedVolatility`, `dailyBar`, `latestTrade` and `latestQuote`.
+
+`vendor_iv` is stored and **not used**, exactly as with Tradier, whose `mid_iv` was
+measured as unusable. This project solves its own vol from the mid. Alpaca's number is
+kept only so the two can be compared, which is now possible for the first time.
+
+### 5. OPRA is a signature, not a subscription
+
+`403 OPRA agreement is not signed`. That is a different problem from a bad key and is
+reported as such, because the remedy is a form on Alpaca's site rather than a new
+credential. The generic 403 path says something different again.
+
+## What Alpaca cannot do, which decides what may be built on it
+
+**There is no historical option quote endpoint.** `/v1beta1/options/quotes` is a 404 at
+every parameter combination tried; only `/quotes/latest` exists. Historical option
+*trades* are shallow too: a 2024 window returns `{}` while a two day old one returns
+trades.
+
+Historical option **bars** do work, back to at least 2024-01-18, earlier than the
+documented February 2024. Including **minute** bars, including on 0DTE contracts.
+
+So a historical option chain can be reconstructed at **trade** prices and never at the
+mid. That is materially weaker than this project's live path, which prices at the mid
+and refuses a crossed or absent quote, and it is weakest exactly where it would be
+leaned on hardest: a thin contract's last print can be hours stale and on whichever
+side happened to lift. It does not restore the paused 0DTE backtester on its own; the
+sample size objection recorded there is untouched by better data.
+
+Historical **stock** quotes, by contrast, are full NBBO tick data back to at least
+2024. The asymmetry is the whole story: stocks are richly served, options are not.
+
+## The event calendar, half of one
+
+`get_events` is implemented from `/v1/corporate-actions`, which publishes
+`cash_dividends` with `ex_date`, `rate`, `record_date` and `payable_date`, and flags
+specials. That serves `exclude_early_assignment_risk`, which is a real gap closed: a
+short call in the money over an ex date is the classic assignment.
+
+**`earnings_date` stays None and is never guessed.** Alpaca has no earnings calendar,
+and `exclude_earnings` is the heavier of the two filters. The screen already handles
+the absence by widening and saying it could not check. A screen that believes it
+checked earnings and did not is worse than one that knows it could not.
+
+Measured: NVDA returns 2026-09-10 at 0.25. AAPL and QQQ return None, because their next
+distributions are not declared yet, which is the honest answer rather than a missing one.
+
+## Throughput, measured
+
+- Chain, 0 to 45 DTE: QQQ 4,992 contracts in 5 requests and 3.4s; AAPL and NVDA about
+  1,250 in 2 requests and 1.2s. The chain endpoint does take `expiration_date_gte/lte`.
+- **Daily bars take up to at least 58 symbols in one request**, 0.7s.
+- Minute bars go back to **2016-01-04** on SIP; 2015 returns empty. 30 symbols for one
+  session is 20,197 bars in 3 requests.
+- Daily bars carry `v` share volume, `n` trade count and `vw` VWAP.
+- Basic plan rate limit is 200 requests a minute, reported in `x-ratelimit-*` headers
+  and logged only when nearly spent.
+
+At those rates a 600 symbol option capture is roughly 3,000 requests, about fifteen
+minutes, which is not the constraint. Storage is.

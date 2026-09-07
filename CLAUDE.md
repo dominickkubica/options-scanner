@@ -142,6 +142,37 @@ Robinhood activity export, `optscan trades` reports what the account actually di
 - **An unknown transaction code raises.** Assignment and exercise move real contracts,
   and a skipped row is a profit figure with a hole and nothing to say so.
 
+**Exception, authorized 2026-09-07: the Alpaca adapter.** `providers/alpaca.py`,
+selected with `OPTSCAN_PROVIDER=alpaca` and a key pair in `.env`. Free Basic plan.
+Full reasoning in the DECISIONS entry of that date; five things there were measured
+against the live API because the documentation is wrong about them and every one fails
+silently with a 200:
+
+- **Two hosts, on purpose.** Data is on `data.alpaca.markets`; **open interest exists
+  only on the trading host** at `/v2/options/contracts`, so a chain joins the two.
+- **The feed name differs per endpoint.** Bars take `sip`, snapshots take
+  `delayed_sip`, and each is an error on the other. `feed=iex` is the trap: 200 OK with
+  1.8% of consolidated volume and no indication of it.
+- **Never omit `expiration_date_gte`/`lte` on `/v2/options/contracts`.** Without them
+  it answers for exactly 4 expiries, 200, no page token, and paging at limit=100 walks
+  17 pages to the same truncated set. With bounds, two years gives 33.
+- **Greeks and IV are on the free feed.** Stored as `vendor_iv`, still unused: this
+  project solves its own vol, same rule as Tradier's unusable `mid_iv`.
+- **`403 OPRA agreement is not signed`** is a signature, not a subscription, and is
+  reported separately from a bad key.
+
+**What it cannot do.** No historical option quotes at all (`/v1beta1/options/quotes` is
+a 404; only `/latest` exists), and historical option trades are recent-only. Option
+*bars* do go back to ~2024-01-18 including minute bars on 0DTE contracts, so historical
+option data is **trade priced, never mid priced**. Historical *stock* NBBO quotes, by
+contrast, are full tick depth. Stocks are richly served; options are not.
+
+**`get_events` is half a calendar and says so.** Ex-dividend comes from
+`/v1/corporate-actions` and serves `exclude_early_assignment_risk`. `earnings_date`
+stays None and is never guessed, because `exclude_earnings` is the heavier filter and a
+screen that believes it checked earnings and did not is worse than one that knows it
+could not.
+
 **Exception, authorized 2026-09-07: downloaded vendor volatility history.** `optscan
 import-history` reads a Market Chameleon daily export, `optscan history` reports what is
 held. `models/vendor.py`, `imports/marketchameleon.py`, `storage/vendor.py`, migration 7.

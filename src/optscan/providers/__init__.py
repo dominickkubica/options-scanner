@@ -43,6 +43,18 @@ def get_provider(settings: Settings) -> MarketDataProvider:
 
         return YFinanceProvider()
 
+    if settings.provider == "alpaca":
+        from optscan.providers.alpaca import AlpacaProvider
+
+        if not settings.alpaca_credentials_set:
+            raise AuthenticationError(
+                "OPTSCAN_PROVIDER is alpaca but the key pair is incomplete. Both "
+                "OPTSCAN_ALPACA_KEY_ID and OPTSCAN_ALPACA_SECRET_KEY must be set; one "
+                "without the other cannot authenticate. Generate them at "
+                "app.alpaca.markets and put them in .env."
+            )
+        return AlpacaProvider(settings)
+
     if settings.provider == "tradier":
         from optscan.providers.tradier import TradierProvider
 
@@ -75,4 +87,6 @@ def provider_is_realtime(settings: Settings) -> bool:
     """
     if settings.provider == "tradier":
         return settings.tradier_is_realtime
+    if settings.provider == "alpaca":
+        return settings.alpaca_is_realtime
     return False
