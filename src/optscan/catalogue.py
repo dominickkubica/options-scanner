@@ -168,7 +168,7 @@ def build_catalogue(settings: Settings, universe: Universe | None = None) -> Cat
                 # Only watchlist symbols are ever captured, so only they can have a
                 # chain on disk. Scanning the snapshot tree for all of them would be a
                 # directory walk per symbol to prove a negative.
-                last_capture=_last_capture(settings, symbol) if symbol in watchlist else None,
+                last_capture=last_capture(settings, symbol) if symbol in watchlist else None,
             )
         )
 
@@ -231,8 +231,12 @@ def search(
     return results[:limit]
 
 
-def _last_capture(settings: Settings, symbol: str) -> date | None:
+def last_capture(settings: Settings, symbol: str) -> date | None:
     """Latest stored session for a symbol, read from the partition path.
+
+    Public because the watchlist router needs the same answer, and it had its own copy
+    of this until the catalogue was written. Two implementations of "when was this last
+    captured" is exactly the kind of thing that drifts silently.
 
     From the directory name rather than by opening the parquet: the layout is
     `symbol=SPY/session_date=2026-07-30/...`, so the answer is already in the path.

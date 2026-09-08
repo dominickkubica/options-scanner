@@ -129,26 +129,29 @@ def capture_symbol(
             f"{symbol} has no listed expiries inside {settings.snapshot_max_dte} DTE"
         )
 
-    chains: list[OptionChain] = []
+    # One call for every expiry rather than one per expiry. The base class default
+    # loops `get_chain`, so this reads the same against any provider; an adapter whose
+    # endpoints take an expiry range answers it in a handful of requests instead of
+    # three per expiry, which is the difference between eight minutes and an hour when
+    # capturing a few hundred symbols.
     notes: list[str] = []
+    try:
+        fetched = with_retry(
+            lambda: provider.get_chains(symbol, wanted),
+            attempts=settings.max_retries,
+            base_delay=settings.retry_backoff_seconds,
+            description=f"get_chains {symbol}",
+        )
+    except ProviderError as error:
+        raise ProviderError(f"{symbol}: chain fetch failed: {error}") from error
+
+    chains: list[OptionChain] = [fetched[expiry] for expiry in wanted if expiry in fetched]
     for expiry in wanted:
-        try:
-            chain = with_retry(
-                lambda expiry=expiry: provider.get_chain(symbol, expiry),
-                attempts=settings.max_retries,
-                base_delay=settings.retry_backoff_seconds,
-                description=f"get_chain {symbol} {expiry}",
-            )
-            chains.append(chain)
-        except ProviderError as error:
-            notes.append(f"{expiry.isoformat()}: {type(error).__name__}: {error}")
-            log.warning(
-                "expiry capture failed",
-                symbol=symbol,
-                expiry=expiry.isoformat(),
-                error=str(error),
-                error_type=type(error).__name__,
-            )
+        if expiry not in fetched:
+            # Named individually rather than as a count. "2026-10-16 missing" is a
+            # thing somebody can check; "3 expiries failed" is not.
+            notes.append(f"{expiry.isoformat()}: no contracts returned")
+            log.warning("expiry missing from capture", symbol=symbol, expiry=expiry.isoformat())
 
     if not chains:
         raise ProviderError(f"{symbol}: every expiry failed ({len(notes)} attempts)")

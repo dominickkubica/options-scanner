@@ -356,16 +356,6 @@ def coverage(conn: sqlite3.Connection) -> list[dict]:
     return [dict(row) for row in rows]
 
 
-def symbols_held(conn: sqlite3.Connection, *, source: str) -> set[str]:
-    """Which symbols this vendor has any history for."""
-    return {
-        row[0]
-        for row in conn.execute(
-            "SELECT DISTINCT symbol FROM vendor_daily WHERE source = ?", (source,)
-        )
-    }
-
-
 def import_history(conn: sqlite3.Connection, limit: int = 20) -> list[dict]:
     """Recent imports, newest first."""
     rows = conn.execute(

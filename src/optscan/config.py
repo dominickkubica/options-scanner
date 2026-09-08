@@ -50,11 +50,6 @@ ALPACA_DATA_URL = "https://data.alpaca.markets"
 #: did not trade, so the boundary is checked before the request rather than after.
 ALPACA_OPTIONS_START = date(2024, 2, 1)
 
-#: The free tier serves options through a derivative of OPRA delayed by this much, and
-#: refuses OPRA for recent timestamps outright. Same shape as the Tradier sandbox
-#: delay: a documented property of the tier that no response announces.
-ALPACA_INDICATIVE_DELAY_MINUTES = 15
-
 
 class Settings(BaseSettings):
     """Runtime configuration, populated from environment variables and .env."""

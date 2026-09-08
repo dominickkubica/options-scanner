@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 
 from optscan.analytics.calibration import ValidationReport, validate
 from optscan.analytics.outcomes import settle
@@ -283,9 +283,3 @@ def next_settlement(settings: Settings) -> date | None:
             """
         ).fetchone()
     return date.fromisoformat(row[0]) if row and row[0] else None
-
-
-def suggested_schedule(settings: Settings) -> timedelta:
-    """How often recording should run. Daily, matching the snapshot job."""
-    del settings
-    return timedelta(days=1)

@@ -103,11 +103,6 @@ class VendorDailyBar(BaseModel):
         return self
 
     @property
-    def return_close(self) -> float:
-        """The close to use for a return series: adjusted where the vendor gave one."""
-        return self.adj_close if self.adj_close is not None else self.close
-
-    @property
     def average_trade_size(self) -> float | None:
         """Shares per print, or None when either side is missing.
 
@@ -118,16 +113,3 @@ class VendorDailyBar(BaseModel):
         if not self.trade_count or self.volume is None:
             return None
         return self.volume / self.trade_count
-
-    @property
-    def put_call_volume_ratio(self) -> float | None:
-        """Put volume over call volume, or None when either side is missing or zero.
-
-        Raw, and raw is not a signal. QQQ's median is 1.39 over 3,181 sessions because
-        an index is structurally put heavy from hedging, so anything that reads "above
-        one" as bearish is describing the instrument rather than the day. Rank it
-        against its own history before drawing any conclusion from it.
-        """
-        if not self.call_volume or self.put_volume is None:
-            return None
-        return self.put_volume / self.call_volume

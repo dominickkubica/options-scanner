@@ -646,10 +646,6 @@ def payoff_view(
     )
 
 
-def expiry_or_none(solved, expiry: date) -> ExpiryAnalysis | None:
-    return solved.analysis.expiry(expiry)
-
-
 def interval_view(interval) -> IntervalOut | None:
     if interval is None:
         return None

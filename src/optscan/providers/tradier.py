@@ -51,11 +51,12 @@ EXPIRATIONS_PATH = f"/{API_VERSION}/markets/options/expirations"
 CHAINS_PATH = f"/{API_VERSION}/markets/options/chains"
 HISTORY_PATH = f"/{API_VERSION}/markets/history"
 
-#: Documented rate limit headers. Only the available count is acted on; the others are
-#: logged when a limit is actually hit, which is when anyone wants to see them.
+#: The two rate limit headers this adapter reads. Tradier also sends
+#: `X-Ratelimit-Allowed` and `X-Ratelimit-Used`; both were declared here and never
+#: read, under a comment claiming they were logged when a limit was hit. They were not.
+#: Removed rather than wired up, because the available count is what the limiter needs
+#: and a constant nothing references is a claim nobody checks.
 HEADER_AVAILABLE = "X-Ratelimit-Available"
-HEADER_ALLOWED = "X-Ratelimit-Allowed"
-HEADER_USED = "X-Ratelimit-Used"
 HEADER_EXPIRY = "X-Ratelimit-Expiry"
 
 HTTP_TOO_MANY_REQUESTS = 429

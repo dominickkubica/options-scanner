@@ -49,6 +49,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="Capture this symbol instead of the watchlist. Repeatable.",
     )
     snapshot.add_argument(
+        "--universe",
+        nargs="*",
+        default=None,
+        metavar="GROUP",
+        help=(
+            "Capture the universe groups from universe.yaml instead of the watchlist. "
+            "No names means every group. This is what builds option chain history for "
+            "symbols the screener does not scan: a chain not captured today cannot be "
+            "captured later, and the watchlist is deliberately smaller than the set "
+            "worth keeping history for."
+        ),
+    )
+    snapshot.add_argument(
+        "--provider",
+        default=None,
+        help=(
+            "Override the configured provider for this run. A few hundred symbols "
+            "needs one with a published rate limit; yfinance throttles silently and "
+            "would take the capture down with it."
+        ),
+    )
+    snapshot.add_argument(
         "--force",
         action="store_true",
         help="Capture even when the market is closed. The mark will be stale.",
@@ -403,12 +425,31 @@ def startup(settings: Settings, *, create_dirs: bool = True) -> None:
 
 def _cmd_snapshot(settings: Settings, args: argparse.Namespace) -> int:
     from optscan.jobs.snapshot import run_snapshot
+    from optscan.providers import get_provider
+    from optscan.universe import UniverseError, load_universe
+
+    symbols = args.symbols
+    if args.universe is not None:
+        try:
+            symbols = load_universe().symbols(*args.universe)
+        except UniverseError as error:
+            print(str(error))
+            return 1
+        label = ", ".join(args.universe) if args.universe else "every group"
+        print(f"Capturing {len(symbols)} symbols ({label}).")
+
+    provider = None
+    if args.provider:
+        # Built here rather than inside the job so a bad name fails before the market
+        # calendar check, the directory creation and the first request.
+        provider = get_provider(settings.model_copy(update={"provider": args.provider}))
 
     report = run_snapshot(
         settings,
-        symbols=args.symbols,
+        symbols=symbols,
         force=args.force,
         skip_existing=not args.recapture,
+        provider=provider,
     )
 
     if report.skipped_reason:

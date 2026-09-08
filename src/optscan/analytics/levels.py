@@ -214,7 +214,6 @@ class VolumeProfile:
     value_area_low: float
     value_area_high: float
 
-    @property
     def total_volume(self) -> float:
         return sum(self.volumes)
 

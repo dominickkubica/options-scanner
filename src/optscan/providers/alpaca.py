@@ -400,8 +400,17 @@ class AlpacaProvider(MarketDataProvider):
         rows = self._paged(
             f"{TRADING_URL}{OPTION_CONTRACTS_PATH}", params, collect="option_contracts"
         )
+        return self._parse_contract_rows(rows or [])
+
+    @staticmethod
+    def _parse_contract_rows(rows: list[dict]) -> dict[str, dict]:
+        """Contract metadata rows into a dict keyed by OCC symbol.
+
+        Shared by the single expiry and the range fetch so the two cannot drift into
+        parsing open interest differently, which is the field the whole join exists for.
+        """
         out: dict[str, dict] = {}
-        for row in rows or []:
+        for row in rows:
             contract_symbol = row.get("symbol")
             raw_expiry = row.get("expiration_date")
             if not contract_symbol or not raw_expiry:
@@ -419,6 +428,42 @@ class AlpacaProvider(MarketDataProvider):
                 # One unparseable contract row must not lose the other 8,000.
                 log.debug("skipping unparseable contract row", symbol=contract_symbol)
         return out
+
+    def _contract(
+        self,
+        symbol: str,
+        contract_symbol: str,
+        meta: dict,
+        snapshots: dict,
+        fetched: datetime,
+    ) -> OptionContract:
+        """One contract, joining trading-host metadata to data-host quotes."""
+        snapshot = snapshots.get(contract_symbol) or {}
+        quote = snapshot.get("latestQuote") or {}
+        trade = snapshot.get("latestTrade") or {}
+        daily = snapshot.get("dailyBar") or {}
+        return OptionContract(
+            symbol=symbol,
+            contract_symbol=contract_symbol,
+            expiry=meta["expiry"],
+            strike=meta["strike"],
+            right=meta["right"],
+            bid=_positive(quote.get("bp")),
+            ask=_positive(quote.get("ap")),
+            # The metadata's close_price is the previous session's settle and is
+            # present far more often than a latest trade, which only exists for
+            # contracts that traded today.
+            last=_positive(trade.get("p")) or meta["close_price"],
+            last_trade_at=_timestamp(trade.get("t")),
+            volume=_size(daily.get("v")),
+            open_interest=meta["open_interest"],
+            # Recorded, never used. This project solves its own vol from the mid; a
+            # vendor's number is kept only so the two can be compared.
+            vendor_iv=_positive(snapshot.get("impliedVolatility")),
+            contract_size=meta["size"],
+            fetched_at=fetched,
+            source=self.name,
+        )
 
     def get_chain(self, symbol: str, expiry: date) -> OptionChain:
         """Every contract at one expiry, quotes joined to open interest."""
@@ -439,36 +484,11 @@ class AlpacaProvider(MarketDataProvider):
         if not isinstance(snapshots, dict):
             snapshots = {}
 
-        contracts: list[OptionContract] = []
-        for contract_symbol, meta in sorted(metadata.items()):
-            snapshot = snapshots.get(contract_symbol) or {}
-            quote = snapshot.get("latestQuote") or {}
-            trade = snapshot.get("latestTrade") or {}
-            daily = snapshot.get("dailyBar") or {}
-            contracts.append(
-                OptionContract(
-                    symbol=ticker,
-                    contract_symbol=contract_symbol,
-                    expiry=meta["expiry"],
-                    strike=meta["strike"],
-                    right=meta["right"],
-                    bid=_positive(quote.get("bp")),
-                    ask=_positive(quote.get("ap")),
-                    # The contract metadata's close_price is the previous session's
-                    # settle and is present far more often than a latest trade, which
-                    # only exists for contracts that traded today.
-                    last=_positive(trade.get("p")) or meta["close_price"],
-                    last_trade_at=_timestamp(trade.get("t")),
-                    volume=_size(daily.get("v")),
-                    open_interest=meta["open_interest"],
-                    # Recorded, never used. This project solves its own vol from the
-                    # mid; a vendor's number is kept only so the two can be compared.
-                    vendor_iv=_positive(snapshot.get("impliedVolatility")),
-                    contract_size=meta["size"],
-                    fetched_at=self.now(),
-                    source=self.name,
-                )
-            )
+        fetched = self.now()
+        contracts = [
+            self._contract(ticker, contract_symbol, meta, snapshots, fetched)
+            for contract_symbol, meta in sorted(metadata.items())
+        ]
 
         underlying = None
         try:
@@ -486,6 +506,88 @@ class AlpacaProvider(MarketDataProvider):
             fetched_at=self.now(),
             source=self.name,
         )
+
+    def get_chains(self, symbol: str, expiries: Sequence[date]) -> dict[date, OptionChain]:
+        """Every requested expiry in a handful of requests instead of fifty.
+
+        The naive shape, which is what the base class does, costs three requests per
+        expiry plus one: contract metadata, snapshots, and an underlying quote that
+        `get_chain` fetches every time it is called. At sixteen expiries that is fifty
+        requests for one symbol, and capturing a few hundred symbols that way is
+        fourteen thousand requests, which is over an hour against a 200 per minute
+        limit and most of a day's budget.
+
+        Both option endpoints take an expiry **range**, so the whole set is fetched
+        once and split up here. The quote is fetched once. Measured: about eight
+        requests for a symbol with sixteen expiries.
+        """
+        ticker = symbol.strip().upper()
+        wanted = sorted(set(expiries))
+        if not wanted:
+            return {}
+
+        low, high = wanted[0], wanted[-1]
+        metadata = self._contract_metadata_range(ticker, low, high)
+        snapshots = self._chain_snapshots_range(ticker, low, high)
+
+        underlying = None
+        try:
+            underlying = self.get_quote(ticker).price
+        except (SymbolNotFound, ProviderUnavailable):
+            log.warning("chains fetched without an underlying price", symbol=ticker)
+
+        fetched = self.now()
+        by_expiry: dict[date, list[OptionContract]] = {expiry: [] for expiry in wanted}
+        for contract_symbol, meta in sorted(metadata.items()):
+            expiry = meta["expiry"]
+            if expiry not in by_expiry:
+                # The range covers the span, which can include expiries the caller did
+                # not ask for. Those are dropped rather than returned unrequested.
+                continue
+            by_expiry[expiry].append(
+                self._contract(ticker, contract_symbol, meta, snapshots, fetched)
+            )
+
+        return {
+            expiry: OptionChain(
+                symbol=ticker,
+                expiry=expiry,
+                underlying_price=underlying,
+                contracts=tuple(contracts),
+                fetched_at=fetched,
+                source=self.name,
+            )
+            for expiry, contracts in by_expiry.items()
+            if contracts
+        }
+
+    def _contract_metadata_range(self, symbol: str, low: date, high: date) -> dict[str, dict]:
+        """Contract rows across an expiry span, keyed by OCC symbol."""
+        rows = self._paged(
+            f"{TRADING_URL}{OPTION_CONTRACTS_PATH}",
+            {
+                "underlying_symbols": symbol,
+                "status": "active",
+                "limit": CONTRACTS_PAGE_LIMIT,
+                "expiration_date_gte": low.isoformat(),
+                "expiration_date_lte": high.isoformat(),
+            },
+            collect="option_contracts",
+        )
+        return self._parse_contract_rows(rows or [])
+
+    def _chain_snapshots_range(self, symbol: str, low: date, high: date) -> dict:
+        snapshots = self._paged(
+            f"{self.settings.alpaca_data_url}" + OPTION_CHAIN_PATH.format(underlying=symbol),
+            {
+                "feed": self.feed,
+                "limit": SNAPSHOT_PAGE_LIMIT,
+                "expiration_date_gte": low.isoformat(),
+                "expiration_date_lte": high.isoformat(),
+            },
+            collect="snapshots",
+        )
+        return snapshots if isinstance(snapshots, dict) else {}
 
     def get_history(self, symbol: str, days: int) -> list[PriceBar]:
         """Daily bars over roughly the last `days` calendar days, ascending.

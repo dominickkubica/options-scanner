@@ -65,6 +65,11 @@ SESSION_MINUTES = 390
 #: after the work rather than before it.
 BACKUP_DELAY_MINUTES = 15
 
+#: How long after the watchlist capture the universe sweep starts. Long enough
+#: that the six symbols the screener actually scans are safely on disk before a
+#: nine minute, three hundred symbol job starts spending the rate limit.
+UNIVERSE_CAPTURE_DELAY_MINUTES = 5
+
 MINUTES_PER_HOUR = 60
 MINUTES_PER_DAY = 24 * MINUTES_PER_HOUR
 
@@ -146,6 +151,30 @@ def jobs(settings: Settings) -> tuple[ScheduledJob, ...]:
                 "Capture the watchlist's chains. The IV history cannot be bought after "
                 "the fact, so every skipped day is permanent."
             ),
+        ),
+        ScheduledJob(
+            key="capture",
+            task_name="OptscanDailyCapture",
+            arguments="-m optscan snapshot --universe --provider alpaca",
+            # A few minutes after the watchlist capture rather than alongside it. The
+            # watchlist is what the screener scans and it must not queue behind three
+            # hundred symbols; this is history for its own sake and can wait.
+            at=shift(settings.snapshot_time, UNIVERSE_CAPTURE_DELAY_MINUTES),
+            summary=(
+                "Capture option chains for every universe symbol, not just the "
+                "watchlist. A chain not captured today cannot be captured later, and "
+                "the set worth keeping history for is much larger than the set the "
+                "screener scans. Roughly nine minutes and 30MB a day at 293 symbols. "
+                "Pinned to alpaca: yfinance throttles silently at this scale and would "
+                "take the watchlist capture down with it. "
+                "Not installed by default, for the same reason `manage` is not: it "
+                "needs credentials a fresh install does not have, and it is a nine "
+                "minute job over three hundred symbols. Whether that history is worth "
+                "keeping is a decision, not a default. Install it explicitly."
+            ),
+            # Deliberately excluded from the default install. See the summary: it is
+            # the only job here that cannot run without a specific vendor's keys.
+            default_install=False,
         ),
         ScheduledJob(
             key="record",

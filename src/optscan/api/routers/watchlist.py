@@ -8,37 +8,14 @@ is a worse first run than a list that says so up front.
 
 from __future__ import annotations
 
-from datetime import date
-
 from fastapi import APIRouter
 
 from optscan.api.deps import SettingsDep
 from optscan.api.schemas import WatchlistOut
-from optscan.config import Settings
-from optscan.storage import db, snapshot_files
+from optscan.catalogue import last_capture
+from optscan.storage import db
 
 router = APIRouter(tags=["watchlist"])
-
-
-def _last_captured(settings: Settings, symbol: str) -> date | None:
-    """Latest stored session for a symbol, read from the partition path.
-
-    From the directory name rather than by opening the parquet: the layout is
-    `symbol=SPY/session_date=2026-07-30/...`, so the answer is already in the path and
-    reading six chains to render a sidebar would be absurd.
-    """
-    latest: date | None = None
-    for path in snapshot_files(settings.snapshot_path, symbol):
-        part = path.parent.name
-        if not part.startswith("session_date="):
-            continue
-        try:
-            captured = date.fromisoformat(part.removeprefix("session_date="))
-        except ValueError:
-            continue
-        if latest is None or captured > latest:
-            latest = captured
-    return latest
 
 
 @router.get("/watchlist", response_model=WatchlistOut)
@@ -49,5 +26,5 @@ def watchlist(settings: SettingsDep) -> WatchlistOut:
 
     return WatchlistOut(
         symbols=symbols,
-        captured={symbol: _last_captured(settings, symbol) for symbol in symbols},
+        captured={symbol: last_capture(settings, symbol) for symbol in symbols},
     )

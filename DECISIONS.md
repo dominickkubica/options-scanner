@@ -2162,3 +2162,89 @@ Writing the fallback test made the suite really call yfinance, logging
 `$NOPE: possibly delisted`. The rule here is that tests never touch the network, and it
 was being broken by a test that otherwise passed. The provider dependency is now
 overridden in that file.
+
+---
+
+## 2026-09-08: capturing every symbol, and a cleanup sweep
+
+### The capture itself needed almost no new code, and one real fix
+
+`run_snapshot` already took `symbols` and `provider`, so capturing the universe is two
+CLI flags: `--universe [GROUP...]` and `--provider`. That is the whole feature.
+
+What did need fixing was the request count. The first run showed the shape:
+
+    per expiry:  contract metadata + chain snapshots + an underlying quote
+    per symbol:  1 + 16 x 3 = 50 requests
+
+The repeated quote is the giveaway. `get_chain` fetches the underlying every time it is
+called, so sixteen expiries meant sixteen identical quote requests. At 293 symbols that
+is roughly **14,000 requests, over an hour**, and most of a day's rate limit budget.
+
+`get_chains(symbol, expiries)` is now on the provider interface with a **default that
+loops `get_chain`**, so every adapter has a working implementation the day it is
+written and only one that cares about request count overrides it. Alpaca's override
+uses the expiry **range** both option endpoints accept and fetches the quote once.
+
+Measured after: **CCJ 5 requests, QQQ 10 requests for 16 expiries and 4,780 contracts.**
+About six on average, so 293 symbols is roughly 1,760 requests and nine minutes.
+
+Extracting `_parse_contract_rows` and `_contract` so the single expiry and range paths
+share them was not tidiness: open interest is the only reason the two hosts are joined
+at all, and two parsers would eventually disagree about it.
+
+### The job is scheduled, and deliberately not installed by default
+
+`capture` runs at 15:50 market time, five minutes after the watchlist snapshot. The
+watchlist is what the screener scans and must not queue behind three hundred symbols;
+this is history for its own sake and can wait.
+
+`default_install=False`, for the same reason `manage` is excluded. It is the only job
+here that cannot run without a specific vendor's credentials, and it is nine minutes
+over three hundred symbols. Whether that history is worth keeping is a decision.
+
+**Capturing is not screening.** The watchlist stays at six. Best plays reports the top
+candidate across whatever it scans, so pointing it at 293 symbols makes that a maximum
+over fifty times more draws and the list would look better with nothing having improved.
+Capture is irreversible if skipped; ranking is a display choice that can be fixed later.
+They are separable and are being kept separate on purpose.
+
+### Test captures that had to be deleted
+
+Building the batch fetch meant running `--force` on a Sunday night, which wrote **19
+captures under session 2026-09-08**, a session that had not opened. They hold Friday's
+marks under a Monday label, which is exactly what the force warning describes. The
+parquet partitions and the manifest rows were removed. Nothing legitimate could exist
+for that date: `describe_state` reported the NYSE session as "pre" throughout.
+
+Worth recording because the mistake is easy to repeat: `--force` is for testing the
+mechanics, and anything it writes should be deleted before it reaches an IV history.
+
+### The cleanup sweep
+
+**A duplicated helper.** `_last_captured` in the watchlist router and `_last_capture` in
+the catalogue were the same function, written twice a few hours apart. Two answers to
+"when was this last captured" is the kind of thing that drifts silently. Now
+`catalogue.last_capture`, imported by the router.
+
+**Names nothing referenced.** Four were added this session and never used:
+`ALPACA_INDICATIVE_DELAY_MINUTES`, `storage.vendor.symbols_held`, and the
+`return_close` and `put_call_volume_ratio` properties on `VendorDailyBar`. The
+reasoning each carried survives elsewhere: the delay in the adapter docstring, the
+dividend argument in the `adj_close` field comment, and the put/call structural offset
+in the parser docstring and the entry above.
+
+Three were pre-existing and equally dead: `analytics.levels.total_volume`,
+`views.expiry_or_none`, and `jobs.validate.suggested_schedule`, the last of which took
+a `settings` argument it immediately discarded.
+
+**A comment that was false.** `HEADER_ALLOWED` and `HEADER_USED` in the Tradier adapter
+sat under a comment saying they "are logged when a limit is actually hit". They were
+never read anywhere. Removed rather than wired up: the available count is what the
+limiter needs, and a constant nothing references is a claim nobody checks.
+
+The full suite passing after every removal is what says they were dead rather than
+merely uncalled from where the scanner looked.
+
+**Also removed:** a stray empty `data/optscan.db` created by pointing a cleanup script
+at the wrong filename. The real database is `data/optscan.sqlite`.

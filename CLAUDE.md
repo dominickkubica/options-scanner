@@ -64,6 +64,7 @@ venv\Scripts\python -m optscan import-history <csv|dir> # vendor daily history, 
 venv\Scripts\python -m optscan history # what downloaded vendor history is held
 venv\Scripts\python -m optscan prices sync [GROUP...] # bulk daily bars for a universe
 venv\Scripts\python -m optscan prices groups # the curated symbol groups and their age
+venv\Scripts\python -m optscan snapshot --universe --provider alpaca # chains for every symbol
 venv\Scripts\python -m optscan trades  # realized results from imported statements
 venv\Scripts\python scripts/coverage_floor.py  # per module floor, after pytest --cov
 venv\Scripts\python -m optscan serve  # API on 8000, plus the UI if it is built
@@ -143,6 +144,25 @@ Robinhood activity export, `optscan trades` reports what the account actually di
   displayed price while the amount is exact, so equity fees are None, not zero.
 - **An unknown transaction code raises.** Assignment and exercise move real contracts,
   and a skipped row is a profit figure with a hole and nothing to say so.
+
+**Exception, authorized 2026-09-08: capturing every universe symbol.** `optscan
+snapshot --universe [GROUP...] --provider alpaca`, plus a `capture` scheduled job at
+15:50 market time. Full reasoning in the DECISIONS entry of that date.
+
+- **`get_chains` is on the provider interface with a default that loops `get_chain`.**
+  Every adapter works the day it is written; only one that cares about request count
+  overrides it. Alpaca's override uses the expiry range both option endpoints accept.
+  Measured: **50 requests per symbol before, 5-10 after**; 293 symbols is ~9 minutes and
+  ~30MB a day rather than an hour and 14,000 requests.
+- **`default_install=False`,** like `manage`. It is the only job needing a specific
+  vendor's credentials, and nine minutes over 300 symbols is a decision not a default.
+- **Capturing is not screening, and they stay separate.** The watchlist stays at six.
+  Best plays reports the top candidate across what it scans, so 293 symbols makes that a
+  maximum over ~50x more draws and would look better with nothing having improved.
+  Capture is irreversible if skipped; ranking can be fixed later.
+- **`--force` writes stale marks under a session that has not happened.** 19 such
+  captures were made while building this and had to be deleted. Delete anything it
+  writes before it reaches an IV history.
 
 **Exception, authorized 2026-09-08: charts for any symbol, and intraday drill-in.**
 Full reasoning in the DECISIONS entry of that date.

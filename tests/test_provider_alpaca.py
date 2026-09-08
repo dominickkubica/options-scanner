@@ -19,7 +19,7 @@ import httpx
 import pytest
 
 from optscan.config import Settings
-from optscan.models import Right
+from optscan.models import OptionChain, Right
 from optscan.providers.alpaca import (
     EXPIRY_LOOKAHEAD_DAYS,
     STOCK_BARS_FEED,
@@ -401,3 +401,100 @@ class TestOptionBars:
         provider = build(router({"/v1beta1/options/bars": {"bars": {}}}))
         provider.get_option_bars("QQQ260918P00700000", date(2020, 1, 1), date(2020, 2, 1))
         assert any("before alpaca has any" in r.message for r in caplog.records)
+
+
+class TestBatchedChains:
+    """One request set for every expiry, instead of three per expiry.
+
+    The naive shape costs contract metadata, snapshots and an underlying quote per
+    expiry, because `get_chain` fetches the quote every time it is called. At sixteen
+    expiries that is fifty requests for one symbol, and capturing a few hundred symbols
+    that way is fourteen thousand: over an hour against a 200 per minute limit.
+    """
+
+    def test_a_range_fetch_costs_a_handful_not_three_per_expiry(self) -> None:
+        seen: list[httpx.Request] = []
+        provider = build(
+            router(
+                {
+                    "/v2/options/contracts": CONTRACTS,
+                    "/v1beta1/options/snapshots/QQQ": CHAIN,
+                    "/v2/stocks/snapshots": SNAPSHOT,
+                },
+                seen,
+            )
+        )
+        expiries = [date(2026, 9, 18), date(2026, 9, 25), date(2026, 10, 2)]
+        provider.get_chains("QQQ", expiries)
+
+        # One contracts call, one snapshots call, one quote. Not three per expiry.
+        assert len(seen) <= 4, [str(r.url) for r in seen]
+        contracts = [r for r in seen if "options/contracts" in r.url.path]
+        assert len(contracts) == 1
+        assert contracts[0].url.params["expiration_date_gte"] == "2026-09-18"
+        assert contracts[0].url.params["expiration_date_lte"] == "2026-10-02"
+
+    def test_only_requested_expiries_come_back(self) -> None:
+        """The range spans the ends, which can include expiries in between that the
+        caller did not ask for. Returning those would silently widen the capture."""
+        provider = build(
+            router(
+                {
+                    "/v2/options/contracts": CONTRACTS,
+                    "/v1beta1/options/snapshots/QQQ": CHAIN,
+                    "/v2/stocks/snapshots": SNAPSHOT,
+                }
+            )
+        )
+        chains = provider.get_chains("QQQ", [date(2026, 9, 18)])
+        assert set(chains) == {date(2026, 9, 18)}
+
+    def test_open_interest_survives_the_batch_path(self) -> None:
+        """Both paths share `_parse_contract_rows` and `_contract` precisely so this
+        cannot drift: open interest is the whole reason the two hosts are joined."""
+        provider = build(
+            router(
+                {
+                    "/v2/options/contracts": CONTRACTS,
+                    "/v1beta1/options/snapshots/QQQ": CHAIN,
+                    "/v2/stocks/snapshots": SNAPSHOT,
+                }
+            )
+        )
+        chain = provider.get_chains("QQQ", [date(2026, 9, 18)])[date(2026, 9, 18)]
+        put = next(c for c in chain.contracts if c.strike == 700.0)
+        assert put.open_interest == 497
+        assert put.bid == pytest.approx(6.34)
+        assert put.vendor_iv == pytest.approx(0.1344)
+
+    def test_no_expiries_is_not_a_request(self) -> None:
+        seen: list[httpx.Request] = []
+        provider = build(router({}, seen))
+        assert provider.get_chains("QQQ", []) == {}
+        assert seen == []
+
+    def test_the_base_class_default_loops_and_tolerates_a_bad_expiry(self) -> None:
+        """Every adapter has a working implementation the day it is written; only one
+        that cares about request count needs to override it. A failing expiry is
+        omitted rather than raising, because fifteen good ones are worth storing."""
+        from optscan.providers.base import MarketDataProvider
+
+        class Looping(MarketDataProvider):
+            name = "looping"
+
+            def get_quote(self, symbol): ...
+            def get_expirations(self, symbol): ...
+            def get_history(self, symbol, days): ...
+
+            def get_chain(self, symbol, expiry):
+                if expiry.day == 25:
+                    raise NoDataAvailable("nothing listed")
+                return OptionChain(
+                    symbol=symbol,
+                    expiry=expiry,
+                    fetched_at=FROZEN_NOW,
+                    source=self.name,
+                )
+
+        got = Looping().get_chains("QQQ", [date(2026, 9, 18), date(2026, 9, 25)])
+        assert set(got) == {date(2026, 9, 18)}
