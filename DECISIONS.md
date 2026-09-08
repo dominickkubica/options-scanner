@@ -1963,3 +1963,66 @@ times more draws and the top of the list will look better with nothing having im
 The UI now makes it one click to do that. The guard belongs in the ranking rather than
 in the button, `calibration.py` already holds the cluster reasoning for this shape, and
 it is the next thing to build.
+
+---
+
+## 2026-09-08: the dashboard on a phone
+
+Two independent problems, both real, fixed separately.
+
+### It could not be reached
+
+`api_host` is `127.0.0.1`, so the server listened on loopback only and nothing else on
+the network could connect regardless of how it rendered.
+
+`optscan serve --lan` binds every interface, prints the address to open on a phone, and
+prints the firewall rule to run. **The default stays loopback and a test pins that.**
+This app has no authentication of any kind, so binding to the network puts the
+positions, the journal and the imported broker P/L in front of everyone on it. That is
+worth a deliberate flag rather than a config default somebody inherits.
+
+Two details worth keeping:
+
+- **The LAN address is found by opening a UDP socket toward a public address and
+  reading back which interface the routing table chose.** Nothing is sent; a UDP
+  connect is a purely local operation. `gethostbyname(gethostname())` was not used
+  because on Windows it routinely returns 127.0.0.1 or a virtual adapter, and an
+  address the phone cannot reach is worse than admitting there isn't one: it sends
+  somebody off debugging a firewall over an address that was never going to work.
+- **The firewall command is printed, never run.** It needs elevation and it changes a
+  system security setting, so it belongs to the person at the keyboard. It is scoped to
+  `-Profile Private -RemoteAddress LocalSubnet`: a rule on the public profile would
+  follow a laptop onto cafe wifi, which is a much worse exposure than a home network.
+
+### It did not render
+
+The stylesheet had **two media queries and both were `prefers-reduced-motion`.** No
+layout breakpoints at all. Measured at 375px: the fixed 224px sidebar took two thirds of
+the width and never collapsed, and the content in what was left wrapped one word per
+line, with the search box showing `Se`.
+
+The sidebar becomes an **off-canvas drawer** below 860px rather than stacking above the
+content. Stacking would push every screen down by the height of the nav, which on a
+phone is most of the first viewport, and the nav is the thing needed least often.
+`position: fixed` rather than absolute, so opening it halfway down a long table does not
+put it above the viewport.
+
+Every table in the app was already inside one of three wrappers, so the horizontal
+scroll went on those. Deliberately **not** on `.panel`: it holds the search dropdown,
+and a scroll container clips absolutely positioned children, which would cut the results
+off at the panel edge.
+
+`Panel`'s header moved from inline styles to a `.panel-head` class, because an inline
+style cannot be reached by a media query and it had to stack.
+
+Verified across all ten views at 375px: no horizontal page scroll and no element wider
+than the viewport outside a scroll wrapper. The Browse table scrolls inside its wrapper,
+622px of table in 331px of space, while the page itself stays put.
+
+**One thing that looked like a bug and was not.** The drawer appeared frozen at
+`translateX(-300px)` with the correct class applied and the correct rule matching, and
+an inline `transform: none` did not move it either. The cause was the preview pane being
+hidden: the page is not composited while it is not displayed, so CSS transitions never
+advance and the computed value stays at the start of the transition. Removing the
+transition made it snap correctly to `left: 0`. Worth recording because every symptom
+pointed at a specificity problem in the cascade and none of it was.

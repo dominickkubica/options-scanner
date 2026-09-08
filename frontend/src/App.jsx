@@ -52,6 +52,9 @@ export default function App() {
   const [expiry, setExpiry] = useState(null);
   const [handover, setHandover] = useState(null);
   const [browseGroup, setBrowseGroup] = useState(null);
+  // Drawer state. Only has an effect below the mobile breakpoint, where the
+  // sidebar is off canvas; on a wide screen the class is inert.
+  const [navOpen, setNavOpen] = useState(false);
 
   // Subscribed only while a view that can actually show live numbers is open. A
   // stream held open behind the payoff diagram would spend the request budget
@@ -84,6 +87,10 @@ export default function App() {
     setExpiry(null);
   }, [symbol]);
 
+  useEffect(() => {
+    setNavOpen(false);
+  }, [view, symbol]);
+
   // /health is the cheapest endpoint there is, so its failure is the clearest evidence
   // that the server itself is gone rather than one request having gone wrong.
   const apiDown = Boolean(health.error);
@@ -100,7 +107,14 @@ export default function App() {
   };
 
   return (
-    <div className="app">
+    <div className={`app ${navOpen ? "nav-open" : ""}`}>
+      <button
+        type="button"
+        className="nav-backdrop"
+        aria-label="Close navigation"
+        onClick={() => setNavOpen(false)}
+      />
+
       <aside className="sidebar">
         <div className="brand">
           optscan
@@ -179,6 +193,15 @@ export default function App() {
 
       <main className="main">
         <div className="topbar">
+          <button
+            type="button"
+            className="nav-toggle"
+            aria-label="Menu"
+            aria-expanded={navOpen}
+            onClick={() => setNavOpen((open) => !open)}
+          >
+            ☰
+          </button>
           <h1>{view === "home" ? "optscan" : view === "browse" ? "Browse" : symbol || "no symbol"}</h1>
           {summary.data && <span className="spot">{num(summary.data.spot)}</span>}
           {summary.data && <Provenance provenance={summary.data.provenance} />}

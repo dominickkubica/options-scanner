@@ -165,3 +165,57 @@ class TestIcon:
         )
         assert completed.returncode == 0, completed.stderr
         assert "32x32" in completed.stdout
+
+
+class TestLanAccess:
+    """Reaching the dashboard from a phone.
+
+    Off by default and opt in through `--lan`, because this app has no authentication
+    of any kind: binding to every interface puts the positions, the journal and the
+    imported broker P/L in front of everyone on the network.
+    """
+
+    def test_all_interfaces_is_not_the_configured_default(self) -> None:
+        """The default must stay loopback. A dashboard that quietly listened on the
+        network from the first run would expose it before anyone chose to."""
+        from optscan.config import Settings
+        from optscan.jobs.launcher import ALL_INTERFACES
+
+        assert Settings().api_host == "127.0.0.1"
+        assert Settings().api_host != ALL_INTERFACES
+
+    def test_the_lan_address_is_routable_or_none(self) -> None:
+        """Never a loopback address.
+
+        `gethostbyname(gethostname())` returns 127.0.0.1 or a virtual adapter on
+        Windows often enough that it is useless here, and an address a phone cannot
+        reach is worse than admitting there isn't one: it sends somebody debugging
+        their firewall over an address that was never going to work.
+        """
+        from optscan.jobs.launcher import lan_address
+
+        address = lan_address()
+        if address is not None:
+            assert not address.startswith("127."), "loopback is not a LAN address"
+            assert address.count(".") == 3
+
+    def test_the_firewall_rule_is_scoped_to_the_private_subnet(self) -> None:
+        """A rule on the public profile would follow a laptop onto cafe wifi, which is
+        a different and much worse exposure than a home network."""
+        from optscan.jobs.launcher import firewall_command
+
+        command = firewall_command(8000)
+        assert "-Profile Private" in command
+        assert "-RemoteAddress LocalSubnet" in command
+        assert "-LocalPort 8000" in command
+
+    def test_the_firewall_command_is_returned_not_run(self) -> None:
+        """Changing the firewall is a system security setting and needs elevation, so
+        it belongs to the person at the keyboard rather than to this process."""
+        import inspect
+
+        from optscan.jobs import launcher
+
+        source = inspect.getsource(launcher.firewall_command)
+        assert "subprocess" not in source
+        assert "New-NetFirewallRule" in source

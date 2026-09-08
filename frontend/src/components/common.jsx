@@ -227,15 +227,10 @@ export class ErrorBoundary extends Component {
 export function Panel({ title, right, children }) {
   return (
     <section className="panel">
+      {/* A class rather than inline styles: the mobile breakpoint has to stack this,
+          and an inline style cannot be reached by a media query. */}
       {(title || right) && (
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "baseline",
-            gap: 12,
-          }}
-        >
+        <div className="panel-head">
           {title && <h2>{title}</h2>}
           {right}
         </div>

@@ -1563,3 +1563,145 @@ tr.under-sampled td {
 .down {
   color: var(--bad);
 }
+
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+/* Mobile ------------------------------------------------------------------
+   Added 2026-09-08. The app had no layout breakpoints at all: at 375px the fixed
+   224px sidebar took two thirds of the screen and never collapsed, and the content
+   in what remained wrapped one word per line.
+
+   The sidebar becomes an off-canvas drawer rather than stacking above the content.
+   Stacking would push every screen down by the height of the nav, which on a phone
+   is most of the first viewport, and the nav is the thing you need least often. */
+
+.nav-toggle {
+  display: none;
+  background: var(--panel-2);
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-size: 17px;
+  line-height: 1;
+  padding: 8px 11px;
+  cursor: pointer;
+}
+
+.nav-backdrop {
+  display: none;
+}
+
+@media (max-width: 860px) {
+  .app {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    padding: 10px;
+  }
+
+  /* Off canvas. `position: fixed` rather than absolute so it is not affected by the
+     page having scrolled, which is the classic drawer bug: open it halfway down a
+     long table and it appears somewhere above the viewport. */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(84vw, 300px);
+    height: 100%;
+    border-radius: 0;
+    z-index: 60;
+    transform: translateX(-100%);
+    transition: transform 160ms ease;
+    box-shadow: 0 0 40px rgb(0 0 0 / 55%);
+  }
+
+  .app.nav-open .sidebar {
+    transform: none;
+  }
+
+  .app.nav-open .nav-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    background: rgb(0 0 0 / 55%);
+    border: none;
+  }
+
+  .nav-toggle {
+    display: inline-flex;
+  }
+
+  .main {
+    padding: 0 0 40px;
+  }
+
+  /* Baseline alignment stops making sense once these wrap onto their own lines. */
+  .topbar {
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+
+  .topbar h1 {
+    font-size: 17px;
+  }
+
+  .panel {
+    padding: 12px;
+  }
+
+  /* Every table in the app is already inside one of these three wrappers, so the
+     scroll goes on them rather than on the panel. Not on the panel: it holds the
+     search dropdown, and a scroll container clips absolutely positioned children,
+     which would cut the results off at the panel edge. */
+  .table-wrap,
+  .table-scroll,
+  .breakdown-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .table-wrap table,
+  .table-scroll table,
+  .breakdown-scroll table {
+    min-width: 520px;
+  }
+
+  /* One card per row rather than two half-width ones. minmax(170px) technically fits
+     two at 375px and both are then too narrow for a price and a percentage. */
+  .pinned-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .group-grid {
+    grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  }
+
+  .search-results {
+    max-height: 60vh;
+  }
+
+  /* The provenance line in a panel header is a sentence, and next to a title on a
+     narrow screen it becomes a two word column. */
+  .panel-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+}
+
+@media (max-width: 420px) {
+  .pinned-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .stats {
+    grid-template-columns: 1fr 1fr;
+  }
+}

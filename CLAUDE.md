@@ -144,6 +144,22 @@ Robinhood activity export, `optscan trades` reports what the account actually di
 - **An unknown transaction code raises.** Assignment and exercise move real contracts,
   and a skipped row is a profit figure with a hole and nothing to say so.
 
+**Exception, authorized 2026-09-08: phone access.** Two independent problems, fixed
+separately. Full reasoning in the DECISIONS entry of that date.
+
+- **`optscan serve --lan`** binds every interface and prints the phone URL plus the
+  firewall rule. **The default stays `127.0.0.1` and a test pins it.** There is no login
+  on this app, so going on the network exposes positions, journal and broker P/L to
+  everyone on it; that deserves a flag, not a config default.
+- The firewall command is **printed, never run**: it needs elevation and changes a
+  system security setting. Scoped `-Profile Private -RemoteAddress LocalSubnet` so it
+  cannot follow a laptop onto public wifi.
+- **The stylesheet had no layout breakpoints at all** before this. Below 860px the
+  sidebar is an off-canvas drawer, not a stacked nav: stacking costs most of the first
+  viewport for the thing needed least often. Scroll goes on the three table wrappers,
+  never on `.panel`, which would clip the search dropdown.
+- Verified on all ten views at 375px: no horizontal page scroll anywhere.
+
 **Exception, authorized 2026-09-08: a home page, search, and pinning.** `catalogue.py`,
 `api/routers/catalogue.py`, `views/Home.jsx`, `views/Browse.jsx`,
 `components/SymbolSearch.jsx`. Home is now the default view. Full reasoning in the

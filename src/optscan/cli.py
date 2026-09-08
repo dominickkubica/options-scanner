@@ -111,6 +111,15 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default=None, help="Defaults to api_host in config.")
     serve.add_argument("--port", type=int, default=None, help="Defaults to api_port in config.")
     serve.add_argument(
+        "--lan",
+        action="store_true",
+        help=(
+            "Listen on every interface so a phone on the same wifi can reach it, and "
+            "print the address to open. This app has no login: everyone on the network "
+            "can read your positions and journal. Off by default for that reason."
+        ),
+    )
+    serve.add_argument(
         "--reload",
         action="store_true",
         help="Restart on source changes. Development only.",
@@ -578,15 +587,39 @@ def _cmd_serve(settings: Settings, args: argparse.Namespace) -> int:
     import uvicorn
 
     from optscan.api.deps import frontend_dist
+    from optscan.console import Console
+    from optscan.jobs.launcher import ALL_INTERFACES, firewall_command, lan_address
 
-    host = args.host or settings.api_host
+    console = Console.for_stream(settings.color_mode)
     port = args.port or settings.api_port
+    host = args.host or (ALL_INTERFACES if args.lan else settings.api_host)
 
     print(f"API on http://{host}:{port}/api/health")
     if frontend_dist() is None:
         print("No built frontend. Run `npm run dev` in frontend/ and open http://localhost:5173")
     else:
         print(f"Dashboard on http://{host}:{port}/")
+
+    if host == ALL_INTERFACES:
+        address = lan_address()
+        print()
+        if address:
+            print(f"  On your phone, same wifi:  http://{address}:{port}/")
+        else:
+            print("  Could not work out this machine's network address. `ipconfig` will.")
+        # Loud, once, every time. The exposure is the whole point of the flag and it is
+        # not obvious from a URL that anything changed.
+        print(
+            console.bad(
+                "  No login exists on this app. Anyone on this network can open your "
+                "positions,\n  journal and imported broker P/L."
+            )
+        )
+        print()
+        print("  If the phone cannot connect, Windows Firewall is blocking the port.")
+        print("  Run this once, in an ADMIN PowerShell:")
+        print(f"    {firewall_command(port)}")
+        print()
 
     uvicorn.run(
         "optscan.api.app:app",

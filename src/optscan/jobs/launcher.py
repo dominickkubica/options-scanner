@@ -31,6 +31,7 @@ does nothing but open the browser.
 
 from __future__ import annotations
 
+import socket
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -311,3 +312,49 @@ def write_icon(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(icon_bytes())
     return path
+
+
+#: The address that means "listen on every interface". Binding here is what makes the
+#: dashboard reachable from a phone, and it is opt in for a reason: this app has no
+#: authentication of any kind, so anyone on the same network can read the positions,
+#: the journal and the imported broker P/L by typing an address.
+ALL_INTERFACES = "0.0.0.0"
+
+
+def lan_address() -> str | None:
+    """This machine's address on the local network, or None if it cannot be found.
+
+    Opens a UDP socket toward a public address and reads back which local interface
+    the routing table chose. **Nothing is sent.** A UDP connect is purely a local
+    operation that fixes the socket's peer, which is what makes this work with no
+    network traffic and no dependency on the host being reachable.
+
+    Preferred over `gethostbyname(gethostname())`, which on Windows routinely returns
+    127.0.0.1 or the address of a virtual adapter that a phone cannot reach.
+    """
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect(("8.8.8.8", 80))
+        address = probe.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        probe.close()
+    return address if address and not address.startswith("127.") else None
+
+
+def firewall_command(port: int) -> str:
+    """The PowerShell that opens the port to the local network.
+
+    Returned as text rather than run. Changing the firewall is a system security
+    setting and needs an elevated prompt, so it belongs to the person at the keyboard.
+
+    Scoped to `Private` profile and the local subnet: a rule that opened the port on a
+    public profile would follow the laptop onto café wifi, which is a different and
+    much worse exposure than a home network.
+    """
+    return (
+        f"New-NetFirewallRule -DisplayName 'optscan dashboard' -Direction Inbound "
+        f"-LocalPort {port} -Protocol TCP -Action Allow -Profile Private "
+        f"-RemoteAddress LocalSubnet"
+    )
