@@ -145,6 +145,19 @@ Robinhood activity export, `optscan trades` reports what the account actually di
 - **An unknown transaction code raises.** Assignment and exercise move real contracts,
   and a skipped row is a profit figure with a hole and nothing to say so.
 
+**Vendor value coercion lives in `providers/parsing.py`, once.** Three adapters had
+their own copy and disagreed about zero, which is the case the first convention in this
+file is about. `non_negative` for a **quote** (a 0.00 bid is real: measured, 57 of 642
+SPY contracts had one against a real ask, and none had both sides zero), `positive` for
+a **derived** value like an implied vol (a zero there is a solver that gave up, which is
+what Tradier's `mid_iv` taught), `whole` for counts. Picking the wrong one is quiet in
+both directions: `positive` on a bid loses the wings, `non_negative` on an IV turns a
+clamp into a data point.
+
+**PowerShell is invoked through `jobs/powershell.py`.** Four call sites had their own
+copy. The flags are the reason it is centralised: `-NoProfile` stops a user profile
+running first, `-NonInteractive` stops a scheduled task hanging on an invisible prompt.
+
 **Exception, authorized 2026-09-08: capturing every universe symbol.** `optscan
 snapshot --universe [GROUP...] --provider alpaca`, plus a `capture` scheduled job at
 15:50 market time. Full reasoning in the DECISIONS entry of that date.

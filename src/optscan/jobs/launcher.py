@@ -32,12 +32,12 @@ does nothing but open the browser.
 from __future__ import annotations
 
 import socket
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from optscan.config import REPO_ROOT, Settings
+from optscan.jobs import powershell
 from optscan.logging import get_logger
 
 log = get_logger("optscan.jobs.launcher")
@@ -93,19 +93,7 @@ def desktop_dir() -> Path:
     """
     if sys.platform != "win32":
         return Path.home() / "Desktop"
-    completed = subprocess.run(
-        [
-            "powershell",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "[Environment]::GetFolderPath('Desktop')",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    resolved = completed.stdout.strip()
+    resolved = powershell.output("[Environment]::GetFolderPath('Desktop')")
     return Path(resolved) if resolved else Path.home() / "Desktop"
 
 
@@ -201,20 +189,9 @@ def install_shortcut(settings: Settings) -> ShortcutResult:
             launcher=launcher,
         )
 
-    completed = subprocess.run(
-        [
-            "powershell",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            shortcut_script(launcher, shortcut, icon),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    completed = powershell.run(shortcut_script(launcher, shortcut, icon))
     if completed.returncode != 0:
-        message = (completed.stderr or completed.stdout).strip()
+        message = powershell.failure_message(completed)
         log.error("failed to create the shortcut", error=message)
         return ShortcutResult(ok=False, message=f"Could not create the shortcut: {message}")
 

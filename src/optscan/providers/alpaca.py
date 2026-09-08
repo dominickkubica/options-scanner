@@ -78,6 +78,7 @@ from optscan.providers.errors import (
     RateLimited,
     SymbolNotFound,
 )
+from optscan.providers.parsing import non_negative, positive, whole
 from optscan.providers.ratelimit import RateLimiter
 
 log = get_logger("optscan.providers.alpaca")
@@ -354,13 +355,13 @@ class AlpacaProvider(MarketDataProvider):
 
         return Quote(
             symbol=ticker,
-            last=_positive(trade.get("p")) or _positive(daily.get("c")),
-            bid=_positive(quote.get("bp")),
-            ask=_positive(quote.get("ap")),
-            bid_size=_size(quote.get("bs")),
-            ask_size=_size(quote.get("as")),
-            previous_close=_positive(previous.get("c")),
-            volume=_size(daily.get("v")),
+            last=positive(trade.get("p")) or positive(daily.get("c")),
+            bid=non_negative(quote.get("bp")),
+            ask=non_negative(quote.get("ap")),
+            bid_size=whole(quote.get("bs")),
+            ask_size=whole(quote.get("as")),
+            previous_close=positive(previous.get("c")),
+            volume=whole(daily.get("v")),
             fetched_at=self.now(),
             source=self.name,
         )
@@ -420,8 +421,8 @@ class AlpacaProvider(MarketDataProvider):
                     "expiry": date.fromisoformat(raw_expiry),
                     "strike": float(row["strike_price"]),
                     "right": Right.parse("C" if row.get("type") == "call" else "P"),
-                    "open_interest": _size(row.get("open_interest")),
-                    "close_price": _positive(row.get("close_price")),
+                    "open_interest": whole(row.get("open_interest")),
+                    "close_price": positive(row.get("close_price")),
                     "size": int(float(row.get("size") or 100)),
                 }
             except (KeyError, TypeError, ValueError):
@@ -448,18 +449,18 @@ class AlpacaProvider(MarketDataProvider):
             expiry=meta["expiry"],
             strike=meta["strike"],
             right=meta["right"],
-            bid=_positive(quote.get("bp")),
-            ask=_positive(quote.get("ap")),
+            bid=non_negative(quote.get("bp")),
+            ask=non_negative(quote.get("ap")),
             # The metadata's close_price is the previous session's settle and is
             # present far more often than a latest trade, which only exists for
             # contracts that traded today.
-            last=_positive(trade.get("p")) or meta["close_price"],
+            last=positive(trade.get("p")) or meta["close_price"],
             last_trade_at=_timestamp(trade.get("t")),
-            volume=_size(daily.get("v")),
+            volume=whole(daily.get("v")),
             open_interest=meta["open_interest"],
             # Recorded, never used. This project solves its own vol from the mid; a
             # vendor's number is kept only so the two can be compared.
-            vendor_iv=_positive(snapshot.get("impliedVolatility")),
+            vendor_iv=positive(snapshot.get("impliedVolatility")),
             contract_size=meta["size"],
             fetched_at=fetched,
             source=self.name,
@@ -670,7 +671,7 @@ class AlpacaProvider(MarketDataProvider):
             earnings_date=None,
             earnings_estimated=False,
             ex_dividend_date=_event_date(nearest.get("ex_date")) if nearest else None,
-            dividend_amount=_positive(nearest.get("rate")) if nearest else None,
+            dividend_amount=positive(nearest.get("rate")) if nearest else None,
             fetched_at=self.now(),
             source=self.name,
         )
@@ -851,32 +852,6 @@ class AlpacaProvider(MarketDataProvider):
 # ---------------------------------------------------------------------- parsing
 
 
-def _positive(value: Any) -> float | None:
-    """A positive float, or None. Zero and negatives become None.
-
-    Alpaca publishes 0 for a side with no quote. Zero is not a price, and letting one
-    through would make a mid of half the ask on every unquoted wing.
-    """
-    if value is None:
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if number > 0 else None
-
-
-def _size(value: Any) -> int | None:
-    """A non-negative integer, or None. Zero is kept: it is a real size."""
-    if value is None or value == "":
-        return None
-    try:
-        number = int(float(value))
-    except (TypeError, ValueError):
-        return None
-    return number if number >= 0 else None
-
-
 def _timestamp(value: Any) -> datetime | None:
     if not value:
         return None
@@ -904,7 +879,7 @@ def _bar(symbol: str, row: dict[str, Any], source: str) -> PriceBar:
             high=float(row["h"]),
             low=float(row["l"]),
             close=float(row["c"]),
-            volume=_size(row.get("v")),
+            volume=whole(row.get("v")),
             fetched_at=datetime.now(UTC),
             source=source,
         )

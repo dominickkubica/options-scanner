@@ -23,7 +23,6 @@ screen widens and says it could not check earnings.
 
 from __future__ import annotations
 
-import math
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, ClassVar
 
@@ -40,6 +39,7 @@ from optscan.providers.errors import (
     RateLimited,
     SymbolNotFound,
 )
+from optscan.providers.parsing import non_negative, whole
 from optscan.providers.ratelimit import RateLimiter, epoch_to_seconds
 
 log = get_logger("optscan.providers.tradier")
@@ -69,22 +69,11 @@ HTTP_SERVER_ERROR = 500
 AUTH_STATUSES = frozenset({401, 403})
 
 
-def _clean_float(value: Any) -> float | None:
-    """None for missing or negative. Zero is preserved: a zero bid is a real state."""
-    if value is None:
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    if math.isnan(number) or number < 0:
-        return None
-    return number
-
-
-def _clean_int(value: Any) -> int | None:
-    number = _clean_float(value)
-    return None if number is None else int(number)
+#: Local aliases for the shared coercers, kept because this file uses the names in a
+#: dozen places and because `_clean_epoch` below needs the float form. The semantics
+#: live in providers/parsing.py so all three adapters agree about a zero.
+_clean_float = non_negative
+_clean_int = whole
 
 
 def _clean_epoch(value: Any) -> datetime | None:

@@ -30,6 +30,7 @@ from optscan.providers.errors import (
     RateLimited,
     SymbolNotFound,
 )
+from optscan.providers.parsing import non_negative
 
 log = get_logger("optscan.providers.yfinance")
 
@@ -55,17 +56,10 @@ def _classify(error: Exception, symbol: str) -> Exception:
     return ProviderUnavailable(f"yfinance call failed for {symbol}: {error}")
 
 
-def _clean_float(value: Any) -> float | None:
-    """None for missing, NaN, or negative. Zero is preserved: it is a real quote state."""
-    if value is None:
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    if pd.isna(number) or number < 0:
-        return None
-    return number
+#: Local alias for the shared coercer. yfinance used `pd.isna` here rather than
+#: `math.isnan`; after `float()` the value is a plain float and the two agree, so
+#: the pandas dependency was doing nothing at this boundary.
+_clean_float = non_negative
 
 
 def _clean_int(value: Any) -> int | None:

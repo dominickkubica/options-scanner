@@ -2248,3 +2248,86 @@ merely uncalled from where the scanner looked.
 
 **Also removed:** a stray empty `data/optscan.db` created by pointing a cleanup script
 at the wrong filename. The real database is `data/optscan.sqlite`.
+
+---
+
+## 2026-09-08: looking for lines to cut, and finding a bug instead
+
+Asked whether anything could be trimmed. Measured first: 25,406 lines of source, of
+which **60% is code, 19% docstrings, 5% comments, 17% blank**. The prose is not fat.
+It is where every one of the eleven traps is recorded, and it is the reason they have
+not been hit twice. Nothing was cut from it.
+
+Two real duplications turned up, and one of them was hiding a bug.
+
+### Three adapters, three different answers about zero
+
+`tradier._clean_float`, `yfinance._clean_float` and `alpaca._positive` were near
+identical, and the small differences were the interesting part:
+
+    tradier    zero preserved   "a zero bid is a real state"
+    yfinance   zero preserved   "it is a real quote state"
+    alpaca     zero to None     "zero is not a price"
+
+The first convention in this project's CLAUDE.md is **"None means unknown, 0.0 means
+the vendor said zero. Never collapse the two."** Two adapters followed it and one did
+not, with nothing anywhere saying so.
+
+The Alpaca docstring justified it: "Alpaca publishes 0 for a side with no quote."
+**That is false, and it was measured rather than argued about.** On SPY 2026-09-18, of
+642 contracts:
+
+    genuine 0.00 bid with a real ask : 57
+    both sides zero (no quote at all) : 0
+    contracts with no quote object    : 0
+
+So every zero bid Alpaca publishes is a real one sided market on a far out of the money
+wing, and the adapter was discarding the bid on 9% of the chain. After the fix all 57
+come back, every one with a real ask, and nothing became None.
+
+`providers/parsing.py` now holds the two honest answers, and which one a field takes is
+a decision rather than a style choice: `non_negative` for a quote, `positive` for a
+derived value like an implied vol, where a zero is a solver that gave up rather than a
+measurement. That distinction is exactly what Tradier's unusable `mid_iv` taught, so
+both halves are now stated in one place instead of implied in three.
+
+`whole` joins them for counts, where zero is also real.
+
+### Four copies of a PowerShell invocation
+
+`subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ...])`
+appeared four times across `launcher.py` and `schedule.py`. The duplication mattered
+less than the flags: `-NoProfile` stops a user's own profile running before the command
+and `-NonInteractive` stops a scheduled task hanging forever on a prompt nobody can see.
+A fifth caller written from memory would plausibly omit one.
+
+`jobs/powershell.py` owns it, with `run`, `output` and `failure_message`. Verified after
+the change that `desktop_dir()` still resolves the OneDrive redirected Desktop and that
+`task_states` still reads a registered task, since both go through it.
+
+### What was left alone, and why
+
+**`cli.py` at 1,423 lines is the largest file and is not a problem.** pyproject already
+ignores PLR0915 there with the reason: it is long because it is flat, one statement per
+flag and one return per subcommand. Collapsing the argument parser into a data
+structure would scatter the definition of the command line and trade readable length
+for unreadable cleverness.
+
+**The repeated `generate(self, analysis, expiry, config)` across the strategy classes
+is an interface being implemented,** not duplication.
+
+**Tests are 13,797 lines against 25,406 of source.** That ratio is the point of them.
+
+### The honest arithmetic
+
+    removed from existing files   123
+    added to existing files        38
+    net removed from old code      85
+    two new shared modules        129
+    ------------------------------------
+    tree total              25,406 -> 25,450
+
+**Consolidating made the codebase slightly larger.** That is the true answer to "can we
+trim lines": not really, and chasing it would be the wrong goal here. The value taken
+was a correctness fix on 9% of every Alpaca chain and two behaviours that can now only
+be changed in one place. Neither shows up as a smaller number.

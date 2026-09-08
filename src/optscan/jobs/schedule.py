@@ -35,7 +35,6 @@ session is over. A missing session is invisible and permanent.
 
 from __future__ import annotations
 
-import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import date, datetime, time
@@ -44,6 +43,7 @@ from zoneinfo import ZoneInfo
 
 from optscan.config import REPO_ROOT, Settings
 from optscan.console import Console
+from optscan.jobs import powershell
 from optscan.logging import get_logger
 
 log = get_logger("optscan.jobs.schedule")
@@ -317,21 +317,10 @@ def install_task(settings: Settings, job: ScheduledJob) -> ScheduleResult:
         market_time=job.at.strftime("%H:%M"),
         market_timezone=settings.market_timezone,
     )
-    completed = subprocess.run(
-        [
-            "powershell",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            register_script(settings, job),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    completed = powershell.run(register_script(settings, job))
 
     if completed.returncode != 0:
-        message = (completed.stderr or completed.stdout).strip()
+        message = powershell.failure_message(completed)
         log.error("failed to register scheduled task", task=job.task_name, error=message)
         return ScheduleResult(ok=False, message=f"Could not create {job.task_name}: {message}")
 
@@ -379,18 +368,9 @@ def task_states(task_names: list[str]) -> dict[str, str]:
     if sys.platform != "win32" or not task_names:
         return {}
     names = ",".join(_quote(name) for name in task_names)
-    completed = subprocess.run(
-        [
-            "powershell",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            f"Get-ScheduledTask -TaskName @({names}) -ErrorAction SilentlyContinue | "
-            'ForEach-Object { "$($_.TaskName)=$($_.State)" }',
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
+    completed = powershell.run(
+        f"Get-ScheduledTask -TaskName @({names}) -ErrorAction SilentlyContinue | "
+        'ForEach-Object { "$($_.TaskName)=$($_.State)" }'
     )
     states: dict[str, str] = {}
     for line in completed.stdout.splitlines():
