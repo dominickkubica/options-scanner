@@ -83,6 +83,11 @@ const QUOTE_MODES = {
     // instead. Repeating the same number twice would waste the row, and the price is
     // the thing you still want to know while reading a percent.
     secondary: (q) => num(q.last),
+    // A price has no direction of its own, so the line stays neutral rather than
+    // borrowing the pill's colour. In the reference a green pill sits above a red
+    // secondary line whenever the two disagree: each number is coloured by its own
+    // sign, not by its neighbour's.
+    secondaryTone: "neutral",
   },
 };
 
@@ -264,7 +269,11 @@ export default function App() {
                       <span className={`quote-pill ${dir || "flat"}`}>
                         {mode.render(quote)}
                       </span>
-                      <span className={`quote-sub ${dir || "flat"}`}>
+                      <span
+                        className={`quote-sub ${
+                          mode.secondaryTone === "neutral" ? "flat" : dir || "flat"
+                        }`}
+                      >
                         {mode.secondary(quote)}
                       </span>
                     </button>

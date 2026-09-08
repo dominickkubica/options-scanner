@@ -154,11 +154,30 @@ button {
 }
 
 /* Fill only. No accent bar, no border: the filled rectangle is already unambiguous
-   and anything added to it is decoration on a state that was already legible. */
+   and anything added to it is decoration on a state that was already legible.
+
+   The pinned rows carry the state on the row rather than the button, because the row
+   is now a div holding two of them and highlighting only the left half would look
+   like a rendering fault. */
 .symbol-btn.active,
-.nav-btn.active {
+.nav-btn.active,
+.symbol-row.active {
   color: var(--text);
   background: var(--panel-2);
+}
+
+.symbol-row.active .symbol-btn,
+.symbol-row:hover .symbol-btn {
+  color: var(--text);
+  background: none;
+}
+
+.symbol-row:hover {
+  background: rgba(33, 43, 66, 0.7);
+}
+
+.symbol-row.empty .symbol-btn {
+  color: var(--dim);
 }
 
 .symbol-btn .captured {
@@ -2197,29 +2216,35 @@ tr.under-sampled td {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding-right: 14px;
+  /* Taller than a plain nav row, because the pill and the line under it need the
+     room. Padding on the row rather than the button so the hover fill covers both. */
+  padding: 3px 12px 3px 0;
+  border-radius: var(--r-sm);
 }
 
 .symbol-row .symbol-btn {
   flex: 1;
   min-width: 0;
+  padding: 10px 12px;
 }
 
 .quote-stack {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 1px;
+  gap: 2px;
   background: none;
   border: none;
-  padding: 2px 0;
+  padding: 0;
   cursor: pointer;
 }
 
 .quote-sub {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: 11px;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
 }
 
 .quote-sub.up {
@@ -2234,16 +2259,39 @@ tr.under-sampled td {
   color: var(--muted);
 }
 
+/* Centred by flex rather than by padding.
+ *
+ * Padding cannot centre monospaced digits reliably: the font's line box is taller than
+ * the glyphs and leaves them sitting high in the pill, which is why QQQ's number looked
+ * off. An explicit height with `align-items: center` and `line-height: 1` puts the
+ * glyphs in the middle whatever the font metrics do.
+ *
+ * Antialiased smoothing because subpixel rendering fringes badly on a saturated fill,
+ * which is most of what read as low resolution. */
 .quote-pill {
+  display: inline-flex;
+  align-items: center;
+  /* Right aligned, so the digits line up down the column the way they do in a
+     brokerage watchlist. Centring makes every row start at a different x and the
+     column stops being scannable. */
+  justify-content: flex-end;
   margin-left: auto;
-  padding: 2px 7px;
-  border-radius: 5px;
+  min-width: 78px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 7px;
   font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.01em;
   font-variant-numeric: tabular-nums;
-  color: #0b1220;
   white-space: nowrap;
+  /* White on both, as in the reference. Dark text on the green was legible but made
+     the two states look like different components. */
+  color: #fff;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 .quote-pill.up {
@@ -2252,7 +2300,6 @@ tr.under-sampled td {
 
 .quote-pill.down {
   background: var(--bad);
-  color: #fff;
 }
 
 /* No previous close to compare against, so there is a price but no direction. Neutral
