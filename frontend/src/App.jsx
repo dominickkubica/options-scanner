@@ -249,7 +249,14 @@ export default function App() {
                   <button
                     type="button"
                     className="symbol-btn"
-                    onClick={() => setSymbol(name)}
+                    onClick={() => {
+                      setSymbol(name);
+                      // Straight to the chart. Picking a symbol from the sidebar and
+                      // staying on the payoff diagram or the journal means the click
+                      // appears to have done nothing, because the view showing is not
+                      // the one that changed.
+                      setView("underlying");
+                    }}
                     title={
                       captured ? `chains captured ${captured}` : "no chains captured"
                     }

@@ -59,6 +59,12 @@ const INTRADAY_VISIBLE_BARS = 130;
 //: band and would spill into the neighbouring phase, which is worse than no label.
 const MIN_LABEL_WIDTH = 26;
 
+//: Where volume stops being ordinary, as a multiple of its own twenty bar average.
+//: Two is a real surge and half is a session nobody turned up to; between them the
+//: figure is just today's volume and colouring it would be decoration.
+const HEAVY_VOLUME = 2;
+const LIGHT_VOLUME = 0.5;
+
 //: Leading sessions fetched beyond the visible window so the long indicators can fill
 //: their windows. Sized to the longest period in the registry, which is the 200 day
 //: moving average.
@@ -478,20 +484,22 @@ export default function PriceChart({
       },
       // Horizontal navigation only. See the header comment on the locked price axis.
       //
-      // The wheel is deliberately given back to the page. A chart that captures the
-      // wheel is right when it owns the whole screen, and wrong in a panel stacked
-      // among five others: scrolling the page with the pointer anywhere over the chart
-      // silently zoomed it instead, which both blocked the scroll and left the view
-      // drifted away from the latest bar with no visible cause. Zoom stays available by
-      // dragging the time axis, and pinch still works on a trackpad.
+      // The wheel used to be given back to the page, on the reasoning that a chart
+      // capturing it is right when it owns the screen and wrong in a stacked panel.
+      // That reasoning did not survive the indicator panes: they capture the wheel, so
+      // the same gesture zoomed over an oscillator and scrolled the page two
+      // centimetres higher over the candles. An inconsistency inside one component is
+      // worse than either rule applied everywhere, and zoom is what somebody reaches
+      // for on a chart. The cost is real and accepted: the page cannot be scrolled with
+      // the pointer over a chart, so move it to the margin first.
       handleScale: {
         axisPressedMouseMove: { price: false, time: true },
         axisDoubleClickReset: { price: false, time: true },
-        mouseWheel: false,
+        mouseWheel: true,
         pinch: true,
       },
       handleScroll: {
-        mouseWheel: false,
+        mouseWheel: true,
         pressedMouseMove: true,
         horzTouchDrag: true,
         vertTouchDrag: false,
@@ -752,7 +760,39 @@ export default function PriceChart({
     const previous = at > 0 ? displayBars[at - 1] : null;
     const change = previous ? bar.close - previous.close : null;
     const changePct = previous && previous.close ? change / previous.close : null;
-    return { bar, change, changePct, hovering: Boolean(hoveredKey) };
+
+    // Volume against the twenty bars before this one. None of the window may have an
+    // unknown volume: treating a gap as zero drops the average and makes the ratio
+    // spike exactly on the bars where the data is worst.
+    let relVolume = null;
+    const window = displayBars.slice(Math.max(0, at - 20), at);
+    if (
+      window.length === 20 &&
+      bar.volume !== null &&
+      bar.volume !== undefined &&
+      window.every((row) => row.volume !== null && row.volume !== undefined)
+    ) {
+      const average = window.reduce((sum, row) => sum + row.volume, 0) / window.length;
+      if (average > 0) relVolume = bar.volume / average;
+    }
+
+    const volumeTone =
+      relVolume === null
+        ? ""
+        : relVolume >= HEAVY_VOLUME
+          ? "vol-heavy"
+          : relVolume <= LIGHT_VOLUME
+            ? "vol-light"
+            : "";
+
+    return {
+      bar,
+      change,
+      changePct,
+      relVolume,
+      volumeTone,
+      hovering: Boolean(hoveredKey),
+    };
   }, [displayBars, hoveredKey]);
 
   const windows = WINDOWS[interval];
@@ -850,17 +890,29 @@ export default function PriceChart({
             <span>
               <em>O</em> {num(readout.bar.open)}
             </span>
-            <span>
+            {/* The high and low carry the session's range, and tinting them towards up
+                and down says which end of it you are reading without another label. */}
+            <span className="ohlc-high">
               <em>H</em> {num(readout.bar.high)}
             </span>
-            <span>
+            <span className="ohlc-low">
               <em>L</em> {num(readout.bar.low)}
             </span>
-            <span>
+            {/* The close is coloured against the *previous* close, not the open, so it
+                agrees with the change beside the price and with the candle's own
+                colour. Colouring it against the open would make a gap-down day that
+                rallied read as green while the header says the day was red. */}
+            <span className={readout.change === null ? "" : direction === "neg" ? "neg" : "pos"}>
               <em>C</em> {num(readout.bar.close)}
             </span>
-            <span>
+            <span className={readout.volumeTone}>
               <em>Vol</em> {compact(readout.bar.volume)}
+              {/* Volume against its own twenty bar average. A raw figure means nothing
+                  without knowing what is normal for the symbol, and this is the number
+                  that turns it into information. */}
+              {readout.relVolume !== null && (
+                <span className="ohlc-rel"> {readout.relVolume.toFixed(1)}x</span>
+              )}
             </span>
           </div>
         )}

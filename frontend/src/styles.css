@@ -696,17 +696,46 @@ svg text {
 
 .chart-ohlc {
   display: flex;
-  gap: 14px;
+  gap: 18px;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 14px;
   color: var(--text);
   flex-wrap: wrap;
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
 }
 
 .chart-ohlc em {
   font-style: normal;
   color: var(--dim);
-  margin-right: 2px;
+  margin-right: 4px;
+  font-size: 11px;
+  /* The letter is a label, not a value. Keeping it smaller and dimmer lets the eye
+     land on the numbers, which is what the row is for. */
+  letter-spacing: 0.04em;
+}
+
+/* The extremes of the session, tinted towards the direction each represents. Muted
+   rather than full strength: the close is the number that should carry the colour. */
+.chart-ohlc .ohlc-high {
+  color: color-mix(in srgb, var(--chart-up) 62%, var(--text));
+}
+
+.chart-ohlc .ohlc-low {
+  color: color-mix(in srgb, var(--chart-down) 62%, var(--text));
+}
+
+.chart-ohlc .vol-heavy {
+  color: var(--warn);
+}
+
+.chart-ohlc .vol-light {
+  color: var(--dim);
+}
+
+.chart-ohlc .ohlc-rel {
+  opacity: 0.75;
+  font-size: 12px;
 }
 
 .chart-controls {
