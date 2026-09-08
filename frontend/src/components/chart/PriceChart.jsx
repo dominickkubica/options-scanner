@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CrosshairMode, LineStyle, createChart } from "lightweight-charts";
 import { aggregate } from "./aggregate.js";
 import { DEFAULT_ENABLED, INDICATORS, INDICATORS_BY_ID, latestValue } from "./indicators.js";
+import IndicatorPane, { AXIS_MIN_WIDTH } from "./IndicatorPane.jsx";
 import { readChartTheme, themeColour, withAlpha } from "./theme.js";
 import { compact, num, pct } from "../../format.js";
 
@@ -192,40 +193,6 @@ function timeKey(time) {
   return null;
 }
 
-/**
- * Draw an indicator's declared reference levels, and pin its scale if it is bounded.
- *
- * An oscillator without its levels is unreadable: RSI at 44 means nothing until 30 and
- * 70 are on the page, and a pane that rescales to the visible data makes the same shape
- * appear at every zoom. A bounded indicator therefore gets a fixed autoscale as well, so
- * "near the top" keeps meaning the same thing.
- */
-function applyBounds(entry, indicator, theme) {
-  const bounds = indicator.bounds;
-  if (!bounds) return;
-  const target = entry.get(indicator.plots[0].key);
-  if (!target) return;
-
-  for (const level of bounds.guides || []) {
-    target.createPriceLine({
-      price: level,
-      color: themeColour(theme, "--chart-axis"),
-      lineWidth: 1,
-      lineStyle: LineStyle.Dashed,
-      axisLabelVisible: true,
-      title: "",
-    });
-  }
-
-  if (bounds.min !== undefined && bounds.max !== undefined) {
-    target.applyOptions({
-      autoscaleInfoProvider: () => ({
-        priceRange: { minValue: bounds.min, maxValue: bounds.max },
-      }),
-    });
-  }
-}
-
 function addPlotSeries(chart, plot, theme, priceScaleId) {
   const colour = themeColour(theme, plot.colourToken);
   const shared = {
@@ -261,15 +228,14 @@ function addPlotSeries(chart, plot, theme, priceScaleId) {
 //: anything finer than a minute is not served.
 const SESSION_INTERVALS = ["1Min", "2Min", "5Min"];
 
-//: Where the lower pane sits, as fractions of the chart height. Above the volume
-//: histogram at 0.82 and below the price, so all three read as stacked bands rather
-//: than as overlapping series.
-const LOWER_PANE_MARGINS = { top: 0.66, bottom: 0.2 };
-
-//: How far the price is squeezed when a lower pane indicator is on. Without this the
-//: candles would draw straight through the oscillator.
-const PRICE_MARGINS_WITH_LOWER = { top: 0.06, bottom: 0.42 };
-const PRICE_MARGINS_ALONE = { top: 0.08, bottom: 0.28 };
+//: Room the price pane leaves for its own volume histogram.
+//:
+//: There used to be a second pair of margins for when a lower indicator was on, which
+//: squeezed the candles into the top half and gave the oscillator a fifth of the
+//: canvas. Both were bad: the candles lost room they needed and the oscillator never
+//: had enough to be read. Lower indicators now get their own charts underneath, so the
+//: price pane keeps one shape whatever is switched on. See IndicatorPane.
+const PRICE_MARGINS = { top: 0.08, bottom: 0.28 };
 
 function ChartTypeToggle({ chartType, setChartType }) {
   return (
@@ -343,6 +309,10 @@ export default function PriceChart({
   // first paint rather than one state change later. The app has no theme switch, so
   // this never needs to change afterwards.
   const [theme] = useState(readChartTheme);
+  // The chart instance in state as well as a ref, because the panes are children
+  // that have to re-render once it exists in order to subscribe to it.
+  const [chartReady, setChartReady] = useState(null);
+  const [dragId, setDragId] = useState(null);
 
   const container = useRef(null);
   const chartRef = useRef(null);
@@ -438,7 +408,11 @@ export default function PriceChart({
       rightPriceScale: {
         borderVisible: false,
         autoScale: true,
-        scaleMargins: { top: 0.08, bottom: 0.28 },
+        scaleMargins: PRICE_MARGINS,
+        // Forced so the panes underneath share this chart's left edge. Without it a
+        // pane whose values are two characters narrower sits a few pixels out and the
+        // time axes visibly disagree.
+        minimumWidth: AXIS_MIN_WIDTH,
       },
       timeScale: {
         borderVisible: false,
@@ -520,6 +494,7 @@ export default function PriceChart({
     });
 
     chartRef.current = chart;
+    setChartReady(chart);
     seriesRef.current = { candle, area, volume };
 
     chart.subscribeCrosshairMove((param) => {
@@ -633,28 +608,14 @@ export default function PriceChart({
 
     for (const id of enabled) {
       const indicator = INDICATORS_BY_ID.get(id);
-      if (!indicator) continue;
+      // Lower indicators are their own charts now, so this effect only owns overlays.
+      if (!indicator || indicator.group === "lower") continue;
 
       let entry = live.get(id);
       if (!entry) {
         entry = new Map();
-        // One scale per lower indicator, keyed by its id. Two of them would fight over
-        // one axis, which is why the chip row only ever enables one.
-        const scaleId = indicator.group === "lower" ? `lower-${id}` : undefined;
         for (const plot of indicator.plots) {
-          entry.set(plot.key, addPlotSeries(chart, plot, theme, scaleId));
-        }
-        if (scaleId) {
-          chart.priceScale(scaleId).applyOptions({
-            scaleMargins: LOWER_PANE_MARGINS,
-            borderVisible: false,
-          });
-          // The registry has declared `bounds` since the lower pane was added and
-          // nothing consumed it, so RSI drew as a bare wiggle with no 30 or 70 to read
-          // it against and no fixed scale between refreshes. Both come from the
-          // indicator rather than from here: this file still does not know what an RSI
-          // is, only that some indicators have levels worth marking.
-          applyBounds(entry, indicator, theme);
+          entry.set(plot.key, addPlotSeries(chart, plot, theme));
         }
         live.set(id, entry);
       }
@@ -664,12 +625,6 @@ export default function PriceChart({
         entry.get(plot.key).setData(computed[plot.key] || []);
       }
     }
-    // The price pane gives up room only while something is using it. Applied here
-    // rather than at creation because it has to follow the chips.
-    const hasLower = enabled.some((id) => INDICATORS_BY_ID.get(id)?.group === "lower");
-    chart.priceScale("right").applyOptions({
-      scaleMargins: hasLower ? PRICE_MARGINS_WITH_LOWER : PRICE_MARGINS_ALONE,
-    });
   }, [enabled, displayBars, theme]);
 
   // Chip state for every registered indicator, whether on or off, so a chip can say
@@ -727,21 +682,34 @@ export default function PriceChart({
   }
 
   function toggleIndicator(id) {
-    setEnabled((current) => {
-      if (current.includes(id)) return current.filter((item) => item !== id);
+    // Lower indicators used to replace each other, because they were sharing one
+    // squeezed price scale and an RSI bounded 0 to 100 drawn against a MACD's axis is a
+    // flat line in a corner. Each has its own chart now, so any number can be open.
+    setEnabled((current) =>
+      current.includes(id)
+        ? current.filter((item) => item !== id)
+        : [...current, id],
+    );
+  }
 
-      // Turning on a lower pane indicator turns off whichever one was there. They do
-      // not share an axis: RSI is bounded 0 to 100 and MACD is unbounded and centred
-      // on zero, so stacking them would draw one of them against the other's scale.
-      // Replacing is the honest behaviour and it needs no explanation on screen,
-      // because the previous chip visibly turns off as the new one turns on.
-      const incoming = INDICATORS_BY_ID.get(id);
-      const cleared =
-        incoming?.group === "lower"
-          ? current.filter((item) => INDICATORS_BY_ID.get(item)?.group !== "lower")
-          : current;
-      return [...cleared, id];
+  const lowerIds = enabled.filter(
+    (id) => INDICATORS_BY_ID.get(id)?.group === "lower",
+  );
+
+  // Reorder by dragging a pane onto another. Only the lower ids move; the overlay ids
+  // keep their place in `enabled` because their order there does not mean anything.
+  function dropOn(targetId) {
+    setEnabled((current) => {
+      if (!dragId || dragId === targetId) return current;
+      const lower = current.filter((id) => INDICATORS_BY_ID.get(id)?.group === "lower");
+      const rest = current.filter((id) => INDICATORS_BY_ID.get(id)?.group !== "lower");
+      const from = lower.indexOf(dragId);
+      const to = lower.indexOf(targetId);
+      if (from < 0 || to < 0) return current;
+      lower.splice(to, 0, ...lower.splice(from, 1));
+      return [...rest, ...lower];
     });
+    setDragId(null);
   }
 
   const direction = readout && readout.change !== null && readout.change < 0 ? "neg" : "pos";
@@ -889,6 +857,25 @@ export default function PriceChart({
           ))}
         </div>
       </div>
+
+      {lowerIds.map((id) => {
+        const indicator = INDICATORS_BY_ID.get(id);
+        if (!indicator) return null;
+        return (
+          <IndicatorPane
+            key={id}
+            indicator={indicator}
+            bars={displayBars}
+            theme={theme}
+            mainChart={chartReady}
+            dragging={dragId === id}
+            onClose={() => toggleIndicator(id)}
+            onDragStart={() => setDragId(id)}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={() => dropOn(id)}
+          />
+        );
+      })}
 
       {isIntraday && (
         <div className="chart-note">

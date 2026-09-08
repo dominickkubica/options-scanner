@@ -24,8 +24,9 @@ import {
 // {
 //   id:        stable string, used as the toggle key and the series map key
 //   label:     what the chip says
-//   group:     "overlay" draws on the price pane. "oscillator" is reserved for a
-//              separate pane and is not yet handled by the chart.
+//   group:     "overlay" draws on the price pane. "lower" gets a pane of its own,
+//              stacked underneath, with its own header and close button.
+//   paramLabel: what goes in the brackets after the name, as "RSI(14)". Optional.
 //   minBars:   bars required before anything can be drawn at all
 //   plots:     one or more series this indicator owns. Multiple plots is what lets a
 //              Bollinger band or a MACD arrive without touching the chart component.
@@ -177,6 +178,7 @@ export const INDICATORS = [
   {
     id: "rsi",
     label: "RSI",
+    paramLabel: "14",
     group: "lower",
     minBars: 15,
     bounds: { min: 0, max: 100, guides: [30, 70] },
@@ -190,6 +192,7 @@ export const INDICATORS = [
   {
     id: "macd",
     label: "MACD",
+    paramLabel: "12,26,9",
     group: "lower",
     minBars: 35,
     bounds: { guides: [0] },

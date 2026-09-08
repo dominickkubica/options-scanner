@@ -2032,3 +2032,73 @@ tr.under-sampled td {
   color: var(--muted);
   opacity: 0.9;
 }
+
+/* Indicator panes.
+ *
+ * Each oscillator is its own chart stacked under the price, with a header that reads
+ * like the chart legends people already know: name, parameters, then the value at the
+ * crosshair. The header exists as much for the readout as for the close button — the
+ * old squeezed pane had nowhere to put a number, so the value under the cursor simply
+ * was not available anywhere. */
+.indicator-pane {
+  margin-top: 6px;
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.indicator-pane.dragging {
+  opacity: 0.45;
+}
+
+.indicator-pane-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 8px 3px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+/* The grip is the drag affordance. The whole pane is draggable, but without something
+ * that looks grabbable nobody discovers it. */
+.pane-grip {
+  color: var(--dim);
+  cursor: grab;
+  font-size: 12px;
+  line-height: 1;
+  letter-spacing: -2px;
+}
+
+.indicator-pane.dragging .pane-grip {
+  cursor: grabbing;
+}
+
+.pane-name {
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* Coloured to match the line it reports, so a MACD header maps onto its three lines
+ * without a legend explaining which is which. */
+.pane-value {
+  font-variant-numeric: tabular-nums;
+}
+
+.pane-close {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--dim);
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+}
+
+.pane-close:hover {
+  color: var(--bad);
+}
+
+.indicator-pane-canvas {
+  width: 100%;
+}
