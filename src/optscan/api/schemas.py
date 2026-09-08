@@ -84,6 +84,82 @@ class LiveStatusOut(ApiModel):
     )
 
 
+class CatalogueEntryOut(ApiModel):
+    """One symbol in the search results.
+
+    `screenable` is the field that matters and it is not the same as `has_prices`.
+    After a bulk price sync there are hundreds of symbols with a decade of bars and a
+    handful with option chains, and only the second can produce a candidate.
+    """
+
+    symbol: str
+    groups: list[str] = Field(default_factory=list)
+    on_watchlist: bool = False
+    has_prices: bool = False
+    price_sessions: int = 0
+    price_first: date | None = None
+    price_last: date | None = None
+    price_sources: list[str] = Field(default_factory=list)
+    has_iv_history: bool = Field(
+        default=False,
+        description=(
+            "Whether any vendor published an implied vol series for this symbol. Only "
+            "imported downloads carry one, and it is what makes an IV rank possible."
+        ),
+    )
+    last_capture: date | None = None
+    screenable: bool = False
+    status: str = ""
+    #: Last stored close and the move into it, from daily bars rather than a quote.
+    #: Dated on purpose: this is history, not a live price.
+    last_close: float | None = None
+    change_pct: float | None = None
+
+
+class CatalogueOut(ApiModel):
+    """Search results, plus the groups and totals the browser needs to render tabs."""
+
+    entries: list[CatalogueEntryOut] = Field(default_factory=list)
+    groups: dict[str, int] = Field(default_factory=dict)
+    total_symbols: int = 0
+    matched: int = 0
+    universe_checked: date | None = None
+    universe_note: str | None = Field(
+        default=None,
+        description=(
+            "Set when the curated universe is old enough to have missed index changes. "
+            "These groups are hand typed and notice nothing on their own."
+        ),
+    )
+
+
+class HomeOut(ApiModel):
+    """The landing page payload."""
+
+    watchlist: list[CatalogueEntryOut] = Field(default_factory=list)
+    groups: dict[str, int] = Field(default_factory=dict)
+    total_symbols: int = 0
+    with_prices: int = 0
+    screenable: int = 0
+    universe_note: str | None = None
+    notes: list[str] = Field(default_factory=list)
+
+
+class WatchlistChangeOut(ApiModel):
+    """What adding or removing a symbol actually did."""
+
+    symbol: str
+    on_watchlist: bool
+    changed: bool
+    note: str | None = Field(
+        default=None,
+        description=(
+            "What the user needs to know next. Adding a symbol does not capture a "
+            "chain: the earliest it can be screened is after the next snapshot run."
+        ),
+    )
+
+
 class WatchlistOut(ApiModel):
     symbols: list[str]
     captured: dict[str, date | None] = Field(

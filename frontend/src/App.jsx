@@ -9,7 +9,10 @@ import {
   useAsync,
 } from "./components/common.jsx";
 import { CONNECTION, useLive } from "./live.js";
+import SymbolSearch from "./components/SymbolSearch.jsx";
 import BestPlays from "./views/BestPlays.jsx";
+import Browse from "./views/Browse.jsx";
+import Home from "./views/Home.jsx";
 import Chain from "./views/Chain.jsx";
 import Journal from "./views/Journal.jsx";
 import Levels from "./views/Levels.jsx";
@@ -27,7 +30,9 @@ import { num } from "./format.js";
 // three day old mark as the current market.
 
 const VIEWS = [
+  { key: "home", label: "Home" },
   { key: "best", label: "Best plays" },
+  { key: "browse", label: "Browse" },
   { key: "opportunities", label: "Opportunities" },
   { key: "chain", label: "Chain" },
   { key: "underlying", label: "Underlying" },
@@ -43,9 +48,10 @@ export default function App() {
   const liveStatus = useAsync(() => api.liveStatus(), []);
 
   const [symbol, setSymbol] = useState(null);
-  const [view, setView] = useState("best");
+  const [view, setView] = useState("home");
   const [expiry, setExpiry] = useState(null);
   const [handover, setHandover] = useState(null);
+  const [browseGroup, setBrowseGroup] = useState(null);
 
   // Subscribed only while a view that can actually show live numbers is open. A
   // stream held open behind the payoff diagram would spend the request budget
@@ -108,7 +114,19 @@ export default function App() {
         </div>
 
         <div>
-          <div className="section-label">Symbols</div>
+          <div className="section-label">Search</div>
+          <SymbolSearch
+            groups={{}}
+            onSelect={(entry) => {
+              setSymbol(entry.symbol);
+              if (view === "home" || view === "browse") setView("underlying");
+            }}
+            onChanged={() => watchlist.reload()}
+          />
+        </div>
+
+        <div>
+          <div className="section-label">Pinned</div>
           <div className="symbol-list">
             {(watchlist.data?.symbols || []).map((name) => {
               const captured = watchlist.data.captured[name];
@@ -161,7 +179,7 @@ export default function App() {
 
       <main className="main">
         <div className="topbar">
-          <h1>{symbol || "no symbol"}</h1>
+          <h1>{view === "home" ? "optscan" : view === "browse" ? "Browse" : symbol || "no symbol"}</h1>
           {summary.data && <span className="spot">{num(summary.data.spot)}</span>}
           {summary.data && <Provenance provenance={summary.data.provenance} />}
           <ConnectionBadge
@@ -189,6 +207,30 @@ export default function App() {
             server, so leaving them mounted repeats the same failure once per panel
             underneath the sentence that already explained it. */}
         <ErrorBoundary key={view}>
+          {!apiDown && view === "home" && (
+            <Home
+              onSelect={(name) => {
+                setSymbol(name);
+                setView("underlying");
+              }}
+              onGoto={(next, options) => {
+                if (options?.group) setBrowseGroup(options.group);
+                setView(next);
+              }}
+            />
+          )}
+
+          {!apiDown && view === "browse" && (
+            <Browse
+              group={browseGroup}
+              onSelectGroup={setBrowseGroup}
+              onSelect={(name) => {
+                setSymbol(name);
+                setView("underlying");
+              }}
+            />
+          )}
+
           {!apiDown && view === "best" && (
             <BestPlays
               onOpenPayoff={openPayoff}

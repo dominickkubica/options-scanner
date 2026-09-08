@@ -144,6 +144,33 @@ Robinhood activity export, `optscan trades` reports what the account actually di
 - **An unknown transaction code raises.** Assignment and exercise move real contracts,
   and a skipped row is a profit figure with a hole and nothing to say so.
 
+**Exception, authorized 2026-09-08: a home page, search, and pinning.** `catalogue.py`,
+`api/routers/catalogue.py`, `views/Home.jsx`, `views/Browse.jsx`,
+`components/SymbolSearch.jsx`. Home is now the default view. Full reasoning in the
+DECISIONS entry of that date.
+
+- **Three data states, never conflated.** In a group (a label), has price history
+  (chartable, **not screenable**), has captured chains (the only screenable one).
+  Currently 293 / 293 / **6**. Every search row shows a status phrase, not a checkmark.
+- **Pinning does not capture a chain.** It makes the *next* snapshot run fetch one, and
+  every add says so. A pinned card with no capture is drawn **outlined rather than
+  filled** - the same signal Best plays uses for a blocked near miss, reused on purpose
+  so the app has one vocabulary for "real, but not ready".
+- **Unpinning deletes nothing.** A chain from a day that has passed cannot be captured
+  again.
+- **The watchlist is the only thing this API writes.** Justified because it decides what
+  the capture job fetches; idempotent, so a double click is not an error.
+- **Two vendors on one symbol broke two numbers, both found by reading the page.** The
+  daily change was computed between two vendors' *same* session and rendered +0.00% on
+  exactly AAPL and QQQ, the only dual-sourced symbols. Session counts were summed across
+  vendors, reporting 5,699 for a symbol with 3,188. Pick one source first;
+  `COUNT(DISTINCT session_date)`. Neither is visible in a test that seeds one vendor.
+
+**Not done, and next:** pinning is now one click, and Best plays reports the top
+candidate across the watchlist, so a large watchlist makes that a maximum over far more
+draws and the list will look better with nothing having improved. The guard belongs in
+the ranking, not the button.
+
 **Exception, authorized 2026-09-07: bulk price history and a symbol universe.**
 `optscan prices sync` fills `vendor_daily` for many symbols at once; `universe.yaml`
 and `universe.py` hold the named groups. Migration 8. First run stored **293 of 294

@@ -1879,3 +1879,87 @@ That is a selection effect, it will make the top of the list look dramatically b
 without anything improving, and it is the same family as every other entry in this log.
 The cluster reasoning in `calibration.py` already exists to handle exactly this shape
 of problem and has not been applied to it.
+
+---
+
+## 2026-09-08: a home page, ticker search, and pinning
+
+The sidebar listed six symbols as buttons. That was the right shape for six and stopped
+working the moment the catalogue reached 293, so this adds a landing page, a search box,
+a group browser, and the ability to pin a ticker from the UI.
+
+`catalogue.py`, `api/routers/catalogue.py`, `views/Home.jsx`, `views/Browse.jsx`,
+`components/SymbolSearch.jsx`.
+
+### The distinction the whole thing is built around
+
+Three facts get confused constantly once there are hundreds of tickers, and separating
+them is most of the value here:
+
+  - **In a universe group.** A label somebody typed. Not data.
+  - **Has price history.** Daily bars are stored. Enough to chart, to compute realized
+    vol, to draw levels. **Not enough to screen.**
+  - **Has captured option chains.** The only one that lets the screener produce a
+    candidate.
+
+Right now that is 293, 293, and **6**. A search result showing only "found" would invite
+somebody to search a ticker, click it, and meet an empty screener with no explanation.
+So every row carries a status phrase rather than a checkmark, `screenable` is its own
+field, and the home page's coverage line puts the accent on the smallest number.
+
+### Pinning is honest about what it does not do
+
+Adding a symbol to the watchlist makes the **next** `optscan snapshot` run fetch its
+chains. It does not conjure a chain that was never captured, and the earliest a newly
+pinned symbol can be screened is after that run. Every add returns a note saying so, the
+home page raises it under "Needs attention", and the pinned card is drawn **outlined
+rather than filled** until a capture exists.
+
+That outline is the same signal Best plays uses for a blocked near miss, and reusing it
+was deliberate: both mean "a real thing whose data is not ready", and the app now has
+one visual vocabulary for that rather than two.
+
+Removing a symbol stops future captures and deletes nothing. A chain from a day that has
+passed cannot be captured again, so a removal that cleaned up history would be
+irreversible in a way nothing warns about.
+
+### Watchlist editing is the one write in this API
+
+Every other route reads. This one writes, and it is the exception worth making: the
+watchlist decides what the capture job fetches, and a dashboard that can show a symbol,
+say it has ten years of prices and no chains, and offer no way to fix that is a dead
+end. The writes are small, reversible and idempotent; adding a symbol already present
+reports `changed: false` rather than failing, because a double click is not an error.
+
+### Two bugs found by looking at the rendered page
+
+Both were in code written the same hour, and both were about **two vendors holding the
+same symbol** — which only became possible earlier the same day.
+
+- **The daily change was computed across vendors.** The obvious query ranks a symbol's
+  rows by `session_date DESC` and takes the top two. With one source that is two
+  consecutive days. With two sources it is *the same session from two vendors*, and the
+  "change" is their disagreement rather than a market move. It rendered as **+0.00% on
+  exactly AAPL and QQQ** while every single-sourced symbol showed a real move: the two
+  richest histories in the database were the two showing nothing. A source is now chosen
+  per symbol first, the one with the latest session, and both closes come from it.
+- **Session counts were summed across vendors.** AAPL reported **5,699 sessions** of
+  history, being 2,511 Alpaca plus 3,188 Market Chameleon over mostly the same dates.
+  It has 3,188. `COUNT(DISTINCT session_date)` now.
+
+Same root cause, opposite symptoms, and neither is visible in a unit test that seeds one
+vendor. Both are pinned by tests that seed two.
+
+A third was caught by the coherence validator added earlier the same day: the first
+draft of the test fixture held `high` fixed while `close` climbed past it, and every bar
+after the second was refused. The validator working, rather than the fixture being
+awkward.
+
+### What is deliberately not done
+
+**Pinning does not warn about the selection effect yet.** Best plays reports the top
+candidate across the watchlist, so pinning fifty symbols makes that a maximum over fifty
+times more draws and the top of the list will look better with nothing having improved.
+The UI now makes it one click to do that. The guard belongs in the ranking rather than
+in the button, `calibration.py` already holds the cluster reasoning for this shape, and
+it is the next thing to build.

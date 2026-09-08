@@ -44,6 +44,24 @@ export const api = {
   liveStatus: () => request("/live/status"),
   positions: () => request("/positions"),
   watchlist: () => request("/watchlist"),
+  home: () => request("/home"),
+  catalogue: ({ q, group, onlyWatchlist, onlyScreenable, limit } = {}) =>
+    request(
+      `/catalogue${query({
+        q,
+        group,
+        only_watchlist: onlyWatchlist || undefined,
+        only_screenable: onlyScreenable || undefined,
+        limit,
+      })}`,
+    ),
+  // The only two calls in this client that write anything. Both are idempotent, and
+  // both return a note the caller is expected to show: adding a symbol does not
+  // capture a chain, it makes the next snapshot run fetch one.
+  pin: (symbol) =>
+    request(`/watchlist/${encodeURIComponent(symbol)}`, { method: "POST" }),
+  unpin: (symbol) =>
+    request(`/watchlist/${encodeURIComponent(symbol)}`, { method: "DELETE" }),
   symbol: (symbol) => request(`/symbols/${encodeURIComponent(symbol)}`),
   chain: (symbol, expiry) =>
     request(`/symbols/${encodeURIComponent(symbol)}/chain${query({ expiry })}`),
