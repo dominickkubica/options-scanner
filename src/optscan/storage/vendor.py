@@ -139,6 +139,21 @@ def import_daily_bars(
     if not bars:
         raise ValueError("nothing to import")
 
+    seen: dict[date, int] = {}
+    for index, bar in enumerate(bars):
+        if bar.session_date in seen:
+            # The file parser catches this for a download. A bulk API fetch has no
+            # parser, so the guard lives here too: two rows for one session would
+            # double that day's weight in every average computed over the series, and
+            # the unique index turns it into a crash halfway through a batch rather
+            # than a message.
+            raise ValueError(
+                f"{bar.symbol} has two bars for {bar.session_date} in one import "
+                f"(rows {seen[bar.session_date]} and {index}). A daily series cannot "
+                "hold a session twice."
+            )
+        seen[bar.session_date] = index
+
     sources = {bar.source for bar in bars}
     symbols = {bar.symbol for bar in bars}
     if len(sources) != 1 or len(symbols) != 1:
@@ -183,6 +198,7 @@ def import_daily_bars(
                 bar.adj_close,
                 bar.volume,
                 bar.vwap,
+                bar.trade_count,
                 bar.iv30,
                 bar.call_volume,
                 bar.put_volume,
@@ -197,9 +213,9 @@ def import_daily_bars(
             """
             INSERT INTO vendor_daily (
                 source, symbol, session_date, source_file, imported_at,
-                open, high, low, close, adj_close, volume, vwap, iv30,
+                open, high, low, close, adj_close, volume, vwap, trade_count, iv30,
                 call_volume, put_volume, call_open_interest, put_open_interest
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             pending,
         )
@@ -285,6 +301,7 @@ def daily_bars(
             adj_close=row["adj_close"],
             volume=row["volume"],
             vwap=row["vwap"],
+            trade_count=row["trade_count"],
             iv30=row["iv30"],
             call_volume=row["call_volume"],
             put_volume=row["put_volume"],

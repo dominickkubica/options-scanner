@@ -1,0 +1,355 @@
+# Symbol universes for bulk price history.
+#
+# ## What this file is, and what it is not
+#
+# It is a **curated, dated list**, maintained by hand. It is not index membership and
+# must never be described as such anywhere in the UI.
+#
+# Alpaca publishes 14,277 active US equities and carries no sector, industry or index
+# field on any of them, so there is nothing to derive these groups from. Every ticker
+# below was chosen deliberately. That has two consequences worth stating plainly:
+#
+#   - **`sp500` drifts.** Index membership changes several times a year, and this file
+#     learns about it only when somebody edits it. Anything computed over `sp500` is
+#     "these symbols" and not "the S&P 500", and a backtest that treats it as the index
+#     is quietly survivorship biased: the constituents listed here are the ones that
+#     were in the index recently enough to be typed, which is exactly the set that did
+#     not get dropped for performing badly.
+#   - **Every symbol is validated against the vendor before use.** `optscan prices sync`
+#     reports which tickers did not resolve rather than dropping them, because a
+#     silently missing symbol is a hole in a study nobody can see. Delistings, ticker
+#     changes and acquisitions all show up this way.
+#
+# `date_checked` is when the list was last reconciled against reality by a human.
+#
+# Add a group by adding a key. Nothing in code enumerates these names.
+
+meta:
+  date_checked: 2026-09-07
+  note: >
+    Curated by hand. Not index membership. See the header before using any group as
+    though it were a definitive constituent list.
+
+groups:
+
+  # The liquid index and sector ETFs. These are the ones this account actually trades
+  # and they are the only group whose options are deep enough for the screen's own
+  # liquidity floor on every expiry.
+  etf:
+    - SPY
+    - QQQ
+    - IWM
+    - DIA
+    - VTI
+    - XLK
+    - XLF
+    - XLE
+    - XLV
+    - XLI
+    - XLP
+    - XLU
+    - XLB
+    - XLY
+    - XLRE
+    - SMH
+    - SOXX
+    - ARKK
+    - TLT
+    - HYG
+
+  # Large cap technology. "Top 100" is a moving target with no official definition, so
+  # this is the liquid large and mid cap US tech complex rather than a ranked hundred.
+  tech:
+    - AAPL
+    - MSFT
+    - NVDA
+    - GOOGL
+    - GOOG
+    - AMZN
+    - META
+    - AVGO
+    - TSLA
+    - ORCL
+    - AMD
+    - NFLX
+    - CRM
+    - ADBE
+    - CSCO
+    - ACN
+    - INTC
+    - QCOM
+    - TXN
+    - AMAT
+    - MU
+    - LRCX
+    - KLAC
+    - SNPS
+    - CDNS
+    - ANET
+    - PANW
+    - CRWD
+    - NOW
+    - INTU
+    - IBM
+    - UBER
+    - SHOP
+    - SQ
+    - PYPL
+    - ABNB
+    - SNOW
+    - DDOG
+    - NET
+    - ZS
+    - MDB
+    - TEAM
+    - WDAY
+    - ADSK
+    - FTNT
+    - MRVL
+    - NXPI
+    - ON
+    - MCHP
+    - ADI
+    - TER
+    - ASML
+    - TSM
+    - ARM
+    - SMCI
+    - DELL
+    - HPQ
+    - HPE
+    - WDC
+    - STX
+    - GLW
+    - APH
+    - MSI
+    - ROP
+    - CTSH
+    - INFY
+    - EPAM
+    - PLTR
+    - COIN
+    - HOOD
+    - RBLX
+    - U
+    - TTD
+    - APP
+    - SPOT
+    - PINS
+    - SNAP
+    - ZM
+    - DOCU
+    - OKTA
+    - TWLO
+    - HUBS
+    - VEEV
+    - TYL
+    - PAYC
+    - PCTY
+    - GEN
+    - AKAM
+    - JNPR
+    - KEYS
+    - TDY
+    - GRMN
+    - LSCC
+    - QRVO
+    - SWKS
+    - ENTG
+    - MPWR
+    - ALGM
+    - WOLF
+    - AEHR
+
+  # Precious and industrial metals: miners, royalty companies, and the physical ETFs.
+  metals:
+    - GLD
+    - SLV
+    - IAU
+    - GDX
+    - GDXJ
+    - SIL
+    - PPLT
+    - PALL
+    - COPX
+    - XME
+    - NEM
+    - GOLD
+    - AEM
+    - KGC
+    - AU
+    - WPM
+    - FNV
+    - RGLD
+    - PAAS
+    - HL
+    - CDE
+    - AG
+    - EXK
+    - FCX
+    - SCCO
+    - TECK
+    - RIO
+    - BHP
+    - VALE
+    - AA
+    - X
+    - CLF
+    - NUE
+    - STLD
+    - MT
+    - ATI
+    - CRS
+    - HAYN
+
+  # Uranium: miners, developers, and the physical trusts.
+  uranium:
+    - URA
+    - URNM
+    - URNJ
+    - CCJ
+    - NXE
+    - DNN
+    - UEC
+    - UUUU
+    - LEU
+    - LTBR
+    - SMR
+    - OKLO
+    - ASPI
+    - PDN
+    - EU
+
+  # Rare earths, lithium, and the wider critical minerals complex. Grouped together
+  # because the tradable US listings are too few to justify three groups and they move
+  # on the same policy headlines.
+  rare_earth:
+    - MP
+    - REMX
+    # Lynas Rare Earths is deliberately absent. Its ASX line (LYNAS) is not a US
+    # ticker and its ADR (LYSDY) is OTC, which this plan refuses outright with
+    # 403 subscription does not permit querying OTC data. No OTC name can be
+    # synced here, so listing one would fail on every run forever.
+    - TMC
+    - LAC
+    - ALB
+    - SQM
+    - LTHM
+    - PLL
+    - SGML
+    - IONR
+    - NB
+    - USAR
+    - CRML
+    - IDR
+    - TROX
+    - KRO
+
+  # A hand kept slice of the S&P 500 outside the tech group above: the largest
+  # financials, healthcare, energy, industrials and consumer names. Deliberately not
+  # the full 500 and deliberately not called it. See the header.
+  sp500_large:
+    - BRK.B
+    - JPM
+    - V
+    - MA
+    - BAC
+    - WFC
+    - GS
+    - MS
+    - C
+    - SCHW
+    - BLK
+    - SPGI
+    - AXP
+    - PGR
+    - CB
+    - MMC
+    - LLY
+    - UNH
+    - JNJ
+    - ABBV
+    - MRK
+    - PFE
+    - TMO
+    - ABT
+    - DHR
+    - AMGN
+    - BMY
+    - GILD
+    - CVS
+    - MDT
+    - ISRG
+    - SYK
+    - BSX
+    - VRTX
+    - REGN
+    - XOM
+    - CVX
+    - COP
+    - EOG
+    - SLB
+    - PSX
+    - MPC
+    - VLO
+    - OXY
+    - WMB
+    - KMI
+    - CAT
+    - DE
+    - HON
+    - GE
+    - BA
+    - LMT
+    - RTX
+    - NOC
+    - GD
+    - UNP
+    - UPS
+    - FDX
+    - CSX
+    - NSC
+    - ETN
+    - EMR
+    - ITW
+    - PH
+    - WM
+    - WMT
+    - COST
+    - PG
+    - KO
+    - PEP
+    - PM
+    - MO
+    - MDLZ
+    - CL
+    - KMB
+    - GIS
+    - HD
+    - LOW
+    - MCD
+    - SBUX
+    - NKE
+    - TJX
+    - TGT
+    - DIS
+    - CMCSA
+    - T
+    - VZ
+    - TMUS
+    - NEE
+    - DUK
+    - SO
+    - D
+    - AEP
+    - EXC
+    - LIN
+    - APD
+    - SHW
+    - ECL
+    - DOW
+    - PLD
+    - AMT
+    - EQIX
+    - SPG
+    - O

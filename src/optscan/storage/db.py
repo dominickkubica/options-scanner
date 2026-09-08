@@ -344,6 +344,19 @@ MIGRATIONS: tuple[str, ...] = (
         last_session        TEXT
     );
     """,
+    # 8: trade count on a daily bar, added when Alpaca arrived.
+    #
+    # `vendor_daily` was built for a Market Chameleon download and turns out to fit any
+    # vendor's daily series, so Alpaca lands in the same table under its own source.
+    # Its bars carry one field Market Chameleon does not: `n`, the number of trades.
+    #
+    # Volume and trade count are different questions and the difference is the useful
+    # part. 30 million shares in 500,000 prints is an ordinary session; the same volume
+    # in 5,000 prints is a handful of blocks. Average trade size is volume over count,
+    # and nothing else stored here can reconstruct it.
+    """
+    ALTER TABLE vendor_daily ADD COLUMN trade_count INTEGER;
+    """,
 )
 
 

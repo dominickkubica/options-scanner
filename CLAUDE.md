@@ -62,6 +62,8 @@ venv\Scripts\python -m optscan shortcut # Desktop launcher for the dashboard
 venv\Scripts\python -m optscan import <csv> # take in a broker activity export
 venv\Scripts\python -m optscan import-history <csv|dir> # vendor daily history, with its IV30
 venv\Scripts\python -m optscan history # what downloaded vendor history is held
+venv\Scripts\python -m optscan prices sync [GROUP...] # bulk daily bars for a universe
+venv\Scripts\python -m optscan prices groups # the curated symbol groups and their age
 venv\Scripts\python -m optscan trades  # realized results from imported statements
 venv\Scripts\python scripts/coverage_floor.py  # per module floor, after pytest --cov
 venv\Scripts\python -m optscan serve  # API on 8000, plus the UI if it is built
@@ -141,6 +143,36 @@ Robinhood activity export, `optscan trades` reports what the account actually di
   displayed price while the amount is exact, so equity fees are None, not zero.
 - **An unknown transaction code raises.** Assignment and exercise move real contracts,
   and a skipped row is a profit figure with a hole and nothing to say so.
+
+**Exception, authorized 2026-09-07: bulk price history and a symbol universe.**
+`optscan prices sync` fills `vendor_daily` for many symbols at once; `universe.yaml`
+and `universe.py` hold the named groups. Migration 8. First run stored **293 of 294
+symbols, 693,974 sessions, 2016-09-09 to 2026-09-04.** Full reasoning in the DECISIONS
+entry of that date.
+
+- **The same table serves both vendors and never pools them.** AAPL holds 2,511 Alpaca
+  sessions and 3,188 Market Chameleon ones side by side, keyed
+  `(source, symbol, session_date)`.
+- **Three volume fields, not one.** Shares, trade count and VWAP. Volume alone cannot
+  tell 30 million shares in 500,000 prints from the same volume in 5,000;
+  `average_trade_size` is the ratio and needs the count.
+- **Batching is the feature.** 58 symbols in one request in 0.7s against ~35s the naive
+  way. `get_daily_bars_bulk` sits outside `MarketDataProvider` on purpose.
+- **A symbol that returns nothing is named, never dropped.** The vendor omits what it
+  does not know with no error. A hole in a price history is invisible in every chart
+  drawn over it. **No OTC name can ever sync** (`403 ... querying OTC data`).
+- **`universe.yaml` is curated and says so.** No vendor here publishes sector or index
+  data, so somebody typed these lists. `sp500_large` is not the S&P 500: it is the
+  constituents somebody remembered to type, which is exactly the set that did not get
+  dropped for performing badly. Every aggregate over it carries that survivorship.
+
+**Not done, and the thing to weigh before doing it:** none of this is pointed at the
+screener, and the watchlist is still six symbols. Expanding the *screen* to hundreds of
+symbols is a different decision, because Best plays reports the top candidate and the
+best of 600 symbols is a maximum over 100x more draws than the best of 6. That is a
+selection effect that will make the list look better with nothing having improved.
+`calibration.py` already holds the cluster reasoning for this shape of problem and it
+has not been applied here.
 
 **Exception, authorized 2026-09-07: the Alpaca adapter.** `providers/alpaca.py`,
 selected with `OPTSCAN_PROVIDER=alpaca` and a key pair in `.env`. Free Basic plan.

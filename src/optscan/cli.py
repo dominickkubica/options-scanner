@@ -321,6 +321,43 @@ def build_parser() -> argparse.ArgumentParser:
         help="Parse and report, without writing anything.",
     )
 
+    prices = sub.add_parser(
+        "prices",
+        help="Bulk daily price history for named symbol universes.",
+        description=(
+            "Fetches daily bars for many symbols at once and stores them per vendor. "
+            "Keeps three volume fields, not one: shares, trade count and VWAP, because "
+            "30 million shares in 500,000 prints and the same volume in 5,000 are very "
+            "different sessions and volume alone cannot tell them apart.\n\n"
+            "Safe to re-run: sessions already held are counted and skipped."
+        ),
+    )
+    prices_sub = prices.add_subparsers(dest="prices_command", required=True)
+
+    prices_sync = prices_sub.add_parser("sync", help="Fetch and store history.")
+    prices_sync.add_argument(
+        "groups",
+        nargs="*",
+        default=None,
+        metavar="GROUP",
+        help="Universe groups from universe.yaml. Defaults to all of them.",
+    )
+    prices_sync.add_argument(
+        "--symbol",
+        action="append",
+        dest="symbols",
+        metavar="TICKER",
+        help="Sync this symbol instead of a group. Repeatable.",
+    )
+    prices_sync.add_argument(
+        "--days",
+        type=int,
+        default=None,
+        help="Calendar days of history. Defaults to ten years.",
+    )
+
+    prices_sub.add_parser("groups", help="List the universe groups and their sizes.")
+
     sub.add_parser(
         "history",
         help="What downloaded vendor history is held, per symbol.",
@@ -1093,6 +1130,59 @@ def _cmd_import_history(settings: Settings, args: argparse.Namespace) -> int:
     return 0 if all(results) else 1
 
 
+def _cmd_prices(settings: Settings, args: argparse.Namespace) -> int:
+    from optscan.console import Console, pad
+    from optscan.jobs.prices import DEFAULT_DAYS, sync_daily_history
+    from optscan.universe import UniverseError, load_universe
+
+    console = Console.for_stream(settings.color_mode)
+    try:
+        universe = load_universe()
+    except UniverseError as error:
+        print(f"Could not read the universe: {error}")
+        return 1
+
+    if args.prices_command == "groups":
+        print(f"{len(universe.groups)} groups, {len(universe.symbols('all'))} unique symbols")
+        for name in universe.names:
+            print(f"  {pad(name, 16)} {len(universe.groups[name]):4d}")
+        stale = universe.staleness_note()
+        if stale:
+            print(f"\n{console.bad(stale)}")
+        elif universe.date_checked:
+            print(f"\nLast checked by hand {universe.date_checked}.")
+        print(
+            "\nThese are curated lists, not index membership. Nothing this tool can "
+            "reach publishes sector or index data, so they are only as current as the file."
+        )
+        return 0
+
+    if args.symbols:
+        symbols = [s.strip().upper() for s in args.symbols]
+        label = f"{len(symbols)} symbol(s)"
+    else:
+        try:
+            symbols = universe.symbols(*(args.groups or []))
+        except UniverseError as error:
+            print(str(error))
+            return 1
+        label = ", ".join(args.groups) if args.groups else "every group"
+
+    days = args.days or DEFAULT_DAYS
+    print(f"Syncing {len(symbols)} symbols ({label}), {days} days of history.")
+    stale = universe.staleness_note()
+    if stale:
+        print(console.bad(stale))
+
+    report = sync_daily_history(settings, symbols, days=days)
+    print(f"\n{report.summary()}")
+    warning = report.warning()
+    if warning:
+        print(f"\n! {warning}")
+    print("\nRun `optscan history` to see coverage.")
+    return 1 if report.failed else 0
+
+
 def _cmd_history(settings: Settings, args: argparse.Namespace) -> int:
     from optscan.analytics.ivrank import MIN_OBSERVATIONS
     from optscan.console import Console, pad
@@ -1114,8 +1204,17 @@ def _cmd_history(settings: Settings, args: argparse.Namespace) -> int:
     print("  ".join(pad(name, width) for name, width in zip(header, widths, strict=True)))
 
     for row in rows:
-        enough = (row["with_iv30"] or 0) >= MIN_OBSERVATIONS
-        verdict = console.good("yes") if enough else console.bad(f"needs {MIN_OBSERVATIONS}")
+        held = row["with_iv30"] or 0
+        # Three states, not two. A price-only vendor has no implied vol to rank and
+        # never will, which is a different fact from a vol series that is merely too
+        # short, and "needs 20" against a source that publishes none reads as a job
+        # that has not run yet.
+        if held == 0:
+            verdict = console.dim("no vol series")
+        elif held >= MIN_OBSERVATIONS:
+            verdict = console.good("yes")
+        else:
+            verdict = console.bad(f"needs {MIN_OBSERVATIONS}")
         cells = (
             pad(row["symbol"], 8),
             pad(row["source"], 16),
@@ -1211,6 +1310,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "health": _cmd_health,
         "import": _cmd_import,
         "import-history": _cmd_import_history,
+        "prices": _cmd_prices,
         "history": _cmd_history,
         "trades": _cmd_trades,
     }

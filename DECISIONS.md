@@ -1777,3 +1777,105 @@ distributions are not declared yet, which is the honest answer rather than a mis
 
 At those rates a 600 symbol option capture is roughly 3,000 requests, about fifteen
 minutes, which is not the constraint. Storage is.
+
+---
+
+## 2026-09-07: bulk price history, and a universe that admits what it is
+
+`optscan prices sync` fills `vendor_daily` for many symbols at once. First real run:
+**293 of 294 symbols, 693,974 sessions, 2016-09-09 to 2026-09-04.**
+
+### The table was already right
+
+`vendor_daily` was built the same day for a Market Chameleon download, and it turned
+out to be the shape of any vendor's daily series: identity is
+`(source, symbol, session_date)` with the source on it, so Alpaca and Market Chameleon
+coexist for the same ticker without ever being pooled. AAPL now holds both, 2,511
+sessions from Alpaca and 3,188 from Market Chameleon, and nothing merges them.
+
+Migration 8 adds one column, `trade_count`.
+
+### Three volume fields, because volume alone answers the wrong question
+
+Alpaca's daily bar carries `v` shares, `n` trades and `vw` VWAP. All three are stored.
+
+Volume by itself cannot distinguish 30 million shares in 500,000 prints, an ordinary
+session, from the same 30 million in 5,000, which is a handful of blocks.
+`VendorDailyBar.average_trade_size` is volume over count and is only computable because
+the count is kept. Measured on AAPL 2026-09-04: 39,788,274 shares in 907,132 prints,
+VWAP 321.20, 44 shares a print.
+
+### Batching is the feature, not an optimization
+
+Alpaca's bars endpoint takes a comma separated list. Measured: **58 symbols in one
+request in 0.7 seconds**, against roughly 35 seconds and 58 requests the naive way. At
+200 requests a minute the difference decides whether a few hundred symbols of multi
+year history is two minutes or an hour, and the daily option capture needs that budget
+too.
+
+`get_daily_bars_bulk` sits outside `MarketDataProvider` deliberately. That interface is
+one symbol at a time, which is right for a screener reading one chain and wrong here.
+
+### A symbol that does not come back is reported, never dropped
+
+The vendor returns bars for what it knows and omits the rest with no error and no
+mention. Measured: a 58 symbol request returned 57. Delistings, ticker changes and
+typos are indistinguishable from here and all three need a human.
+
+So every requested symbol producing no rows is collected and named. The first full run
+surfaced exactly one, `LYNAS`, which is an ASX line rather than a US ticker. Its ADR
+`LYSDY` then failed too, because this plan refuses OTC outright with
+`403 subscription does not permit querying OTC data`. **No OTC name can ever be synced
+here**, so the entry was removed with a comment rather than left to fail forever.
+
+That is the whole argument for the report: a hole in a price history is invisible in
+every chart drawn over it.
+
+### The universe file says out loud that it is not an index
+
+`universe.yaml` holds six curated groups, 294 unique symbols: `etf`, `tech`, `metals`,
+`uranium`, `rare_earth`, `sp500_large`.
+
+Curated because there is nothing to derive them from. Alpaca publishes 14,277 active US
+equities and **carries no sector, industry or index field on any of them**. Somebody
+typed these lists.
+
+That matters more than it sounds, and the file's header and the module docstring both
+say it: a group called `sp500_large` reads like index membership and will be described
+that way in conversation within a week. It is not. It is the constituents somebody
+remembered to type, **which is exactly the set that did not get dropped for performing
+badly**. Any aggregate over it carries that survivorship. `meta.date_checked` is the
+only thing that says how stale it is, and `optscan prices groups` prints a warning past
+a quarter, because index changes cluster around quarterly rebalances.
+
+### Two bugs the tests found, both real
+
+Writing the test for "an incoherent bar is dropped" found that it was not:
+
+- **`VendorDailyBar` had no coherence validator.** `PriceBar` refuses a close outside
+  its own high and low; this model accepted anything. Written for a hand downloaded
+  file where the arithmetic is the vendor's and reliable, it is now filled from an API
+  in bulk where a malformed row is one of thousands nobody reads, and a bad close would
+  sit in the history producing a realized volatility wrong by an unrecoverable amount.
+  It now enforces the same contract, and refuses rather than clamping: a repaired bar
+  is a number with no provenance.
+- **`import_daily_bars` did not guard a session appearing twice in one call.** It reads
+  the existing sessions once, so two incoming rows for the same day both queue and the
+  unique index turns it into an `IntegrityError` partway through a batch. The Market
+  Chameleon path never hit it because its parser raises on a duplicate session inside a
+  file; the bulk API path has no parser. The guard now lives in storage, where both
+  paths pass through.
+
+### What is not done, and is the thing to think about next
+
+**Nothing has been pointed at the screener yet.** This is price history, not option
+chains, and the watchlist is still six symbols.
+
+Expanding the *screen* to hundreds of symbols is a different decision from expanding
+price history, and it has a statistical cost that should be measured before it is
+taken: Best plays ranks the watchlist and reports the top candidate, so the best play
+out of 600 symbols is a maximum over a hundred times more draws than the best out of 6.
+That is a selection effect, it will make the top of the list look dramatically better
+without anything improving, and it is the same family as every other entry in this log.
+The cluster reasoning in `calibration.py` already exists to handle exactly this shape
+of problem and has not been applied to it.

@@ -53,6 +53,7 @@ for a listed contract and the liquidity filter treats the two very differently.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, ClassVar
 
@@ -566,6 +567,64 @@ class AlpacaProvider(MarketDataProvider):
             fetched_at=self.now(),
             source=self.name,
         )
+
+    def get_daily_bars_bulk(
+        self,
+        symbols: Sequence[str],
+        start: date,
+        end: datetime,
+        *,
+        limit: int = 10_000,
+        max_pages: int = 200,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Daily bars for many symbols in one request. Raw vendor rows, keyed by symbol.
+
+        Outside `MarketDataProvider` on purpose. That interface is one symbol at a
+        time, which is right for a screener reading one chain and wrong for a bulk
+        backfill: measured 2026-09-07, 58 symbols came back in one request in 0.7
+        seconds, against roughly 35 seconds and 58 requests the naive way.
+
+        Raw rows rather than `PriceBar` because the caller stores three volume fields
+        this project's bar model does not carry: `n` the trade count and `vw` the
+        volume weighted price, alongside `v`. Volume alone cannot tell 30 million
+        shares in 500,000 prints from the same 30 million in 5,000.
+
+        **Symbols the vendor does not know are omitted with no error.** A 58 symbol
+        request returned 57. The caller compares what it asked for against what came
+        back; nothing here can distinguish a delisting from a typo.
+        """
+        tickers = [s.strip().upper() for s in symbols if s and s.strip()]
+        if not tickers:
+            return {}
+
+        merged: dict[str, list[dict[str, Any]]] = {}
+        token: str | None = None
+        for page in range(max_pages):
+            params: dict[str, Any] = {
+                "symbols": ",".join(tickers),
+                "timeframe": "1Day",
+                "start": start.isoformat(),
+                "end": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "feed": STOCK_BARS_FEED,
+                "limit": limit,
+                "adjustment": "all",
+                "sort": "asc",
+            }
+            if token:
+                params["page_token"] = token
+            body = self._get(f"{self.settings.alpaca_data_url}{STOCK_BARS_PATH}", params)
+            for symbol, rows in (body.get("bars") or {}).items():
+                merged.setdefault(symbol, []).extend(rows or [])
+            token = body.get("next_page_token")
+            if not token:
+                break
+            if page == max_pages - 1:
+                log.warning(
+                    "bulk bar paging stopped at the cap",
+                    symbols=len(tickers),
+                    pages=max_pages,
+                )
+        return merged
 
     def get_option_bars(
         self,
