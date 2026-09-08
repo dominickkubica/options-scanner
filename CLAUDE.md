@@ -36,7 +36,8 @@ src/optscan/
   screener/         rules/, scoring.py, strategies/
   console.py        terminal colour, and the rules about when not to use it
   jobs/             snapshot.py, schedule.py, manage.py, validate.py, backup.py,
-                    launcher.py, health.py, prices.py, signals.py, backtest.py
+                    launcher.py, health.py, prices.py, signals.py, backtest.py,
+                    search.py (grid search, holdout, multiplicity)
   live/             the polling refresh loop and its delta encoder
   alerts.py         alert sinks, and once-per-condition delivery. Carries both a
                     position Trigger and a market Signal; position_id is None for
@@ -66,6 +67,8 @@ venv\Scripts\python -m optscan backtest --entry rsi_below --param threshold=30 -
 venv\Scripts\python -m optscan backtest --mode short_put --symbols QQQ AAPL --slippage 0.05
 venv\Scripts\python -m optscan backtest --sweep threshold=20,25,30,35 --symbols AAPL MSFT
 venv\Scripts\python -m optscan backtest ... --json   # machine readable, for an agent to read
+venv\Scripts\python -m optscan search --group tech # grid search, holdout, multiplicity bar
+venv\Scripts\python -m optscan search --group tech --json
 venv\Scripts\python -m optscan validate # does the score actually separate outcomes
 venv\Scripts\python -m optscan schedule # the recurring jobs and whether Windows has them
 venv\Scripts\python -m optscan backup # copy the db, mirror the captures, verify
@@ -167,6 +170,21 @@ and `optscan-web` entries in `.claude/launch.json`.
   against the best-of-N under the same null, and warns when the winner rests on fewer
   than twenty independent blocks, which it usually does: a tighter parameter selects a
   rarer condition, so the best cell is normally the one with the least evidence.
+- **Ranking strategies by raw return ranks the holding period, not the rule.** The
+  thirteenth instance. The first grid search returned a top twelve in which every single
+  candidate was a 63 day hold: three months of market drift dwarfs anything a rule
+  contributes, so the ordering was reading the horizon. Candidates are now scored by
+  **z against their own null**, which is what makes a 5 day rule and a 63 day rule
+  comparable. Once fixed, the top of the list changed completely and became short-horizon
+  mean reversion. Whenever candidates differ structurally, normalise before ranking.
+- **A search needs a bar that grows with the search.** The best of n candidates reaches
+  about `sqrt(2 ln n)` standard deviations above its null when nothing works: 2.4 at
+  twenty, 3.0 at eighty. `expected_best_z`. Comparing a winner to zero instead is how a
+  grid manufactures a discovery.
+- **A holdout must reserve a horizon's margin.** Entries are filtered so a training trade
+  cannot settle inside the test period, and the boundary is one calendar date for every
+  symbol rather than a per-symbol percentile, which would put different names' holdouts
+  in different market regimes.
 - Two filters aimed at the same thing will hide each other. The confounded one in front
   of the principled one does not merely fail to help, it starves the good one of the
   data it needs.
@@ -235,6 +253,21 @@ stored, every run is computed from `vendor_daily`.
 - Rolling indicators in `rules.py` are a second implementation of `levels.py`'s scalar
   ones (the scalar form per bar is quadratic). `tests/test_rules.py` pins them together
   at several points in the series, the same way `levels.py` is pinned to `compute.js`.
+
+**Exception, authorized 2026-09-08: the strategy search.** `optscan search` and
+`jobs/search.py`. Grid over rules, parameters, horizons and directions; ranked on a
+training period; the top few tested on a holdout that nothing has touched.
+
+- **Market-neutralising returns was tried and rejected on measurement.** Subtracting the
+  contemporaneous universe return shrinks the null's spread (rsi_below 1.97% to 1.31%)
+  but shrinks the observed mean by the same factor, so z barely moves and in one case got
+  worse. The shift null already neutralises the market factor, because both sides
+  experience the same drift. Do not rebuild this without new evidence.
+- **The first genuine lead in the project.** Short-horizon oversold mean reversion.
+  Formed on the tech group's search, then tested *pre-specified* on the 188 symbols
+  outside it: RSI<25 at 5 days returned +0.98% over its null (p=0.005, 107 blocks),
+  RSI<30 at 5 days +0.71% (p=0.004, 118 blocks). Not yet confirmed beyond that, and
+  survivorship bias still applies to the universe.
 
 - **Rows are stored raw and positions are derived.** Exports overlap, so a re-import
   must be a no-op. Identity is `(source, digest, dup_index)`: the index is there

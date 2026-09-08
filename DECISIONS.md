@@ -2811,3 +2811,79 @@ series — the same check already run between `levels.py` and the frontend's `co
 `optscan backtest --json` exists so an agent can run one and read the result.
 
 1,608 tests pass. The new modules are at 89%.
+
+## 2026-09-08: refining the edge search, and the first thing that survived
+
+### A hypothesis, measured and thrown away
+
+The plan was to measure returns relative to the contemporaneous universe, on the
+reasoning that the market factor dominates a single trade's variance and does not average
+away across trades, so removing it should make small edges visible.
+
+Measured, it does shrink the null's spread: `rsi_below`'s null standard deviation fell
+from 1.97% to 1.31%. It also shrinks the observed mean by the same factor, so the z-score
+went from 0.57 to **0.32** — worse. The reason is that the shift null was already doing
+the job: it slides the entry pattern to a different point in history, so both the
+strategy and the null experience the market's drift, and the comparison between them is
+already market-adjusted. Explicit neutralisation was redundant with machinery that
+existed.
+
+It is recorded here so nobody rebuilds it. The exploratory script that produced the first
+version of this measurement also allowed overlapping trades and reported `volume_surge`
+at p=0.040, where the production backtester with overlap suppressed says p=0.267. The
+same trap, in the tool built to avoid it, in a script written by the person who built it.
+
+### The thirteenth instance: ranking the horizon instead of the rule
+
+The first grid search over 78 combinations returned a top twelve in which **every single
+candidate was a 63 day hold**. Not one five day or twenty one day rule appeared. Three
+months of market drift returns six to seven percent whatever triggered the entry, so
+sorting candidates by mean return sorts them by holding period and the rules are noise on
+top.
+
+The fix is the same shape as every other instance in this repo: normalise before
+comparing. Each candidate is now scored against **its own null**, and ranked by
+`(mean - null_mean) / null_spread`. Doing that changed the answer completely. The top of
+the list stopped being long holds and became short-horizon mean reversion, and the second
+place candidate became a *short* — a direction that had not appeared at all under the
+old ranking.
+
+Making that affordable needed one optimisation. A forward return table without a target
+or a stop has a known exit bar, so it collapses from O(horizon) per bar to one division;
+and the table depends only on the horizon and direction, not the rule, so six tables
+serve seventy-eight candidates. The search runs in thirteen seconds.
+
+### The multiplicity bar, in the right units
+
+`expected_best_under_null` originally computed a return, from a quantity that was the
+finalist's edge rather than the null's spread. Wrong, and awkward to interpret. It is now
+a z-score: the best of n candidates reaches about `sqrt(2 ln n)` under the null, which is
+2.95 for a 78 cell grid. The tech search's winner scored 2.39, so the in-sample ranking
+settles nothing, which is exactly what the holdout is for.
+
+### The first thing that survived
+
+Search on the tech group, holdout from 2023-05-17. Three finalists went to the holdout;
+`rsi_below(25) long 5d` returned +2.19% at p=0.034, and thresholds 25, 30 and 35 all
+appeared in the top four by z. A family of related parameterisations ranking together is
+worth more than any single p-value, so it was worth one confirmation.
+
+The confirmation was pre-specified and run on the **188 symbols outside the tech group**,
+which the search never saw:
+
+    RSI<25, 5 day hold    +0.98% over null   p=0.005   107 blocks
+    RSI<30, 5 day hold    +0.71% over null   p=0.004   118 blocks
+    RSI<30, 21 day hold   +1.21% over null   p=0.017   117 blocks
+
+Four tests, three of them at p below 0.02, on a cross-section chosen before the numbers
+were seen, against a null that already contains the drift and preserves the entries'
+clustering and co-movement.
+
+That is the first result in this project that has survived everything thrown at it. What
+it is not: it is one market, one decade, one universe that is survivorship biased by
+construction, and an effect of roughly 0.7 to 1.0 percent per trade against an assumed
+ten basis points of cost. At five day holds that is a lot of trading for a thin margin,
+and the cost assumption has not been checked against what these names actually cost to
+trade. The next thing to do is measure that, not to trade it.
+
+1,620 tests pass.

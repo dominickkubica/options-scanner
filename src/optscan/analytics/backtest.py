@@ -456,6 +456,27 @@ def forward_return_table(
     would have produced for that single entry.
     """
     out: list[float | None] = [None] * len(bars)
+
+    if target is None and stop is None:
+        # Without a target or a stop the exit bar is known in advance, so the whole walk
+        # collapses to one division. This is not a micro optimisation: a search over a
+        # grid needs one of these per horizon and direction, and the general path is
+        # O(horizon) per bar, which at 63 bars across three hundred symbols is the
+        # difference between a search that runs and one that nobody waits for.
+        last = len(bars) - 1
+        for index in range(len(bars)):
+            fill = index + 1
+            exit_index = fill + horizon
+            if exit_index > last:
+                break
+            entry = bars[fill].open
+            if entry <= 0:
+                continue
+            gross = bars[exit_index].close / entry - 1.0
+            signed = gross if direction is Direction.LONG else -gross
+            out[index] = signed - cost
+        return out
+
     for index in range(len(bars)):
         trades = simulate(
             bars[0].symbol if bars else "",

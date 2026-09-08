@@ -33,6 +33,10 @@ SIGNAL_NOTABLE = 3
 #: for the analytics stack.
 from optscan.analytics.backtest import DEFAULT_COST  # noqa: E402
 from optscan.jobs.backtest import MODES, SIGNIFICANT  # noqa: E402
+from optscan.jobs.search import (  # noqa: E402
+    DEFAULT_FINALISTS,
+    DEFAULT_TRAIN_SHARE,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -283,6 +287,36 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print the result as JSON rather than a table.",
     )
     backtest.add_argument("--trades", action="store_true", help="Also print every trade.")
+
+    search = sub.add_parser(
+        "search",
+        help=(
+            "Search a grid of strategies on part of history and test the winners on the "
+            "rest. The out-of-sample column is the only one that is evidence."
+        ),
+    )
+    search.add_argument("--symbols", nargs="*", default=[], help="Symbols to search.")
+    search.add_argument("--group", help="A universe group instead of symbols.")
+    search.add_argument(
+        "--train-share",
+        type=float,
+        default=DEFAULT_TRAIN_SHARE,
+        help="Share of history to search on. The rest is held out.",
+    )
+    search.add_argument(
+        "--finalists",
+        type=int,
+        default=DEFAULT_FINALISTS,
+        help=(
+            "Candidates carried to the holdout. Each one is another chance at a fluke, "
+            "so more is not better."
+        ),
+    )
+    search.add_argument("--horizons", nargs="*", type=int, default=[5, 21, 63])
+    search.add_argument("--draws", type=int, default=500, help="Null draws for the finalists.")
+    search.add_argument("--cost", type=float, default=DEFAULT_COST)
+    search.add_argument("--top", type=int, default=12, help="Candidates to print.")
+    search.add_argument("--json", action="store_true")
 
     position = sub.add_parser("position", help="Track positions you actually hold.")
     position_sub = position.add_subparsers(dest="position_command", required=True)
@@ -929,6 +963,74 @@ def _strategy_from(args: argparse.Namespace):
         draws=args.draws,
         seed=args.seed,
     )
+
+
+def _cmd_search(settings: Settings, args: argparse.Namespace) -> int:
+    import json as json_module
+
+    from optscan.analytics.backtest import Direction
+    from optscan.console import Console
+    from optscan.jobs.backtest import Strategy
+    from optscan.jobs.search import run_search
+
+    console = Console.for_stream(settings.color_mode)
+    template = Strategy(symbols=[s.upper() for s in args.symbols], group=args.group, cost=args.cost)
+    try:
+        result = run_search(
+            settings,
+            template,
+            horizons=tuple(args.horizons),
+            directions=(Direction.LONG, Direction.SHORT),
+            train_share=args.train_share,
+            finalists=args.finalists,
+            draws=args.draws,
+        )
+    except (ValueError, OSError) as error:
+        print(console.bad(str(error)))
+        return 1
+
+    if args.json:
+        print(json_module.dumps(result.as_dict(), indent=2))
+        return 0
+
+    print(f"  {result.tried} combinations, trained to {result.train_end}, {result.seconds}s")
+    if result.expected_best_under_null is not None:
+        print(f"  best-of-{result.tried} z under the null: {result.expected_best_under_null:.2f}")
+    print()
+
+    header = f"  {'candidate':<38} {'mean':>8} {'edge':>8} {'z':>6} {'blocks':>7}"
+    print(header)
+    for candidate in result.candidates[: args.top]:
+        if candidate.stats is None:
+            continue
+        print(
+            f"  {candidate.label:<38} {candidate.mean_return:>+8.2%} "
+            f"{candidate.edge:>+8.2%} {candidate.z_score:>6.2f} "
+            f"{candidate.stats.effective_sample:>7}"
+        )
+
+    if result.finalists:
+        print()
+        print(f"  held out, {result.train_end} onward")
+        print(f"  {'candidate':<38} {'in':>8} {'out':>8} {'blocks':>7} {'p':>6}")
+        for finalist in result.finalists:
+            out = (
+                f"{finalist.out_sample_mean:+.2%}"
+                if finalist.out_sample_mean is not None
+                else "none"
+            )
+            probability = (
+                f"{finalist.out_sample_p:.3f}" if finalist.out_sample_p is not None else "-"
+            )
+            print(
+                f"  {finalist.candidate.label:<38} {finalist.in_sample_mean:>+8.2%} "
+                f"{out:>8} {finalist.out_sample_blocks:>7} {probability:>6}"
+            )
+
+    print()
+    for note in result.notes:
+        print(console.warn(note))
+    return 0
 
 
 def _cmd_backtest(settings: Settings, args: argparse.Namespace) -> int:
@@ -1811,6 +1913,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "health": _cmd_health,
         "signals": _cmd_signals,
         "backtest": _cmd_backtest,
+        "search": _cmd_search,
         "import": _cmd_import,
         "import-history": _cmd_import_history,
         "prices": _cmd_prices,
