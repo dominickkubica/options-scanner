@@ -21,23 +21,19 @@ HOURS_PER_DAY = 24
 MINUTES_PER_HOUR = 60
 MINUTES_PER_DAY = HOURS_PER_DAY * MINUTES_PER_HOUR
 
-ProviderName = Literal["yfinance", "schwab", "tradier", "alpaca"]
+#: Schwab and Tradier were both removed on 2026-09-08. Schwab never had an adapter
+#: at all, and Tradier's was a strict subset of Alpaca's with an expiring token.
+ProviderName = Literal["yfinance", "alpaca"]
 LogFormat = Literal["console", "json"]
 ColorMode = Literal["auto", "always", "never"]
-TradierEnvironment = Literal["sandbox", "production"]
 AlpacaFeed = Literal["indicative", "opra"]
 
-#: Tradier's documented hosts, verified against docs.tradier.com on 2026-07-31.
-TRADIER_HOSTS: dict[str, str] = {
-    "sandbox": "https://sandbox.tradier.com",
-    "production": "https://api.tradier.com",
-}
 
-#: Tradier delays every sandbox response by this much. Their FAQ: "We delay our market
-#: data the industry standard 15-minutes for all sandbox data." It is a documented
-#: property of the tier, not something the responses announce, so it is recorded here
-#: and shown in the UI rather than inferred from a timestamp.
-SANDBOX_DELAY_MINUTES = 15
+#: Alpaca's free options feed is a derivative of OPRA delayed by this much, and the
+#: plan refuses consolidated stock data inside the same window. Both are documented,
+#: which is what makes the number reportable: `quote_delay_minutes` publishes a
+#: delay only when the vendor states one.
+ALPACA_INDICATIVE_DELAY_MINUTES = 15
 
 #: Alpaca splits trading and market data across two hosts, and the one people paste
 #: from their dashboard is the trading host. Every endpoint this project uses is on
@@ -99,7 +95,6 @@ class Settings(BaseSettings):
     snapshot_time_local: str = "15:45"
     snapshot_max_dte: int = Field(default=400, gt=0)
     snapshot_max_expiries: int = Field(default=16, gt=0)
-    snapshot_history_days: int = Field(default=400, gt=0)
 
     # Recording scores the latest stored snapshot, so it has to run after the capture
     # rather than alongside it. Early enough to still be inside the session, because a
@@ -139,27 +134,8 @@ class Settings(BaseSettings):
     )
 
     # Credentials. Never logged, never committed. Optional until Phase 5.
-    tradier_token: SecretStr | None = None
-    schwab_client_id: SecretStr | None = None
-    schwab_client_secret: SecretStr | None = None
     alpaca_key_id: SecretStr | None = None
     alpaca_secret_key: SecretStr | None = None
-
-    # Tradier. The environment decides the host and, more importantly, whether the
-    # data can be called real time at all: sandbox is documented as 15 minutes delayed.
-    tradier_environment: TradierEnvironment = "sandbox"
-
-    # Whether the production account actually carries a real time market data
-    # entitlement. Nothing in a Tradier response says so, and a quote that is silently
-    # delayed looks exactly like one that is not, so this is asked rather than guessed
-    # and it defaults to the answer that cannot mislead. Ignored in sandbox, which is
-    # delayed regardless of what this says.
-    tradier_realtime_entitled: bool = False
-
-    # Documented market data limit: 120 requests per minute in production, 60 in
-    # sandbox, enforced per minute per access token. The default is the lower one
-    # because exceeding it is worse than being slower than necessary.
-    tradier_requests_per_minute: int = Field(default=60, gt=0)
 
     # Alpaca. The feed decides both the delay and how far back option data may be
     # asked for. `indicative` is the free tier: a derivative of OPRA, delayed fifteen
@@ -229,14 +205,7 @@ class Settings(BaseSettings):
             raise ValueError(f"{name} is not a real time of day: {value!r}")
         return f"{hour:02d}:{minute:02d}"
 
-    @field_validator(
-        "tradier_token",
-        "schwab_client_id",
-        "schwab_client_secret",
-        "alpaca_key_id",
-        "alpaca_secret_key",
-        mode="before",
-    )
+    @field_validator("alpaca_key_id", "alpaca_secret_key", mode="before")
     @classmethod
     def _blank_secret_is_unset(cls, value: object) -> object:
         """An empty .env entry means unset, not set to the empty string.
@@ -326,21 +295,6 @@ class Settings(BaseSettings):
         return self.alpaca_key_id is not None and self.alpaca_secret_key is not None
 
     @property
-    def tradier_base_url(self) -> str:
-        """Host for the configured Tradier environment, without a trailing slash."""
-        return TRADIER_HOSTS[self.tradier_environment]
-
-    @property
-    def tradier_is_realtime(self) -> bool:
-        """Whether Tradier quotes on this configuration may be called real time.
-
-        Sandbox never can: it is documented as 15 minutes delayed and there is no
-        setting that changes it. Production only can when the account holder has said
-        their entitlement is real time, because the responses do not carry that fact.
-        """
-        return self.tradier_environment == "production" and self.tradier_realtime_entitled
-
-    @property
     def quote_delay_minutes(self) -> int | None:
         """Known delay on the configured provider's quotes, when it is documented.
 
@@ -348,8 +302,8 @@ class Settings(BaseSettings):
         roughly fifteen minutes but does not document it, and reporting an
         undocumented number next to a documented one would give both the same weight.
         """
-        if self.provider == "tradier" and self.tradier_environment == "sandbox":
-            return SANDBOX_DELAY_MINUTES
+        if self.provider == "alpaca" and not self.alpaca_is_realtime:
+            return ALPACA_INDICATIVE_DELAY_MINUTES
         return None
 
     @property
@@ -403,18 +357,11 @@ class Settings(BaseSettings):
             "log_format": self.log_format,
             "data_path": str(self.data_path),
             "risk_free_rate": self.risk_free_rate,
-            "tradier_environment": self.tradier_environment,
             "alpaca_feed": self.alpaca_feed,
             "live_enabled": self.live_enabled,
             "credentials_set": sorted(
                 name
-                for name in (
-                    "tradier_token",
-                    "schwab_client_id",
-                    "schwab_client_secret",
-                    "alpaca_key_id",
-                    "alpaca_secret_key",
-                )
+                for name in ("alpaca_key_id", "alpaca_secret_key")
                 if getattr(self, name) is not None
             ),
         }

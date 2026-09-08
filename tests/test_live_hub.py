@@ -464,15 +464,17 @@ class TestStatus:
     def test_the_delay_is_reported_rather_than_left_to_be_inferred(
         self, tmp_path, provider: MovingProvider
     ) -> None:
-        """A sandbox token is fifteen minutes behind and nothing in the data says so."""
-        sandbox = Settings(
+        """The free indicative feed is fifteen minutes behind and nothing in the data
+        says so, which is exactly when the number is worth publishing."""
+        delayed = Settings(
             _env_file=None,
             data_dir=tmp_path,
             live_enabled=True,
-            provider="tradier",
-            tradier_environment="sandbox",
+            provider="alpaca",
+            alpaca_key_id="k",
+            alpaca_secret_key="s",
         )
-        hub = LiveHub(sandbox, lambda: provider, clock=Clock())
+        hub = LiveHub(delayed, lambda: provider, clock=Clock())
 
         status = hub.status()
         assert status.realtime is False

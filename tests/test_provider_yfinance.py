@@ -357,56 +357,46 @@ class TestProviderRegistry:
         assert provider.name == "yfinance"
         assert provider.realtime is False
 
-    def test_tradier_without_a_token_says_how_to_get_one(self, clean_env: None) -> None:
-        """Phase 5 implemented this provider, so the failure is now a missing
-        credential rather than a missing adapter, and the message has to say which."""
+    def test_alpaca_without_a_key_pair_says_how_to_get_one(self, clean_env: None) -> None:
+        """A configured provider that cannot authenticate fails on the credential, not
+        on a missing adapter, and the message has to say which."""
         from optscan.config import Settings
         from optscan.providers import get_provider
         from optscan.providers.errors import AuthenticationError
 
-        with pytest.raises(AuthenticationError, match=r"developer\.tradier\.com"):
-            get_provider(Settings(_env_file=None, provider="tradier"))
+        with pytest.raises(AuthenticationError, match=r"app\.alpaca\.markets"):
+            get_provider(Settings(_env_file=None, provider="alpaca"))
 
-    def test_a_still_unimplemented_provider_says_why(self, clean_env: None) -> None:
+    def test_an_unknown_provider_names_the_ones_that_exist(self, clean_env: None) -> None:
+        """Schwab and Tradier were both removed on 2026-09-08. The literal no longer
+        accepts them, so this goes through model construction rather than
+        get_provider, and the remaining refusal names what is actually configured."""
+        import pydantic
+
         from optscan.config import Settings
-        from optscan.providers import get_provider
 
-        with pytest.raises(NotImplementedError, match="OAuth"):
-            get_provider(Settings(_env_file=None, provider="schwab"))
+        with pytest.raises(pydantic.ValidationError):
+            Settings(_env_file=None, provider="schwab")
 
     def test_realtime_is_answered_without_building_a_provider(self, clean_env: None) -> None:
-        """The health endpoint asks on every request and must not open a connection,
-        and for Tradier the answer depends on the environment rather than the vendor."""
+        """The health endpoint asks on every request and must not open a connection.
+
+        The answer depends on an account's entitlement rather than on the vendor:
+        Alpaca is delayed on the free indicative feed and real time only with a signed
+        OPRA agreement, and nothing in a response distinguishes the two.
+        """
         from optscan.config import Settings
         from optscan.providers import provider_is_realtime
 
         assert provider_is_realtime(Settings(_env_file=None)) is False
-        assert (
-            provider_is_realtime(
-                Settings(_env_file=None, provider="tradier", tradier_environment="sandbox")
-            )
-            is False
-        )
-        # Sandbox is documented as fifteen minutes delayed, so the entitlement flag
-        # cannot talk it into calling itself real time.
+        assert provider_is_realtime(Settings(_env_file=None, provider="alpaca")) is False
         assert (
             provider_is_realtime(
                 Settings(
                     _env_file=None,
-                    provider="tradier",
-                    tradier_environment="sandbox",
-                    tradier_realtime_entitled=True,
-                )
-            )
-            is False
-        )
-        assert (
-            provider_is_realtime(
-                Settings(
-                    _env_file=None,
-                    provider="tradier",
-                    tradier_environment="production",
-                    tradier_realtime_entitled=True,
+                    provider="alpaca",
+                    alpaca_feed="opra",
+                    alpaca_realtime_entitled=True,
                 )
             )
             is True

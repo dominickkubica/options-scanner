@@ -56,25 +56,9 @@ def get_provider(settings: Settings) -> MarketDataProvider:
             )
         return AlpacaProvider(settings)
 
-    if settings.provider == "tradier":
-        from optscan.providers.tradier import TradierProvider
-
-        if settings.tradier_token is None:
-            raise AuthenticationError(
-                "OPTSCAN_PROVIDER is tradier but OPTSCAN_TRADIER_TOKEN is not set. "
-                "Create a free sandbox token at developer.tradier.com and put it in .env."
-            )
-        return TradierProvider(
-            settings.tradier_token.get_secret_value(),
-            base_url=settings.tradier_base_url,
-            realtime=settings.tradier_is_realtime,
-            timeout=settings.request_timeout_seconds,
-            requests_per_minute=settings.tradier_requests_per_minute,
-        )
-
     raise NotImplementedError(
-        f"provider {settings.provider!r} is not implemented yet. Schwab arrives later: "
-        "its three legged OAuth needs a browser redirect and cannot be set up unattended."
+        f"provider {settings.provider!r} is not implemented. Configured providers are "
+        "yfinance and alpaca."
     )
 
 
@@ -98,13 +82,11 @@ def get_intraday_provider(settings: Settings) -> MarketDataProvider | None:
 def provider_is_realtime(settings: Settings) -> bool:
     """Whether the configured provider quotes in real time, without building one.
 
-    A function rather than a set of provider names, because for Tradier the answer
-    depends on the environment and the account's entitlement rather than on the vendor.
-    Health checks need this answer on every request and must not open a connection to
-    get it.
+    A function rather than a set of provider names, because the answer can depend on
+    an account's entitlement rather than on the vendor: Alpaca is delayed on the free
+    feed and real time with a signed OPRA agreement, and nothing in a response says
+    which. Health checks need this on every request and must not open a connection.
     """
-    if settings.provider == "tradier":
-        return settings.tradier_is_realtime
     if settings.provider == "alpaca":
         return settings.alpaca_is_realtime
     return False

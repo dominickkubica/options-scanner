@@ -2331,3 +2331,85 @@ is an interface being implemented,** not duplication.
 trim lines": not really, and chasing it would be the wrong goal here. The value taken
 was a correctness fix on 9% of every Alpaca chain and two behaviours that can now only
 be changed in one place. Neither shows up as a smaller number.
+
+---
+
+## 2026-09-08: the live hub works on Alpaca, and Tradier and Schwab are gone
+
+### The live hub was disabled for a reason that no longer applies
+
+It was switched off because "yfinance has no documented rate limit and throttles
+silently, and being throttled would break the 15:45 snapshot job". **Alpaca publishes
+200 requests a minute.** At the shipped settings the hub costs one quote plus one chain
+per subscribed symbol per cycle, capped at four symbols, every fifteen seconds, and it
+expires a feed after sixty seconds with no subscriber. That is about 32 requests a
+minute at the worst, against a budget of 200, and only while somebody has the Chain tab
+open.
+
+Driven by hand against the live API rather than started as a thread, so a failure would
+be a traceback instead of a status event nobody reads. It works: `idle` to `live`, a
+full first cycle of **394 QQQ contracts** at version 1, correctly flagged
+`realtime: false`, a second tick emitting nothing because the market was shut and no
+contract moved, then a clean release and stop.
+
+**It was reporting the delay as unknown.** `quote_delay_minutes` publishes a number
+only when a vendor documents one, and it knew about Tradier's sandbox and nothing else.
+Alpaca's indicative feed is documented at fifteen minutes and the plan refuses
+consolidated stock data inside the same window, so the number was there to publish and
+was not being published. Now it is, and the status event carries `delay_minutes: 15`.
+
+Worth noting against the entry above this one: `ALPACA_INDICATIVE_DELAY_MINUTES` was
+deleted as dead code earlier the same day, correctly, because nothing referenced it.
+This is where it belonged. Removing an unused constant and then needing it an hour
+later is the expected cost of that kind of sweep, not an argument against doing it.
+
+**Still off by default.** Whether the dashboard should poll a vendor whenever a tab is
+open is a decision, and the argument for it changed today rather than being settled.
+
+### Tradier removed
+
+Strictly dominated. It implemented four of the interface's methods against Alpaca's
+nine, and in particular **it has no corporate calendar**, contrary to what was said
+while planning this: `get_events` was never implemented and inherited the base
+refusal. Its `mid_iv` was measured unusable in Phase 5. Its token dies around 2026-10
+unless the account is funded, and funding it forces a key regeneration.
+
+Removed: the adapter, its two test files, and the whole fixture directory. The
+fixtures were the largest part at 2,655 lines, and their value was pinning that
+adapter's refusals, so they leave with it at no loss.
+
+Also removed from config: `TradierEnvironment`, `TRADIER_HOSTS`,
+`SANDBOX_DELAY_MINUTES`, four settings and two properties.
+
+**Every docstring that mentions Tradier stays.** They record lessons that outlive the
+integration: why an IV history belongs to one vendor, why the live feed polls instead
+of streaming, why a provider without a calendar weakens two position triggers, and why
+a vendor's implied vol is stored and never used. Deleting the code does not make those
+false.
+
+### Schwab removed
+
+A ghost. It was in the `ProviderName` literal, had two credential fields, a validator
+entry and a line in `safe_summary`, and **no adapter existed anywhere**. Setting
+`OPTSCAN_PROVIDER=schwab` raised "not implemented yet. Schwab arrives later". It was a
+Phase 0 plan that Alpaca has since filled, and config that advertises a provider the
+app cannot build is config that lies.
+
+`snapshot_history_days` went with them: declared, never read by anything.
+
+### What it cost and what it did not
+
+    24 files changed, 92 insertions, 3,896 deletions
+    source   25,450 -> 24,918
+    tests    13,797 -> 13,191
+
+`extra="ignore"` on the settings model means an existing `.env` still holding
+`OPTSCAN_TRADIER_TOKEN` is simply ignored rather than rejected, so nothing had to be
+edited on the machine.
+
+Eight tests failed on the removal and none were deleted for it. Four were about
+credentials and the provider registry and were retargeted at Alpaca. Two were about
+publishing a documented delay, which is now Alpaca's indicative feed rather than
+Tradier's sandbox, and they test the same behaviour against the vendor that still has
+it. That is the useful shape: a test that only fails because its example vanished is
+testing the example, and one worth keeping is testing the rule.

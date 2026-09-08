@@ -131,14 +131,18 @@ class TestHealth:
         self, tmp_path, fake_provider: FakeProvider
     ) -> None:
         """realtime false says the data is not live. It does not say how late it is,
-        and fifteen minutes versus unknown are different things to a user."""
-        sandbox = Settings(
+        and fifteen minutes versus unknown are different things to a user.
+
+        Alpaca's free indicative feed is the case: documented as fifteen minutes
+        behind, so the number is publishable rather than inferred."""
+        delayed = Settings(
             _env_file=None,
             data_dir=tmp_path,
-            provider="tradier",
-            tradier_environment="sandbox",
+            provider="alpaca",
+            alpaca_key_id="k",
+            alpaca_secret_key="s",
         )
-        client = make_client(sandbox, fake_provider)
+        client = make_client(delayed, fake_provider)
         body = client.get("/api/health").json()
 
         assert body["realtime"] is False

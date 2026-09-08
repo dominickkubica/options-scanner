@@ -145,6 +145,25 @@ Robinhood activity export, `optscan trades` reports what the account actually di
 - **An unknown transaction code raises.** Assignment and exercise move real contracts,
   and a skipped row is a profit figure with a hole and nothing to say so.
 
+**Tradier and Schwab were removed on 2026-09-08.** Providers are now `yfinance` and
+`alpaca`. Tradier implemented four of the interface's nine methods, had **no corporate
+calendar** (`get_events` was never implemented), had a measured-unusable `mid_iv`, and a
+token expiring ~2026-10. Schwab never had an adapter at all: it was in the provider
+literal with two credential fields and `get_provider` raised "arrives later".
+`snapshot_history_days` went too, declared and never read.
+
+**The docstrings that mention Tradier stay on purpose.** They record why an IV history
+belongs to one vendor, why the live feed polls, why a missing calendar weakens two
+triggers, and why a vendor's IV is stored and never used. Deleting the code did not make
+those false.
+
+**The live SSE hub is verified working against Alpaca and is still off by default.** It
+was disabled because yfinance throttles silently; Alpaca publishes 200/min and the hub
+costs ~32/min at worst (4 symbols, 15s, idles out after 60s). Driven by hand it went
+idle to live with a 394-contract cycle. `OPTSCAN_LIVE_ENABLED=true` turns it on. It now
+reports `delay_minutes: 15` for Alpaca's indicative feed, which `quote_delay_minutes`
+previously only knew how to say about Tradier.
+
 **Vendor value coercion lives in `providers/parsing.py`, once.** Three adapters had
 their own copy and disagreed about zero, which is the case the first convention in this
 file is about. `non_negative` for a **quote** (a 0.00 bid is real: measured, 57 of 642
