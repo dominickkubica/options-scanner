@@ -1839,3 +1839,72 @@ tr.under-sampled td {
 .link-btn:hover {
   text-decoration: underline;
 }
+
+/* Backtest.
+ *
+ * The edge band is the panel's argument in one widget: the grey track is where random
+ * entry landed 90% of the time, and the tick is the strategy. A tick sitting inside the
+ * track says more than a p-value does, and it says it before the reader has decided
+ * whether they trust the p-value. */
+.edge-band {
+  padding: 4px 0 12px;
+}
+
+.edge-track {
+  position: relative;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+}
+
+.edge-fill {
+  position: absolute;
+  inset: 0;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--muted) 22%, transparent);
+}
+
+.edge-mark {
+  position: absolute;
+  top: -4px;
+  width: 3px;
+  height: 18px;
+  margin-left: -1.5px;
+  border-radius: 2px;
+  background: var(--warn);
+}
+
+.edge-mark.beat {
+  background: var(--good);
+}
+
+.edge-scale {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+.edge-caption {
+  font-family: inherit;
+  text-align: center;
+}
+
+/* The form wraps rather than scrolling: a strategy has a dozen inputs and a horizontal
+ * scrollbar over form controls is how a field gets missed entirely. */
+.backtest-form {
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+
+.backtest-form input[type="text"] {
+  min-width: 180px;
+}
+
+.backtest-form input[type="number"] {
+  width: 90px;
+}

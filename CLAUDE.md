@@ -31,11 +31,12 @@ src/optscan/
   models/           pydantic: Quote, Chain, Contract, Snapshot, Opportunity, Position
   storage/          sqlite + duckdb writers, migrations
   analytics/        greeks.py, iv.py, probability.py, levels.py, projection.py,
-                    portfolio.py, triggers.py, signals.py, outcomes.py, calibration.py
+                    portfolio.py, triggers.py, signals.py, outcomes.py, calibration.py,
+                    backtest.py (engine + nulls), rules.py (rolling indicators, entries)
   screener/         rules/, scoring.py, strategies/
   console.py        terminal colour, and the rules about when not to use it
   jobs/             snapshot.py, schedule.py, manage.py, validate.py, backup.py,
-                    launcher.py, health.py, prices.py, signals.py
+                    launcher.py, health.py, prices.py, signals.py, backtest.py
   live/             the polling refresh loop and its delta encoder
   alerts.py         alert sinks, and once-per-condition delivery. Carries both a
                     position Trigger and a market Signal; position_id is None for
@@ -60,6 +61,11 @@ venv\Scripts\python -m optscan record # log every scored candidate for validatio
 venv\Scripts\python -m optscan signals # market conditions worth knowing, delivered once
 venv\Scripts\python -m optscan signals --dry-run --all # preview without consuming suppression
 venv\Scripts\python -m optscan signals --recent 14 # what was actually delivered
+venv\Scripts\python -m optscan backtest --list-rules # the entry rules and their parameters
+venv\Scripts\python -m optscan backtest --entry rsi_below --param threshold=30 --group tech
+venv\Scripts\python -m optscan backtest --mode short_put --symbols QQQ AAPL --slippage 0.05
+venv\Scripts\python -m optscan backtest --sweep threshold=20,25,30,35 --symbols AAPL MSFT
+venv\Scripts\python -m optscan backtest ... --json   # machine readable, for an agent to read
 venv\Scripts\python -m optscan validate # does the score actually separate outcomes
 venv\Scripts\python -m optscan schedule # the recurring jobs and whether Windows has them
 venv\Scripts\python -m optscan backup # copy the db, mirror the captures, verify
@@ -132,6 +138,35 @@ and `optscan-web` entries in `.claude/launch.json`.
   squeeze runs a median of 4 sessions and up to 41, so firing while it holds sends six
   alerts for every one thing that happened, and per-session suppression cannot fix that
   because each of those days is legitimately a different day. Fire on the transition.
+- **A backtest is the easiest thing here to build so that it always says yes.** Four
+  guards, all in `analytics/backtest.py`: entries fill on the **next bar's open** (a
+  close-based rule filled at that close is a fantasy); ties between a target and a stop
+  go to the **stop**, because intrabar order is unknowable; unfinished trades are
+  **dropped**, not marked to market, or the newest weeks fill with truncated winners;
+  and every result is measured against a **null**, never against zero.
+- **The null is a circular shift of the entry pattern, not fresh random days.** Drawing
+  each symbol's entries independently is far too generous on a correlated universe: a
+  rule firing across ninety-eight tech names in one week has the variance of roughly one
+  observation, and a scattered null has the variance of ninety-eight, so almost anything
+  clears it. A common shift preserves the count, the clustering and the co-movement, and
+  destroys only the alignment with what the market did next, which is the thing on trial.
+- **`effective_sample` pools by calendar block across symbols, not per symbol.** The
+  per-symbol key looks more careful and measures nothing: with overlap suppressed,
+  consecutive trades on one symbol are already a horizon apart, so it returns the trade
+  count. On a real run it said 9,606 where the honest answer was 106.
+- **Never compound concurrent trades.** Multiplying every trade's return treats them as
+  consecutive stakes on the whole account; a rule firing across many symbols opens many
+  positions at once. Doing it produced a yearly total of +2,737,313%. Equity is an equal
+  weighted, monthly rebalanced portfolio (`portfolio_periods`), which is a stated capital
+  model rather than an implied one.
+- **An option backtest refuses realized vol as a stand-in for implied.** The gap between
+  them *is* the variance risk premium, so pricing entry at realized vol prices it at fair
+  value and the measured edge goes to zero by construction. `require_implied_vol` raises.
+  Historical IV exists for two symbols; every other symbol is refused.
+- **A sweep's winner is the maximum of a sample of noise.** `sweep` reports the best cell
+  against the best-of-N under the same null, and warns when the winner rests on fewer
+  than twenty independent blocks, which it usually does: a tighter parameter selects a
+  rarer condition, so the best cell is normally the one with the least evidence.
 - Two filters aimed at the same thing will hide each other. The confounded one in front
   of the principled one does not merely fail to help, it starves the good one of the
   data it needs.
@@ -176,6 +211,30 @@ symbol with fresh stored bars and delivers what is new through the existing aler
 - The composites are only *approximately* independent. Measured lift over independence
   is 1.4x and 1.6x, because the decline that carves a swing low is the same decline that
   depresses RSI. Mild, and stated rather than assumed.
+
+**Exception, authorized 2026-09-08: the backtester.** `optscan backtest` and a Backtest
+tab. `analytics/backtest.py`, `analytics/rules.py`, `jobs/backtest.py`,
+`api/routers/backtest.py`, `frontend/src/views/Backtest.jsx`. No migration: nothing is
+stored, every run is computed from `vendor_daily`.
+
+- **What can honestly be tested is set by the data, not by the UI.** 294 symbols and ten
+  years of daily bars support underlying rules fully. Historical implied vol exists for
+  QQQ and AAPL only, so the option modes run there and refuse elsewhere. The nine stored
+  chain captures are nowhere near enough to backtest on real option quotes, and nothing
+  pretends otherwise.
+- **Option payoffs are exact; only the entry credit is modelled.** Held to expiry, profit
+  is `credit - intrinsic`, and the underlying's path at expiry is real stored history.
+  The null prices its entries with the same model, so the *comparison* survives the model
+  being wrong even though the absolute return does not.
+- **Measured, and the answer was no.** None of the indicator rules beat the null on the
+  tech group at a 21 day horizon: `rsi_below` came closest at +0.79% over a null whose
+  5th-95th range was +0.86% to +4.59%, p=0.244. Short 5% OTM 30 DTE puts on QQQ and AAPL
+  won 88% of the time for +0.12% of collateral per trade, and turned negative at 15%
+  slippage. The tool's own signals do not currently show a tradable edge, which is a
+  finding worth keeping rather than tuning away.
+- Rolling indicators in `rules.py` are a second implementation of `levels.py`'s scalar
+  ones (the scalar form per bar is quadratic). `tests/test_rules.py` pins them together
+  at several points in the series, the same way `levels.py` is pinned to `compute.js`.
 
 - **Rows are stored raw and positions are derived.** Exports overlap, so a re-import
   must be a no-op. Identity is `(source, digest, dup_index)`: the index is there

@@ -83,6 +83,15 @@ export const api = {
   // dashboard refresh cannot consume the once-per-session suppression the scheduled
   // scan relies on. `recentSignals` reads the record of what was actually delivered.
   signals: (symbol) => request(`/signals${query({ symbol })}`),
+  backtestRules: () => request("/backtest/rules"),
+  // The one POST in this client that computes rather than writes. It can take seconds,
+  // so callers show a running state rather than assuming a request is instant.
+  runBacktest: (spec) =>
+    request("/backtest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(spec),
+    }),
   recentSignals: ({ days, symbol, minSeverity } = {}) =>
     request(`/signals/recent${query({ days, symbol, min_severity: minSeverity })}`),
   payoff: (body) =>

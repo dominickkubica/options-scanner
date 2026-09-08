@@ -2696,3 +2696,118 @@ sends mail about it.
 
 1536 tests pass. The new modules are at 90% with the router at 100%; the aggregate
 moved 83 to 84.
+
+## 2026-09-08: a backtester, and four ways it tried to lie
+
+### The data decided the scope, not the request
+
+The ask was a backtesting tab for strategies. What is actually testable came out of one
+query: 294 symbols and ten years of daily bars, historical implied volatility for **two**
+symbols, and nine stored option chain captures.
+
+Nine captures cannot backtest anything. So underlying rules run on the full universe with
+real data, and the option modes run on QQQ and AAPL and **refuse everywhere else**. The
+refusal is a feature and it is enforced in code: the obvious workaround is to substitute
+realized volatility for implied, and that is not a degraded approximation, it is the
+removal of the quantity being measured. The implied-to-realized gap *is* the variance
+risk premium; pricing entry at realized vol prices it at fair value, where expected
+profit is zero by construction. A backtest built that way reports no edge for a strategy
+that has one, and the next move is always to fudge it. `require_implied_vol` raises.
+
+What *can* be done honestly is better than it sounds. Held to expiry, a short option's
+profit is `credit - intrinsic at expiry`, and the second term is exact because the
+underlying's path is real stored history. Only the fill is modelled.
+
+### Four ways a backtest lies, and the guard for each
+
+**It compares against zero.** A long rule over the last decade made money because the
+market rose. Every number is measured against a null instead.
+
+**It counts overlapping trades as independent.** The unit is a block, not a row.
+
+**It is the best of many tries.** `sweep` reports the winner against the best-of-N under
+the same null.
+
+**It trades on information it did not have.** Entries fill at the **next bar's open**. A
+rule reading today's close cannot be filled at today's close, and for any close-based
+rule that delay is most of the difference between a backtest and a fantasy.
+
+Two smaller ones worth recording. A bar that hits both the target and the stop is booked
+as the **stop**, because the intrabar order is unknowable and assuming the good one is a
+few basis points a trade that never existed. And a trade that has not finished inside the
+stored history is **dropped** rather than marked to market, because keeping it fills the
+most recent weeks with truncated winners, which is exactly the period a reader studies
+hardest.
+
+### The null was wrong the first time, and the way it was wrong is the interesting part
+
+The first null drew fresh random entry days per symbol, matched on count and horizon. It
+looked principled and it is far too generous on a correlated universe.
+
+A rule that fires across ninety-eight technology names in the same week produces a mean
+with the variance of roughly **one** observation, because those names share almost all of
+their variance. A null that scatters each symbol's entries independently averages that
+co-movement away and produces a mean with the variance of ninety-eight. Comparing a noisy
+number against a stable one clears the bar almost regardless of merit.
+
+The replacement is a **circular shift of the whole entry pattern**: every symbol's entries
+move by the same number of bars, wrapping at the end. That preserves the trade count per
+symbol, the clustering in time and the synchronisation across symbols, and destroys only
+the alignment between the rule and what the market did next — which is the thing on trial
+and the only thing that should be destroyed.
+
+`effective_sample` had the same shape of error. It keyed on (symbol, block), which sounds
+more careful and measures nothing: with overlapping entries suppressed, consecutive
+trades on one symbol are already at least a horizon apart, so each lands in its own block
+and the count comes back equal to the number of trades. On a real run it reported 9,606
+independent observations from 9,606 trades. Pooling by calendar block across symbols gives
+106, and 106 is the number that belongs next to a claim.
+
+### The +2,737,313 percent year
+
+The first per-year table reported 2025 at +2,737,313%. The equity curve multiplied every
+trade's return together, which treats them as a sequence of bets each staking the whole
+account. They are not a sequence: a rule firing across ninety-eight symbols opens
+ninety-eight concurrent positions, and compounding those fabricates leverage of about
+ninety-eight to one. The absurd number was the giveaway; a subtler version of the same
+error at three symbols would have passed for a good year.
+
+An equity curve needs a capital model, so there is one now and it is stated rather than
+implied: hold every trade exiting in a month at equal weight, compound the months. One
+point per month, not per trade.
+
+### What it says about this tool's own signals
+
+The honest part of building this was pointing it at the signals shipped the same day.
+
+None of the indicator rules beat the null on the tech group at a 21 day horizon.
+`rsi_below` came closest at +3.26% against a null of +2.45%, a margin of +0.79% inside a
+null whose 5th-to-95th range ran from +0.86% to +4.59%, p=0.244. The squeeze and the
+overbought rules came out slightly negative. `every_bar` returned an edge of exactly
++0.000%, which is the sanity check working.
+
+Selling 5% out of the money 30 day puts on QQQ and AAPL won **88%** of the time for
+**+0.12% of collateral** per trade, and went **negative at 15% slippage**. That last line
+is the most useful output the tool produced all day: the entire margin of the strategy
+sits inside plausible transaction costs.
+
+And a sweep of seven RSI thresholds picked 20 as the winner at +9.23%, against +4.69% for
+the best of seven cells under the null — on **five trades in four independent blocks**.
+The report now says that in the note, because a tighter parameter selects a rarer
+condition, so the winning cell is very nearly always the one with the least evidence
+behind it.
+
+None of that is a reason to stop. It is a reason to have built the null first.
+
+### Plumbing
+
+`rules.py` holds rolling indicators because calling `levels.py`'s scalar forms once per
+bar is quadratic: 2,500 sessions across 294 symbols is about four billion operations for
+a single pass's worth of question. That makes a second implementation of the same
+arithmetic, which is a standing hazard rather than a tidy separation, so
+`tests/test_rules.py` pins every one against its scalar twin at several points in the
+series — the same check already run between `levels.py` and the frontend's `compute.js`.
+
+`optscan backtest --json` exists so an agent can run one and read the result.
+
+1,608 tests pass. The new modules are at 89%.

@@ -20,6 +20,7 @@ import Opportunities from "./views/Opportunities.jsx";
 import Payoff from "./views/Payoff.jsx";
 import Positions from "./views/Positions.jsx";
 import Signals from "./views/Signals.jsx";
+import Backtest from "./views/Backtest.jsx";
 import Underlying from "./views/Underlying.jsx";
 import { num } from "./format.js";
 
@@ -38,6 +39,7 @@ const VIEWS = [
   { key: "chain", label: "Chain" },
   { key: "underlying", label: "Underlying" },
   { key: "signals", label: "Signals" },
+  { key: "backtest", label: "Backtest" },
   { key: "levels", label: "Levels" },
   { key: "payoff", label: "Payoff" },
   { key: "positions", label: "Positions" },
@@ -46,7 +48,12 @@ const VIEWS = [
 
 // Views that are about the whole universe rather than the selected symbol, so the
 // topbar names the view instead of a ticker the panel below is not showing.
-const TITLES = { home: "optscan", browse: "Browse", signals: "Signals" };
+const TITLES = {
+  home: "optscan",
+  browse: "Browse",
+  signals: "Signals",
+  backtest: "Backtest",
+};
 
 export default function App() {
   const health = useAsync(() => api.health(), []);
@@ -305,6 +312,10 @@ export default function App() {
               }}
             />
           )}
+
+          {/* Not gated on a symbol either: a backtest chooses its own universe, and
+              the sidebar selection has nothing to do with it. */}
+          {!apiDown && view === "backtest" && <Backtest />}
 
           {/* Not gated on a symbol: the portfolio spans every symbol held, and a
               positions page that went blank because the sidebar selection had no

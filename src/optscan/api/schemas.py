@@ -171,6 +171,69 @@ class SignalsOut(ApiModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class BacktestRuleOut(ApiModel):
+    """One entry rule the UI may offer."""
+
+    name: str
+    label: str = ""
+    about: str = ""
+    params: dict = Field(default_factory=dict)
+
+
+class BacktestStatsOut(ApiModel):
+    trades: int = 0
+    #: Independent calendar blocks, pooled across symbols. The real sample size, and
+    #: usually far smaller than the trade count.
+    effective_sample: int = 0
+    mean_return: float = 0.0
+    median_return: float = 0.0
+    win_rate: float = 0.0
+    total_return: float = 0.0
+    best: float = 0.0
+    worst: float = 0.0
+    stdev: float = 0.0
+    mean_bars_held: float = 0.0
+    enough_to_claim: bool = False
+
+
+class BacktestEdgeOut(ApiModel):
+    strategy_mean: float = 0.0
+    null_mean: float = 0.0
+    edge: float = 0.0
+    p_value: float = 1.0
+    null_low: float = 0.0
+    null_high: float = 0.0
+    draws: int = 0
+
+
+class BacktestYearOut(ApiModel):
+    year: int
+    trades: int = 0
+    mean_return: float = 0.0
+    win_rate: float = 0.0
+    total_return: float = 0.0
+
+
+class BacktestPointOut(ApiModel):
+    date: str
+    value: float
+
+
+class BacktestOut(ApiModel):
+    """A finished run. Deliberately without the trade rows: a decade across three
+    hundred symbols is tens of thousands, and the UI charts the curve rather than the
+    ledger."""
+
+    stats: BacktestStatsOut | None = None
+    edge: BacktestEdgeOut | None = None
+    by_year: list[BacktestYearOut] = Field(default_factory=list)
+    equity: list[BacktestPointOut] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+    skipped: dict[str, str] = Field(default_factory=dict)
+    strategy: dict = Field(default_factory=dict)
+    seconds: float = 0.0
+
+
 class WatchlistChangeOut(ApiModel):
     """What adding or removing a symbol actually did."""
 
