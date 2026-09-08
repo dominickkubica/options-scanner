@@ -588,11 +588,23 @@ def _cmd_serve(settings: Settings, args: argparse.Namespace) -> int:
 
     from optscan.api.deps import frontend_dist
     from optscan.console import Console
-    from optscan.jobs.launcher import ALL_INTERFACES, firewall_command, lan_address
+    from optscan.jobs.launcher import (
+        ALL_INTERFACES,
+        firewall_command,
+        lan_address,
+        port_is_taken,
+        stale_server_warning,
+    )
 
     console = Console.for_stream(settings.color_mode)
     port = args.port or settings.api_port
     host = args.host or (ALL_INTERFACES if args.lan else settings.api_host)
+
+    # Checked before anything is printed, because the consequence is that half of
+    # what follows will be about a process this one is not.
+    if port_is_taken(port):
+        print(console.bad(stale_server_warning(port)))
+        print()
 
     print(f"API on http://{host}:{port}/api/health")
     if frontend_dist() is None:

@@ -219,3 +219,71 @@ class TestLanAccess:
         source = inspect.getsource(launcher.firewall_command)
         assert "subprocess" not in source
         assert "New-NetFirewallRule" in source
+
+
+class TestStaleServerDetection:
+    """The trap: two servers, one port, different code.
+
+    Binding 0.0.0.0 succeeds while another process holds 127.0.0.1 on the same port,
+    because they are different addresses. Windows then routes localhost to the older
+    process and the network address to the newer one, so the same URL serves different
+    code depending on how it is reached.
+    """
+
+    def test_an_occupied_port_is_detected(self) -> None:
+        import socket
+
+        from optscan.jobs.launcher import port_is_taken
+
+        holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        holder.bind(("127.0.0.1", 0))
+        holder.listen(1)
+        port = holder.getsockname()[1]
+        try:
+            assert port_is_taken(port) is True
+        finally:
+            holder.close()
+
+    def test_a_free_port_is_not(self) -> None:
+        import socket
+
+        from optscan.jobs.launcher import port_is_taken
+
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+        probe.close()  # released, so nothing is listening on it now
+        assert port_is_taken(port) is False
+
+    def test_loopback_is_what_gets_probed(self) -> None:
+        """Not the bind address. A server about to bind 0.0.0.0 needs to know whether
+        something holds 127.0.0.1, because that is the binding localhost will reach and
+        the one that will silently win."""
+        import inspect
+
+        from optscan.jobs import launcher
+
+        signature = inspect.signature(launcher.port_is_taken)
+        assert signature.parameters["host"].default == "127.0.0.1"
+
+    def test_the_warning_explains_the_symptom_not_just_the_cause(self) -> None:
+        """The observable symptom is new endpoints returning HTML while /api/health
+        works, which reads as a routing bug in the app. Naming it is the whole value."""
+        from optscan.jobs.launcher import stale_server_warning
+
+        warning = stale_server_warning(8000)
+        assert "8000" in warning
+        assert "localhost" in warning
+        assert "HTML instead of JSON" in warning
+        assert "Get-NetTCPConnection" in warning
+
+    def test_a_busy_port_does_not_stop_the_server(self) -> None:
+        """Advice, not an error. Running two ports deliberately is legitimate, and
+        refusing to start would be worse than a sentence."""
+        import inspect
+
+        from optscan import cli
+
+        source = inspect.getsource(cli._cmd_serve)
+        assert "port_is_taken" in source
+        assert "return 1" not in source.split("port_is_taken")[1].split("uvicorn.run")[0]

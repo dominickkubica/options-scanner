@@ -2026,3 +2026,58 @@ hidden: the page is not composited while it is not displayed, so CSS transitions
 advance and the computed value stays at the start of the transition. Removing the
 transition made it snap correctly to `left: 0`. Worth recording because every symptom
 pointed at a specificity problem in the cascade and none of it was.
+
+---
+
+## 2026-09-08: two servers, one port, and why the dashboard looked broken
+
+Reported as a bug in the app: the Home page rendered
+`Unexpected token '<', "<!doctype "... is not valid JSON`. There was no bug in the app.
+
+**Two processes were listening on port 8000.** One started at 16:13 bound to
+`127.0.0.1`, one started at 21:50 bound to `0.0.0.0`. Binding every interface
+**succeeds** while another process holds loopback on the same port, because they are
+different addresses and there is no conflict to report. uvicorn started cleanly and
+said so.
+
+Windows then routes to the most specific binding, so `localhost:8000` reached the older
+process and `10.128.106.55:8000` reached the newer one. Measured at the same moment,
+same URL path: `/api/home` returned HTML on localhost and JSON on the LAN address. The
+old process predated the Home page by five hours, so its SPA catch-all answered a route
+it had never heard of.
+
+The symptom is the worst part. `/api/health` worked, because it exists in both. Only the
+*new* endpoints failed, and they failed by returning the single page app's HTML, which
+looks exactly like a router registration bug. Two of the three diagnostics run against
+it were also misleading: introspecting `app.routes` showed no `/api` paths at all
+because this FastAPI version wraps included routers as `_IncludedRouter` with
+`path=None`, and the code was fine the whole time.
+
+`optscan serve` now probes loopback before starting and prints what it means. Loopback
+specifically, not the bind address: the question is whether something holds the binding
+that `localhost` will reach, since that is the one that silently wins.
+
+Not fatal. Running two ports deliberately is legitimate and refusing to start would be
+worse than a sentence, so it is loud advice and a test pins that it does not exit.
+
+### The same session, on phone access
+
+`--lan` was added earlier the same day with a firewall rule scoped
+`-Profile Private -RemoteAddress LocalSubnet`. Checking `Get-NetConnectionProfile`
+afterwards found **both networks classified `Public`**, so the rule never applied and
+the port was still closed. Checking the profile should have come before handing over the
+command.
+
+More importantly, the address turned out to be `10.128.106.55/24` on a **shared building
+network**, not a home router. `LocalSubnet` there is up to 254 machines belonging to
+strangers, and this app has no authentication of any kind.
+
+**So the port stays shut on this machine.** The rule was removed rather than widened,
+and `--lan` is the wrong tool on this network: with `0.0.0.0` bound, the only thing
+between the positions and the building is a firewall profile classification, which is a
+single setting away from wrong. The `--host` flag already covers the right answer: bind
+the private-mesh interface only, and the shared network never sees the port at all.
+
+The lesson worth keeping: **`--lan` is safe on a network you own and unsafe on one you
+share, and nothing in the flag can tell the difference.** Its warning says there is no
+login; it cannot say who else is on the subnet.

@@ -144,6 +144,22 @@ Robinhood activity export, `optscan trades` reports what the account actually di
 - **An unknown transaction code raises.** Assignment and exercise move real contracts,
   and a skipped row is a profit figure with a hole and nothing to say so.
 
+**Two servers on one port is a real trap and `optscan serve` now warns about it.**
+Binding `0.0.0.0` succeeds while another process holds `127.0.0.1` on the same port.
+Windows routes localhost to the older process and the network address to the newer one,
+so the same URL serves different code. The symptom is new endpoints returning the SPA's
+HTML while `/api/health` works, which reads as a router bug and is not. Measured
+2026-09-08 with servers from 16:13 and 21:50 on port 8000. Also: introspecting
+`app.routes` is useless for this, since included routers appear as `_IncludedRouter`
+with `path=None`; use `TestClient` instead.
+
+**`--lan` is safe on a network you own and unsafe on one you share, and the flag cannot
+tell the difference.** This machine is on `10.128.106.55/24`, a shared building network,
+so the port stays shut and the firewall rule was removed. Check
+`Get-NetConnectionProfile` before trusting any firewall rule: both profiles here are
+`Public`, so a `-Profile Private` rule never applied at all. For phone access on a
+shared network, bind a private-mesh interface with `--host`, never `--lan`.
+
 **Exception, authorized 2026-09-08: phone access.** Two independent problems, fixed
 separately. Full reasoning in the DECISIONS entry of that date.
 

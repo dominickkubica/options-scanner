@@ -358,3 +358,50 @@ def firewall_command(port: int) -> str:
         f"-LocalPort {port} -Protocol TCP -Action Allow -Profile Private "
         f"-RemoteAddress LocalSubnet"
     )
+
+
+def port_is_taken(port: int, host: str = "127.0.0.1", timeout: float = 0.35) -> bool:
+    """Whether something already answers on this port.
+
+    Checked against loopback specifically, and that is the whole point rather than an
+    implementation detail. Binding `0.0.0.0` **succeeds** on Windows while another
+    process holds `127.0.0.1` on the same port: they are different addresses, so there
+    is no conflict to report and uvicorn starts cleanly.
+
+    What happens next is the trap. Windows routes a request to the most specific
+    binding, so `localhost` reaches the *older* process and the LAN address reaches the
+    new one. The two then serve different code from the same port, and the symptom is a
+    dashboard whose new endpoints return the SPA's HTML while `/api/health` works fine,
+    which reads exactly like a routing bug in the app.
+
+    Measured 2026-09-08: a server started at 16:13 held 127.0.0.1:8000 while a new one
+    started at 21:50 held 0.0.0.0:8000. `/api/home` returned HTML on localhost and JSON
+    on the LAN address, from the same URL path, at the same moment.
+    """
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.settimeout(timeout)
+    try:
+        return probe.connect_ex((host, port)) == 0
+    except OSError:
+        return False
+    finally:
+        probe.close()
+
+
+def stale_server_warning(port: int) -> str:
+    """What to print when the port is already answering. Advice, not an error.
+
+    Not fatal: serving two ports deliberately is legitimate, and refusing to start
+    would be worse than a sentence. But it is loud, because the failure it prevents
+    costs half an hour and looks like a bug in the code rather than in the machine.
+    """
+    return (
+        f"Something is already listening on port {port}.\n"
+        f"  Binding every interface still succeeds, but localhost:{port} will reach "
+        "the OTHER process\n"
+        "  and only the network address will reach this one. If the dashboard looks "
+        "out of date,\n"
+        "  or new endpoints return HTML instead of JSON, that is why.\n"
+        "  Find it with:  Get-NetTCPConnection -LocalPort "
+        f"{port} -State Listen | Select-Object LocalAddress, OwningProcess"
+    )
