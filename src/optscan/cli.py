@@ -33,6 +33,7 @@ SIGNAL_NOTABLE = 3
 #: for the analytics stack.
 from optscan.analytics.backtest import DEFAULT_COST  # noqa: E402
 from optscan.jobs.backtest import MODES, SIGNIFICANT  # noqa: E402
+from optscan.jobs.ideas import DEFAULT_FRESHNESS_DAYS  # noqa: E402
 from optscan.jobs.search import (  # noqa: E402
     DEFAULT_FINALISTS,
     DEFAULT_TRAIN_SHARE,
@@ -317,6 +318,35 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--cost", type=float, default=DEFAULT_COST)
     search.add_argument("--top", type=int, default=12, help="Candidates to print.")
     search.add_argument("--json", action="store_true")
+
+    ideas = sub.add_parser(
+        "ideas",
+        help=(
+            "Symbols triggering a strategy that survived validation, with the evidence "
+            "for that strategy attached."
+        ),
+    )
+    ideas.add_argument("--symbols", nargs="*", default=[], help="Limit to these symbols.")
+    ideas.add_argument(
+        "--freshness",
+        type=int,
+        default=DEFAULT_FRESHNESS_DAYS,
+        help=(
+            "Sessions a trigger may be old and still listed. These rules act on the "
+            "next open, so an older one has already been and gone."
+        ),
+    )
+    ideas.add_argument(
+        "--provisional",
+        action="store_true",
+        help="Also list strategies that have not passed an out-of-sample test.",
+    )
+    ideas.add_argument(
+        "--evidence",
+        action="store_true",
+        help="Print the full record for every strategy, including the retired ones.",
+    )
+    ideas.add_argument("--json", action="store_true")
 
     position = sub.add_parser("position", help="Track positions you actually hold.")
     position_sub = position.add_subparsers(dest="position_command", required=True)
@@ -963,6 +993,75 @@ def _strategy_from(args: argparse.Namespace):
         draws=args.draws,
         seed=args.seed,
     )
+
+
+def _cmd_ideas(settings: Settings, args: argparse.Namespace) -> int:
+    import json as json_module
+
+    from optscan.console import Console
+    from optscan.jobs.ideas import REGISTRY, Status, as_report, find_ideas
+
+    console = Console.for_stream(settings.color_mode)
+    ideas, notes = find_ideas(
+        settings,
+        [s.upper() for s in args.symbols] or None,
+        freshness=args.freshness,
+        include_provisional=args.provisional,
+    )
+
+    if args.json:
+        print(json_module.dumps(as_report(ideas, notes), indent=2))
+        return 0
+
+    if args.evidence:
+        for item in REGISTRY:
+            tone = console.good if item.status is Status.SUPPORTED else console.warn
+            print(f"  {tone(item.status.value.upper()):<12} {item.label}")
+            print(f"    {item.rationale}")
+            evidence = item.evidence
+            print(
+                f"    edge {evidence.edge:+.2%}  p={evidence.p_value:.3f}  "
+                f"{evidence.blocks} blocks  net {evidence.net_return:+.2%} per trade"
+            )
+            print(f"    tested on {evidence.tested_on}")
+            print(f"    costs: {evidence.cost_basis}")
+            for caveat in evidence.caveats:
+                print(f"    - {caveat}")
+            print()
+        return 0
+
+    if ideas:
+        print(
+            f"  {'symbol':<7} {'triggered':<12} {'age':>6} {'price':>9} "
+            f"{'cost':>8} {'hold':>5}  strategy"
+        )
+        for idea in ideas:
+            age = "today" if idea.age == 0 else f"{idea.age}d ago"
+            print(
+                f"  {idea.symbol:<7} {idea.session.isoformat():<12} {age:>6} "
+                f"{idea.price:>9.2f} {idea.cost * 10_000:>6.0f}bp "
+                f"{idea.horizon:>4}d  {idea.strategy_key}"
+            )
+        print()
+
+    for note in notes:
+        print(console.warn(note))
+
+    # The evidence never travels separately from the list. A screen of tickers with no
+    # numbers attached is the artefact this whole command exists to avoid producing.
+    for item in REGISTRY:
+        if item.status is not Status.SUPPORTED:
+            continue
+        evidence = item.evidence
+        print(
+            console.dim(
+                f"  {item.label}: edge {evidence.edge:+.2%} at p={evidence.p_value:.3f} "
+                f"on {evidence.blocks} independent blocks, netting "
+                f"{evidence.net_return:+.2%} a trade after costs. Tested on "
+                f"{evidence.tested_on}. Run with --evidence for the caveats."
+            )
+        )
+    return 0
 
 
 def _cmd_search(settings: Settings, args: argparse.Namespace) -> int:
@@ -1914,6 +2013,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "signals": _cmd_signals,
         "backtest": _cmd_backtest,
         "search": _cmd_search,
+        "ideas": _cmd_ideas,
         "import": _cmd_import,
         "import-history": _cmd_import_history,
         "prices": _cmd_prices,

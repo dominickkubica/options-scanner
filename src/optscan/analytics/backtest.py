@@ -503,6 +503,7 @@ def null_distribution(
     target: float | None = None,
     stop: float | None = None,
     cost: float = DEFAULT_COST,
+    costs: dict[str, float] | None = None,
     draws: int = DEFAULT_NULL_DRAWS,
     seed: int = 0,
     block_bars: int = DEFAULT_BLOCK_BARS,
@@ -558,7 +559,11 @@ def null_distribution(
             horizon=horizon,
             target=target,
             stop=stop,
-            cost=cost,
+            # The null must be charged what the strategy is charged, per symbol. Using a
+            # blended cost here while the strategy pays per symbol would hand whichever
+            # side trades the cheaper names an advantage that has nothing to do with
+            # timing, which is the only thing the comparison is meant to isolate.
+            cost=(costs or {}).get(symbol, cost),
         )
         span = max(span, len(bars))
 

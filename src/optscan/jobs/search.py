@@ -58,7 +58,12 @@ from optscan.analytics.backtest import (
     summarize,
 )
 from optscan.config import Settings
-from optscan.jobs.backtest import Strategy, load_series, resolve_symbols
+from optscan.jobs.backtest import (
+    Strategy,
+    load_series,
+    resolve_symbols,
+    symbol_costs,
+)
 from optscan.logging import get_logger
 from optscan.models import PriceBar
 
@@ -87,12 +92,24 @@ DEFAULT_DRAWS = 500
 #: fluke, and a grid large enough to guarantee a winner is a grid that has stopped
 #: measuring anything.
 DEFAULT_GRID: dict[str, list] = {
+    # Short-horizon reversion, the family that has actually shown something here.
     "rsi_below": [{"threshold": t} for t in (25, 30, 35)],
-    "rsi_above": [{"threshold": t} for t in (65, 70, 75)],
+    "ibs_below": [{"threshold": t} for t in (0.1, 0.2, 0.3)],
+    "down_days": [{"count": c} for c in (2, 3, 4)],
+    "gap_down": [{"size": s} for s in (0.02, 0.04)],
+    # The other side of each, so the grid cannot only confirm reversion.
+    "rsi_above": [{"threshold": t} for t in (70, 75)],
+    "ibs_above": [{"threshold": 0.8}],
+    "up_days": [{"count": 3}],
+    # Momentum and trend.
+    "near_52w_high": [{"within": 0.02}],
+    "above_ma": [{"period": p} for p in (50, 200)],
+    "below_ma": [{"period": 200}],
+    # Volatility and volume.
     "squeeze": [{}],
     "volume_surge": [{"multiple": m} for m in (2.0, 3.0)],
-    "above_ma": [{"period": p} for p in (50, 200)],
-    "below_ma": [{"period": p} for p in (50, 200)],
+    # A calendar rule with no market input, as a second control alongside every_bar.
+    "turn_of_month": [{"days": 3}],
 }
 
 #: Where the report calls a holdout result significant. Conventional, and it is one test
@@ -106,7 +123,7 @@ MIN_CANDIDATES_FOR_CORRECTION = 2
 #: mining. Half is generous: real edges decay too, and the point is to flag collapse.
 MAX_TOLERABLE_DECAY = 0.5
 
-DEFAULT_HORIZONS = (5, 21, 63)
+DEFAULT_HORIZONS = (1, 3, 5, 21)
 DEFAULT_DIRECTIONS = (Direction.LONG, Direction.SHORT)
 
 
@@ -283,6 +300,10 @@ def run_search(
         result.notes.append("No symbol had enough stored history.")
         return result
 
+    # One cost per symbol, computed once and shared by every candidate and every null. A
+    # flat rate here would flatter whichever cells happen to trade the thinnest names.
+    costs = symbol_costs(template, series)
+
     split = boundary_date(series, train_share)
     result.train_end = split
     splits = {symbol: split_index(bars, split) for symbol, bars in series.items()}
@@ -307,7 +328,10 @@ def run_search(
         for direction in directions:
             tables[(horizon, direction)] = {
                 symbol: forward_return_table(
-                    bars, direction=direction, horizon=horizon, cost=template.cost
+                    bars,
+                    direction=direction,
+                    horizon=horizon,
+                    cost=costs.get(symbol, template.cost),
                 )
                 for symbol, bars in train_bars.items()
             }
@@ -320,7 +344,7 @@ def run_search(
         tables,
         horizons=horizons,
         directions=directions,
-        cost=template.cost,
+        costs=costs,
         block_bars=template.block_bars,
         draws=search_draws,
         seed=template.seed,
@@ -346,7 +370,7 @@ def run_search(
 
     for candidate in ranked[:finalists]:
         result.finalists.append(
-            _evaluate_out_of_sample(candidate, template, series, splits, draws=draws)
+            _evaluate_out_of_sample(candidate, template, series, splits, costs=costs, draws=draws)
         )
 
     result.expected_best_under_null = expected_best_z(result.tried)
@@ -370,7 +394,7 @@ def _score_grid(
     *,
     horizons: Sequence[int],
     directions: Sequence[Direction],
-    cost: float,
+    costs: dict[str, float],
     block_bars: int,
     draws: int,
     seed: int,
@@ -400,7 +424,7 @@ def _score_grid(
                             window,
                             direction=direction,
                             horizon=horizon,
-                            cost=cost,
+                            cost=costs[symbol],
                         )
                         if found:
                             trades.extend(found)
@@ -464,6 +488,7 @@ def _evaluate_out_of_sample(
     series: dict[str, list[PriceBar]],
     splits: dict[str, int],
     *,
+    costs: dict[str, float],
     draws: int,
 ) -> Finalist:
     """Run one finalist on the held-out period, with its own null."""
@@ -488,7 +513,7 @@ def _evaluate_out_of_sample(
             window,
             direction=direction,
             horizon=candidate.horizon,
-            cost=template.cost,
+            cost=costs[symbol],
         )
         if found:
             trades.extend(found)
@@ -518,7 +543,7 @@ def _evaluate_out_of_sample(
         shifted,
         direction=direction,
         horizon=candidate.horizon,
-        cost=template.cost,
+        costs=costs,
         draws=draws,
         block_bars=template.block_bars,
     )

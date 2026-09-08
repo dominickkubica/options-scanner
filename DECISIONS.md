@@ -2887,3 +2887,84 @@ and the cost assumption has not been checked against what these names actually c
 trade. The next thing to do is measure that, not to trade it.
 
 1,620 tests pass.
+
+## 2026-09-08: what it costs, what actually works, and one idea worth listing
+
+### The placeholder was wrong by five times
+
+Every backtest here had been charging ten basis points a round trip. That was a guess,
+and it was load bearing: the strongest result so far is worth seventy to a hundred basis
+points a trade, so the guess decided whether the finding existed.
+
+No historical quotes are stored and fetching a decade of NBBO for three hundred symbols
+to answer one question is the wrong trade, so `analytics/costs.py` estimates the spread
+from the bars themselves. Corwin and Schultz start from the observation that a daily high
+is probably a buy at the ask and the low a sell at the bid, so a one day range holds one
+spread and one day of volatility while a two day range holds one spread and two days of
+volatility. Volatility scales with time and the spread does not, so they separate.
+
+Measured across the 188 symbols outside the tech group: **median 47 basis points, mean
+61**, ETFs at 30, metals at 61, uranium at **153**. Not ten.
+
+Two things went wrong on the way. The first `trustworthy` gate rejected any symbol whose
+daily estimates came out negative more than 35% of the time, and threw away all 188:
+negative daily values are a normal feature of this estimator rather than a fault, and the
+*tightest* names are the most negative because a small spread is the hardest to resolve.
+The gate now only checks sample size. The second was a test fixture with a constant close
+and a fixed 2% daily range, asserting the estimate should be zero. It is 2%, correctly:
+with no overnight movement the entire intraday range **is** bid-ask bounce. A fixture
+without volatility cannot exercise a separation of volatility from spread.
+
+### Costs do not change an edge, only the take-home
+
+Re-running the pre-specified reversion test with per-symbol costs gave an identical
+`edge` (+0.71%) and a lower `mean_return` (+0.93% to +0.46%). That is right and worth
+stating plainly: the null pays what the strategy pays, so cost cancels out of a timing
+comparison. The edge says whether the rule works. The mean says whether you keep anything.
+
+The surprise was where it works best. On the ETF and large cap subset, where spreads run
+30 to 47 basis points, the same rule nets **+1.03% at p=0.001**. Better than the full
+universe, because the effect is roughly constant while the cost is not. That inverts the
+usual worry about anomalies living where they cannot be traded.
+
+### A 184 cell search, and the most useful failure yet
+
+Seven documented patterns went into the registry: internal bar strength, consecutive
+up and down closes, gap down, 52-week-high proximity, turn of month, and the two IBS
+directions. IBS is the best documented of them, with evidence on equity ETFs running from
+the 1990s to the present and a noted weakening since about 2013 that a 2023 to 2026
+holdout is well placed to test.
+
+The search ran 184 combinations over 123 liquid symbols with real per-symbol costs. Its
+winner was `gap_down(0.04) short 1d` at **z = 7.70** against a multiplicity bar of 3.23,
+on 76 independent blocks. Everything about it looked like a discovery.
+
+Out of sample it returned **-0.34%**. Its two sibling cells returned -1.70% and -1.23%.
+All three reversed sign. Shorting gap downs worked while gaps continued and stopped when
+they began to fill, somewhere around the training boundary.
+
+That is the single most useful result of the day. The multiplicity bar was cleared by
+more than double and the finding was still nothing, which is exactly the case a holdout
+exists to catch and exactly the case that no in-sample statistic can.
+
+### Trade ideas, and the rule about them
+
+`jobs/ideas.py` lists what is triggering today, and it can only list strategies that have
+survived a documented test. `ValidatedStrategy` cannot be constructed without `Evidence`,
+which records the population tested on, the block count, the p-value, the net return and
+the cost basis, and the CLI prints that evidence underneath the tickers every time rather
+than on request. A screen of symbols with no numbers beside it is the artefact the module
+exists to avoid producing.
+
+The registry has one SUPPORTED entry, `oversold_bounce`, and one RETIRED entry,
+`gap_down_continuation`, kept with the reason. A strategy that stops working is not
+deleted: the record of what was believed and why is the only thing that makes the next
+search less credulous than the last.
+
+Ideas are ordered by trigger age and then by the symbol's own spread, because the edge is
+a fixed number and the cost is not, so the same signal is worth materially less on a thin
+name. Stale symbols are excluded here even though the backtester keeps them: a delisted
+ticker's final session triggers forever and would sit at the top of a list of things to
+trade today.
+
+1,639 tests pass.

@@ -293,6 +293,127 @@ def below_ma(bars: Sequence[PriceBar], period: int = 200):
     return out
 
 
+def ibs_series(bars: Sequence[PriceBar]) -> list[float | None]:
+    """Internal bar strength: where the close sits inside the day's own range.
+
+    (close - low) / (high - low), so zero means the day closed on its low and one means
+    it closed on its high. Documented since the 1990s as a mean reversion signal on
+    equity indices and ETFs, with closes in the bottom fifth of the range tending to be
+    followed by strength the next session.
+
+    A bar with no range has no position inside it. Returned as None rather than 0.5,
+    because a limit-up or halted day is not a neutral close.
+    """
+    out: list[float | None] = []
+    for bar in bars:
+        span = bar.high - bar.low
+        out.append((bar.close - bar.low) / span if span > 0 else None)
+    return out
+
+
+def ibs_below(bars: Sequence[PriceBar], threshold: float = 0.2):
+    """Closed in the weakest part of its own daily range."""
+    series = ibs_series(bars)
+    return [
+        index
+        for index in range(WARMUP, len(bars))
+        if series[index] is not None and series[index] <= threshold
+    ]
+
+
+def ibs_above(bars: Sequence[PriceBar], threshold: float = 0.8):
+    """Closed in the strongest part of its own daily range."""
+    series = ibs_series(bars)
+    return [
+        index
+        for index in range(WARMUP, len(bars))
+        if series[index] is not None and series[index] >= threshold
+    ]
+
+
+def down_days(bars: Sequence[PriceBar], count: int = 3):
+    """`count` consecutive lower closes. The oldest short-term reversal rule there is.
+
+    The edge is the streak's completion, not its continuation, so this fires on the day
+    the streak reaches `count` and on every day it extends. Both are entries in the same
+    condition; overlap suppression in the simulator stops that becoming many positions.
+    """
+    if count < 1:
+        raise ValueError("count must be at least one")
+    out = []
+    for index in range(WARMUP, len(bars)):
+        window = bars[index - count : index + 1]
+        if len(window) == count + 1 and all(
+            window[step + 1].close < window[step].close for step in range(count)
+        ):
+            out.append(index)
+    return out
+
+
+def up_days(bars: Sequence[PriceBar], count: int = 3):
+    """`count` consecutive higher closes."""
+    if count < 1:
+        raise ValueError("count must be at least one")
+    out = []
+    for index in range(WARMUP, len(bars)):
+        window = bars[index - count : index + 1]
+        if len(window) == count + 1 and all(
+            window[step + 1].close > window[step].close for step in range(count)
+        ):
+            out.append(index)
+    return out
+
+
+def gap_down(bars: Sequence[PriceBar], size: float = 0.02):
+    """Opened at least `size` below the previous close, and closed below it too.
+
+    Requiring the close as well as the open is what separates a gap that stuck from one
+    that filled during the session. Without it the rule fires on days that already
+    recovered, which is a different event wearing the same name.
+    """
+    out = []
+    for index in range(WARMUP, len(bars)):
+        previous = bars[index - 1].close
+        if previous <= 0:
+            continue
+        if bars[index].open <= previous * (1 - size) and bars[index].close < previous:
+            out.append(index)
+    return out
+
+
+def near_52w_high(bars: Sequence[PriceBar], within: float = 0.02, window: int = 252):
+    """Within `within` of the highest close of the last `window` sessions.
+
+    The momentum side of the grid, and a deliberate counterweight: everything else here
+    is mean reversion, and a search containing only one idea can only confirm it.
+    """
+    out = []
+    for index in range(max(WARMUP, window), len(bars)):
+        peak = max(bar.close for bar in bars[index - window : index + 1])
+        if peak > 0 and bars[index].close >= peak * (1 - within):
+            out.append(index)
+    return out
+
+
+def turn_of_month(bars: Sequence[PriceBar], days: int = 3):
+    """The last session of a month and the first `days` of the next.
+
+    A calendar rule with no market input at all, included as a second control: it should
+    beat its null only if the turn-of-month effect is real in this sample, and a search
+    that ranks it highly is telling you something about the search rather than the month.
+    """
+    out = []
+    for index in range(WARMUP, len(bars)):
+        today = bars[index].ts.date()
+        previous = bars[index - 1].ts.date()
+        # Last session of a month: the next bar is in a different month.
+        month_end = index + 1 < len(bars) and bars[index + 1].ts.date().month != today.month
+        month_start = today.month != previous.month
+        if month_end or (month_start and today.day <= days):
+            out.append(index)
+    return out
+
+
 def level_rule(
     bars: Sequence[PriceBar],
     kind: str = SignalKind.LEVEL_BREAK.value,
@@ -388,6 +509,54 @@ REGISTRY: dict[str, dict[str, object]] = {
         "params": {"period": 200},
         "label": "Crosses below moving average",
         "about": "The cross, not the state.",
+    },
+    "ibs_below": {
+        "fn": ibs_below,
+        "params": {"threshold": 0.2},
+        "label": "Closed weak within its range (low IBS)",
+        "about": (
+            "Internal bar strength: the close's position inside the day's own high-low "
+            "range. Documented mean reversion on indices and ETFs since the 1990s."
+        ),
+    },
+    "ibs_above": {
+        "fn": ibs_above,
+        "params": {"threshold": 0.8},
+        "label": "Closed strong within its range (high IBS)",
+        "about": "The other side of the same indicator.",
+    },
+    "down_days": {
+        "fn": down_days,
+        "params": {"count": 3},
+        "label": "Consecutive lower closes",
+        "about": "The oldest short-term reversal rule there is.",
+    },
+    "up_days": {
+        "fn": up_days,
+        "params": {"count": 3},
+        "label": "Consecutive higher closes",
+        "about": "The mirror of the streak rule.",
+    },
+    "gap_down": {
+        "fn": gap_down,
+        "params": {"size": 0.02},
+        "label": "Gapped down and stayed down",
+        "about": "Opened below the prior close by a margin and closed below it too.",
+    },
+    "near_52w_high": {
+        "fn": near_52w_high,
+        "params": {"within": 0.02, "window": 252},
+        "label": "Near its 52 week high",
+        "about": "The momentum counterweight in a grid otherwise full of reversion.",
+    },
+    "turn_of_month": {
+        "fn": turn_of_month,
+        "params": {"days": 3},
+        "label": "Turn of the month",
+        "about": (
+            "A pure calendar rule with no market input. A second control: if this ranks "
+            "highly, read it as information about the search."
+        ),
     },
     "level_break": {
         "fn": lambda bars, **kw: level_rule(bars, SignalKind.LEVEL_BREAK.value, **kw),

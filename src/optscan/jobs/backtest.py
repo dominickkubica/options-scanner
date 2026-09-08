@@ -79,6 +79,8 @@ EXPENSIVE_RULES = frozenset({"level_break", "level_approach"})
 
 MODES = ("underlying", "short_put", "short_call")
 
+COST_MODELS = ("flat", "estimated")
+
 #: Where the report stops hedging and starts saying the rule beat the null. Conventional
 #: rather than tuned, and it is a threshold on one test of one rule, not a discovery.
 SIGNIFICANT = 0.05
@@ -102,6 +104,11 @@ class Strategy:
     target: float | None = None
     stop: float | None = None
     cost: float = DEFAULT_COST
+    #: "flat" charges `cost` everywhere. "estimated" charges each symbol its own
+    #: Corwin-Schultz spread, which measured across this universe runs from 30 basis
+    #: points on an index ETF to over 200 on a uranium microcap. A flat ten was the
+    #: original placeholder and it flatters every strategy that trades thin names.
+    cost_model: str = "flat"
     mode: str = "underlying"
     #: Option mode only.
     dte: int = 30
@@ -116,6 +123,8 @@ class Strategy:
     def validate(self) -> None:
         if self.mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}, not {self.mode!r}")
+        if self.cost_model not in COST_MODELS:
+            raise ValueError(f"cost_model must be one of {COST_MODELS}, not {self.cost_model!r}")
         if self.horizon < 1:
             raise ValueError("horizon must be at least one bar")
         if self.direction not in (Direction.LONG.value, Direction.SHORT.value):
@@ -226,6 +235,26 @@ def load_implied(settings: Settings, symbol: str) -> dict:
     }
 
 
+def symbol_costs(strategy: Strategy, series: dict[str, list[PriceBar]]) -> dict[str, float]:
+    """Round trip cost per symbol, according to the strategy's cost model.
+
+    Falls back to the flat cost for any symbol the estimator cannot handle, rather than
+    to zero. A missing estimate is ignorance about the cost, not evidence of a free trade.
+    """
+    if strategy.cost_model == "flat":
+        return {symbol: strategy.cost for symbol in series}
+
+    from optscan.analytics.costs import estimate_spread  # noqa: PLC0415
+
+    out = {}
+    for symbol, bars in series.items():
+        estimate = estimate_spread(symbol, bars)
+        out[symbol] = (
+            estimate.round_trip_cost if estimate and estimate.trustworthy else strategy.cost
+        )
+    return out
+
+
 def run(settings: Settings, strategy: Strategy) -> BacktestResult:
     """Run one strategy and return everything needed to judge it.
 
@@ -255,6 +284,7 @@ def run(settings: Settings, strategy: Strategy) -> BacktestResult:
 
     rule = rule_registry.resolve(strategy.entry, strategy.entry_params)
     direction = Direction(strategy.direction)
+    costs = symbol_costs(strategy, series)
 
     trades: list[Trade] = []
     # Signal indices that actually produced a trade, per symbol. The null replays this
@@ -277,7 +307,7 @@ def run(settings: Settings, strategy: Strategy) -> BacktestResult:
                 horizon=strategy.horizon,
                 target=strategy.target,
                 stop=strategy.stop,
-                cost=strategy.cost,
+                cost=costs[symbol],
             )
         else:
             implied = load_implied(settings, symbol)
@@ -321,7 +351,8 @@ def run(settings: Settings, strategy: Strategy) -> BacktestResult:
     # The null replays the strategy's own entry pattern, slid to a random point in
     # history, so the only difference between it and the strategy is *when* it happened.
     result.edge = measure_edge(
-        result.stats.mean_return, _null(settings, strategy, series, fired, direction)
+        result.stats.mean_return,
+        _null(settings, strategy, series, fired, direction=direction, costs=costs),
     )
 
     result.notes.extend(_interpretation(strategy, result))
@@ -390,7 +421,9 @@ def _null(
     strategy: Strategy,
     series: dict[str, list[PriceBar]],
     fired: dict[str, list[int]],
+    *,
     direction: Direction,
+    costs: dict[str, float] | None = None,
 ) -> list[float]:
     """The null for whichever mode is running.
 
@@ -408,6 +441,7 @@ def _null(
             target=strategy.target,
             stop=strategy.stop,
             cost=strategy.cost,
+            costs=costs,
             draws=strategy.draws,
             seed=strategy.seed,
             block_bars=strategy.block_bars,
@@ -435,8 +469,24 @@ def _interpretation(strategy: Strategy, result: BacktestResult) -> list[str]:
     notes = [
         "The universe is symbols that are interesting today, so these results are "
         "survivorship biased: the companies that did not make it to 2026 are not in "
-        "the sample. That is usually a larger effect than costs and slippage together."
+        "the sample."
     ]
+
+    if strategy.cost_model == "flat":
+        notes.append(
+            f"Costs are a flat {strategy.cost * 10_000:.0f} basis points a round trip. "
+            "Measured across this universe the real figure has a median of 47 and runs "
+            "past 200 on the thinnest names, so a flat rate flatters any strategy that "
+            "trades them. Re-run with cost_model=estimated before believing a margin "
+            "smaller than that."
+        )
+    else:
+        notes.append(
+            "Costs are each symbol's own Corwin-Schultz spread estimated from its bars. "
+            "That overstates the very liquid names and is close on the thin ones, and it "
+            "still excludes market impact and the extra width of the opening auction "
+            "every fill here pays."
+        )
 
     stats = result.stats
     if stats is not None and not stats.enough_to_claim:

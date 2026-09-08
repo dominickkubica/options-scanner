@@ -32,12 +32,14 @@ src/optscan/
   storage/          sqlite + duckdb writers, migrations
   analytics/        greeks.py, iv.py, probability.py, levels.py, projection.py,
                     portfolio.py, triggers.py, signals.py, outcomes.py, calibration.py,
-                    backtest.py (engine + nulls), rules.py (rolling indicators, entries)
+                    backtest.py (engine + nulls), rules.py (rolling indicators, entries),
+                    costs.py (Corwin-Schultz spread from OHLC)
   screener/         rules/, scoring.py, strategies/
   console.py        terminal colour, and the rules about when not to use it
   jobs/             snapshot.py, schedule.py, manage.py, validate.py, backup.py,
                     launcher.py, health.py, prices.py, signals.py, backtest.py,
-                    search.py (grid search, holdout, multiplicity)
+                    search.py (grid search, holdout, multiplicity),
+                    ideas.py (validated strategies + what is triggering today)
   live/             the polling refresh loop and its delta encoder
   alerts.py         alert sinks, and once-per-condition delivery. Carries both a
                     position Trigger and a market Signal; position_id is None for
@@ -69,6 +71,8 @@ venv\Scripts\python -m optscan backtest --sweep threshold=20,25,30,35 --symbols 
 venv\Scripts\python -m optscan backtest ... --json   # machine readable, for an agent to read
 venv\Scripts\python -m optscan search --group tech # grid search, holdout, multiplicity bar
 venv\Scripts\python -m optscan search --group tech --json
+venv\Scripts\python -m optscan ideas          # what is triggering a validated strategy
+venv\Scripts\python -m optscan ideas --evidence # the full record, retired ones included
 venv\Scripts\python -m optscan validate # does the score actually separate outcomes
 venv\Scripts\python -m optscan schedule # the recurring jobs and whether Windows has them
 venv\Scripts\python -m optscan backup # copy the db, mirror the captures, verify
@@ -185,6 +189,17 @@ and `optscan-web` entries in `.claude/launch.json`.
   cannot settle inside the test period, and the boundary is one calendar date for every
   symbol rather than a per-symbol percentile, which would put different names' holdouts
   in different market regimes.
+- **Ten basis points was a placeholder and it was wrong by five times.** Measured with
+  Corwin-Schultz across 188 symbols: median 47 bp a round trip, mean 61, and 153 median
+  on the uranium names. `cost_model="estimated"` charges each symbol its own spread.
+  A flat rate flatters exactly the strategies that trade the thinnest names.
+- **Costs do not change an edge, only the take-home.** The null pays what the strategy
+  pays, so cost cancels out of a timing comparison and `edge` is identical under either
+  model. What moves is `mean_return`. Read both: the first says whether the rule works,
+  the second says whether you would keep anything.
+- **Nothing reaches `ideas.py` without `Evidence` attached**, and a strategy that fails a
+  holdout is marked RETIRED with the reason rather than deleted. The record of what was
+  believed and why is what makes the next search less credulous than the last.
 - Two filters aimed at the same thing will hide each other. The confounded one in front
   of the principled one does not merely fail to help, it starves the good one of the
   data it needs.
@@ -266,8 +281,21 @@ training period; the top few tested on a holdout that nothing has touched.
 - **The first genuine lead in the project.** Short-horizon oversold mean reversion.
   Formed on the tech group's search, then tested *pre-specified* on the 188 symbols
   outside it: RSI<25 at 5 days returned +0.98% over its null (p=0.005, 107 blocks),
-  RSI<30 at 5 days +0.71% (p=0.004, 118 blocks). Not yet confirmed beyond that, and
-  survivorship bias still applies to the universe.
+  RSI<30 at 5 days +0.71% (p=0.004, 118 blocks). It **survives real costs** — the edge is
+  unchanged and the net drops to +0.46% a trade — and is *strongest on liquid names*,
+  netting +1.03% at p=0.001 on the ETF and large-cap subset where spreads are 30-47 bp.
+  It is `oversold_bounce` in `jobs/ideas.py`, the registry's only SUPPORTED entry.
+- **A 184 cell search over the liquid universe found nothing that survived.** Its
+  in-sample winner, `gap_down(0.04) short 1d`, scored z=7.70 against a multiplicity bar
+  of 3.23 on 76 blocks, then returned **-0.34% out of sample**; its two sibling cells
+  returned -1.70% and -1.23%. All three reversed sign. Shorting gap-downs worked while
+  gaps continued and stopped when they began filling. Kept as `gap_down_continuation`,
+  status RETIRED, because it is the clearest example here of an in-sample winner that was
+  nothing.
+- Documented patterns added to the rule registry and tested: internal bar strength,
+  consecutive up/down closes, gap down, 52-week-high proximity, turn of month. Only the
+  RSI family survived. Turn-of-month is in the grid as a second control alongside
+  `every_bar`: a calendar rule ranking highly is information about the search.
 
 - **Rows are stored raw and positions are derived.** Exports overlap, so a re-import
   must be a no-op. Identity is `(source, digest, dup_index)`: the index is there
