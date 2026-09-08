@@ -32,7 +32,7 @@ from __future__ import annotations
 import time
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from datetime import time as clock
 
 from optscan.analytics import rules as rule_registry
@@ -196,16 +196,32 @@ def resolve_symbols(settings: Settings, strategy: Strategy) -> list[str]:
 
 
 def load_series(
-    settings: Settings, symbols: Sequence[str]
+    settings: Settings,
+    symbols: Sequence[str],
+    *,
+    lookback: int | None = None,
 ) -> tuple[dict[str, list[PriceBar]], dict[str, str]]:
     """Bars per symbol, and why any symbol was left out.
 
     Delisted symbols are kept. See the module docstring: their trading years are real
     history, and dropping them would stack a second survivorship bias on the one the
     universe already has.
+
+    `lookback` bounds the read to roughly that many recent sessions. A backtest wants
+    everything and passes None; a screen asking what triggered this week does not, and
+    reading 696,484 bars to answer that took thirteen seconds of a fifteen second
+    request. The bound is applied in SQL rather than by slicing afterwards, because the
+    cost is the read.
     """
     series: dict[str, list[PriceBar]] = {}
     skipped: dict[str, str] = {}
+
+    since = None
+    if lookback is not None:
+        # Calendar days, generously, because `lookback` counts sessions and a year holds
+        # about 252 of them. Overshooting costs a little read; undershooting silently
+        # starves an indicator's warmup.
+        since = (datetime.now(UTC) - timedelta(days=int(lookback * 1.6) + 30)).date()
 
     with db.session(settings.sqlite_path) as conn:
         for symbol in symbols:
@@ -213,7 +229,7 @@ def load_series(
             if source is None:
                 skipped[symbol] = "no stored price source"
                 continue
-            bars = _to_bars(daily_bars(conn, symbol, source=source), source)
+            bars = _to_bars(daily_bars(conn, symbol, source=source, since=since), source)
             if len(bars) < MIN_BARS:
                 skipped[symbol] = f"only {len(bars)} sessions stored"
                 continue

@@ -25,7 +25,7 @@ import { compact, num, pct } from "../../format.js";
 // than fetched, and indicators come from the registry in `indicators.js`. This file
 // knows how to draw a series; it does not know what a moving average is.
 
-//: Displayed bars past which candles stop being candles.
+//: Displayed bars past which candles stop being candles, on daily and above.
 //:
 //: At two years of daily bars a candle is about one pixel wide and the chart is a
 //: smear with no readable body or wick. Past this count the area series is drawn
@@ -33,7 +33,99 @@ import { compact, num, pct } from "../../format.js";
 //: displayed bars rather than the visible range on purpose: reacting to zoom would
 //: flip the rendering mid gesture, which is worse than a stable rule the reader can
 //: predict and step around by picking a coarser interval.
+//:
+//: **It does not apply intraday.** One session at one minute is 390 bars of regular
+//: trading and more with extended hours, so this rule turned every minute chart into a
+//: line, which is the opposite of why somebody drills into a day. The escape it offers
+//: is also missing there: the fix on a daily chart is a coarser interval or a shorter
+//: window, and in session mode neither control exists. Intraday keeps its candles and
+//: opens on a readable slice of them instead. See INTRADAY_VISIBLE_BARS.
 const CANDLE_LIMIT = 400;
+
+//: Bars an intraday chart opens showing, scrolled to the most recent. Wide enough that
+//: a two minute candle has a readable body, and the rest of the session is one scroll
+//: away rather than compressed into the same width.
+const INTRADAY_VISIBLE_BARS = 130;
+
+//: Pixels a band needs before its label is drawn. Below this the text is wider than the
+//: band and would spill into the neighbouring phase, which is worse than no label.
+const MIN_LABEL_WIDTH = 26;
+
+//: Leading sessions fetched beyond the visible window so the long indicators can fill
+//: their windows. Sized to the longest period in the registry, which is the 200 day
+//: moving average.
+//:
+//: Without this a six month chart reported "MA200 needs 200 bars, have 126" and simply
+//: refused, which confuses what is being *drawn* with what is being *looked at*: the
+//: average needs 200 sessions of history behind the first plotted point, not 200 points
+//: on the screen. The warmup is loaded, used, and left off to the left of the opening
+//: view.
+export const INDICATOR_WARMUP = 200;
+
+//: The four phases of a US equity trading day, as minutes from midnight Eastern.
+//:
+//: Distinguishing them matters more than it looks. On a quiet name the extended-hours
+//: bars are most of the chart, and a print at 05:00 is often a single order against a
+//: spread nobody could have traded size into. Read as though it were a 10am print, it
+//: invents support and resistance that never existed.
+//:
+//: Shown as background bands rather than by fading the candles: the candles are the
+//: data and dimming them makes the quiet part of the day harder to read at exactly the
+//: moment somebody has zoomed in to look at it. The band says the same thing behind
+//: them.
+const PHASES = [
+  { key: "ON", label: "ON", title: "Overnight", from: 20 * 60, to: 24 * 60 },
+  { key: "ON2", label: "ON", title: "Overnight", from: 0, to: 4 * 60 },
+  { key: "PM", label: "PM", title: "Pre-market", from: 4 * 60, to: 9 * 60 + 30 },
+  { key: "MH", label: "MH", title: "Market hours", from: 9 * 60 + 30, to: 16 * 60 },
+  { key: "AH", label: "AH", title: "After hours", from: 16 * 60, to: 20 * 60 },
+];
+
+//: Eastern wall-clock minutes for an epoch second, via the runtime's own tz database so
+//: this stays right across daylight saving without a table to maintain. Verified at
+//: 09:30 in both January and September.
+const EASTERN = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+
+function easternMinutes(epochSeconds) {
+  const parts = EASTERN.formatToParts(new Date(epochSeconds * 1000));
+  const hour = Number(parts.find((p) => p.type === "hour")?.value);
+  const minute = Number(parts.find((p) => p.type === "minute")?.value);
+  if (Number.isNaN(hour) || Number.isNaN(minute)) return null;
+  // Midnight formats as 24 under hour12:false in some engines.
+  return (hour % 24) * 60 + minute;
+}
+
+/** Which phase a bar falls in, or null for a daily bar whose time is a date string. */
+export function sessionPhase(time) {
+  if (typeof time !== "number") return null;
+  const minutes = easternMinutes(time);
+  if (minutes === null) return null;
+  const phase = PHASES.find((p) => minutes >= p.from && minutes < p.to);
+  // "ON2" is the small hours half of overnight. It is a separate row because the phase
+  // wraps midnight, and the reader should not see two different labels for one night.
+  return phase ? { ...phase, key: phase.key === "ON2" ? "ON" : phase.key } : null;
+}
+
+/** Contiguous runs of one phase, as {phase, from, to} in bar time. */
+export function sessionRuns(bars) {
+  const runs = [];
+  for (const bar of bars) {
+    const phase = sessionPhase(bar.time);
+    if (!phase) continue;
+    const last = runs[runs.length - 1];
+    if (last && last.key === phase.key) {
+      last.to = bar.time;
+    } else {
+      runs.push({ key: phase.key, label: phase.label, title: phase.title, from: bar.time, to: bar.time });
+    }
+  }
+  return runs;
+}
 
 const CHART_HEIGHT = 340;
 
@@ -100,6 +192,40 @@ function timeKey(time) {
   return null;
 }
 
+/**
+ * Draw an indicator's declared reference levels, and pin its scale if it is bounded.
+ *
+ * An oscillator without its levels is unreadable: RSI at 44 means nothing until 30 and
+ * 70 are on the page, and a pane that rescales to the visible data makes the same shape
+ * appear at every zoom. A bounded indicator therefore gets a fixed autoscale as well, so
+ * "near the top" keeps meaning the same thing.
+ */
+function applyBounds(entry, indicator, theme) {
+  const bounds = indicator.bounds;
+  if (!bounds) return;
+  const target = entry.get(indicator.plots[0].key);
+  if (!target) return;
+
+  for (const level of bounds.guides || []) {
+    target.createPriceLine({
+      price: level,
+      color: themeColour(theme, "--chart-axis"),
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
+      axisLabelVisible: true,
+      title: "",
+    });
+  }
+
+  if (bounds.min !== undefined && bounds.max !== undefined) {
+    target.applyOptions({
+      autoscaleInfoProvider: () => ({
+        priceRange: { minValue: bounds.min, maxValue: bounds.max },
+      }),
+    });
+  }
+}
+
 function addPlotSeries(chart, plot, theme, priceScaleId) {
   const colour = themeColour(theme, plot.colourToken);
   const shared = {
@@ -145,6 +271,52 @@ const LOWER_PANE_MARGINS = { top: 0.66, bottom: 0.2 };
 const PRICE_MARGINS_WITH_LOWER = { top: 0.06, bottom: 0.42 };
 const PRICE_MARGINS_ALONE = { top: 0.08, bottom: 0.28 };
 
+function ChartTypeToggle({ chartType, setChartType }) {
+  return (
+    <div className="seg" role="group" aria-label="chart type">
+      {[
+        ["candles", "Candles"],
+        ["area", "Area"],
+      ].map(([id, label]) => (
+        <button
+          key={id}
+          type="button"
+          className={`seg-btn ${chartType === id ? "active" : ""}`}
+          onClick={() => setChartType(id)}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function IndicatorChips({ chips, theme, onToggle }) {
+  return (
+    <div className="chip-toggles">
+      {chips.map((chip) => (
+        <button
+          key={chip.indicator.id}
+          type="button"
+          className={`chip-toggle ${chip.on ? "on" : ""} ${chip.drawable ? "" : "unavailable"}`}
+          disabled={!chip.drawable}
+          title={chip.reason || undefined}
+          style={
+            chip.on
+              ? { color: themeColour(theme, chip.indicator.plots[0].colourToken) }
+              : undefined
+          }
+          onClick={() => onToggle(chip.indicator.id)}
+        >
+          {chip.indicator.label}
+          {chip.on && chip.value !== null && <span> {num(chip.value)}</span>}
+          {!chip.drawable && <span className="chip-reason"> {chip.reason}</span>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function PriceChart({
   symbol,
   bars,
@@ -184,9 +356,62 @@ export default function PriceChart({
 
   const displayBars = useMemo(() => aggregate(bars || [], interval), [bars, interval]);
   const isIntraday = Boolean(session);
+
+  // How many aggregated bars the requested window comes to. Derived by aggregating the
+  // window's own slice rather than by dividing, because a week is not a fixed number of
+  // sessions once holidays are involved and an approximation here would drift the
+  // opening view a little further every month.
+  // Session bands, in pixels. Recomputed whenever the visible range moves, because a
+  // band is a time range and the pixel it maps to changes on every scroll and zoom.
+  const [bands, setBands] = useState([]);
+
+  const runs = useMemo(
+    () => (isIntraday ? sessionRuns(displayBars) : []),
+    [displayBars, isIntraday],
+  );
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || runs.length === 0) {
+      setBands([]);
+      return undefined;
+    }
+
+    const scale = chart.timeScale();
+    const reposition = () => {
+      const width = scale.width();
+      const next = [];
+      for (const run of runs) {
+        // Null means the edge is scrolled out of view, so clamp to the visible edge
+        // rather than dropping the band: a market-hours block that starts off-screen is
+        // still the band the reader is looking at.
+        const rawLeft = scale.timeToCoordinate(run.from);
+        const rawRight = scale.timeToCoordinate(run.to);
+        if (rawLeft === null && rawRight === null) continue;
+        const left = Math.max(0, rawLeft ?? 0);
+        const right = Math.min(width, rawRight ?? width);
+        if (right - left <= 0) continue;
+        next.push({ ...run, left, width: right - left });
+      }
+      setBands(next);
+    };
+
+    reposition();
+    scale.subscribeVisibleLogicalRangeChange(reposition);
+    return () => scale.unsubscribeVisibleLogicalRangeChange(reposition);
+  }, [runs]);
+
+  const windowBars = useMemo(
+    () => (isIntraday ? 0 : aggregate((bars || []).slice(-days), interval).length),
+    [bars, days, interval, isIntraday],
+  );
   barsRef.current = displayBars;
 
-  const degraded = chartType === "candles" && displayBars.length > CANDLE_LIMIT;
+  // Intraday is exempt: see CANDLE_LIMIT. A minute chart is meant to be scrolled, not
+  // flattened, and session mode has neither of the controls the degradation notice
+  // tells the reader to reach for.
+  const degraded =
+    !isIntraday && chartType === "candles" && displayBars.length > CANDLE_LIMIT;
   const effectiveType = degraded ? "area" : chartType;
 
   // Create the chart exactly once. Every later change is applyOptions or setData on the
@@ -374,8 +599,23 @@ export default function PriceChart({
       })),
     );
 
-    chart.timeScale().fitContent();
-  }, [displayBars, effectiveType, theme, isIntraday]);
+    // What to show is not what was loaded. Intraday opens on the most recent slice so a
+    // two minute candle has a readable body; a daily chart opens on the window that was
+    // asked for, with the indicator warmup sitting off to the left rather than shrinking
+    // everything to fit. fitContent is only right when there is nothing extra to hide.
+    const visible = isIntraday
+      ? Math.min(INTRADAY_VISIBLE_BARS, displayBars.length)
+      : windowBars;
+
+    if (visible > 0 && visible < displayBars.length) {
+      chart.timeScale().setVisibleLogicalRange({
+        from: displayBars.length - visible,
+        to: displayBars.length,
+      });
+    } else {
+      chart.timeScale().fitContent();
+    }
+  }, [displayBars, effectiveType, theme, isIntraday, windowBars]);
 
   // Indicator series, reconciled against the registry. Nothing here names an indicator.
   useEffect(() => {
@@ -409,6 +649,12 @@ export default function PriceChart({
             scaleMargins: LOWER_PANE_MARGINS,
             borderVisible: false,
           });
+          // The registry has declared `bounds` since the lower pane was added and
+          // nothing consumed it, so RSI drew as a bare wiggle with no 30 or 70 to read
+          // it against and no fixed scale between refreshes. Both come from the
+          // indicator rather than from here: this file still does not know what an RSI
+          // is, only that some indicators have levels worth marking.
+          applyBounds(entry, indicator, theme);
         }
         live.set(id, entry);
       }
@@ -586,6 +832,12 @@ export default function PriceChart({
               </button>
             ))}
           </div>
+          {/* Session mode used to stop here, which meant no chart type toggle and no
+              indicators at all once you drilled into a day. Drilling in is exactly when
+              somebody wants a moving average and an RSI on the thing they are looking
+              at, so both rows are shared with the daily view now. */}
+          <ChartTypeToggle chartType={chartType} setChartType={setChartType} />
+          <IndicatorChips chips={chips} theme={theme} onToggle={toggleIndicator} />
         </div>
       ) : (
       <div className="chart-controls">
@@ -615,49 +867,37 @@ export default function PriceChart({
           ))}
         </div>
 
-        <div className="seg" role="group" aria-label="chart type">
-          {[
-            ["candles", "Candles"],
-            ["area", "Area"],
-          ].map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              className={`seg-btn ${chartType === id ? "active" : ""}`}
-              onClick={() => setChartType(id)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
-        <div className="chip-toggles">
-          {chips.map((chip) => (
-            <button
-              key={chip.indicator.id}
-              type="button"
-              className={`chip-toggle ${chip.on ? "on" : ""} ${chip.drawable ? "" : "unavailable"}`}
-              disabled={!chip.drawable}
-              title={chip.reason || undefined}
-              style={
-                chip.on
-                  ? { color: themeColour(theme, chip.indicator.plots[0].colourToken) }
-                  : undefined
-              }
-              onClick={() => toggleIndicator(chip.indicator.id)}
-            >
-              {chip.indicator.label}
-              {chip.on && chip.value !== null && <span> {num(chip.value)}</span>}
-              {!chip.drawable && <span className="chip-reason"> {chip.reason}</span>}
-            </button>
-          ))}
-        </div>
+        <ChartTypeToggle chartType={chartType} setChartType={setChartType} />
+        <IndicatorChips chips={chips} theme={theme} onToggle={toggleIndicator} />
       </div>
       )}
 
       <div className="chart-canvas" ref={container}>
         {loading && <div className="chart-skeleton" />}
+        <div className="session-bands" aria-hidden="true">
+          {bands.map((band) => (
+            <div
+              key={`${band.key}-${band.from}`}
+              className={`session-band phase-${band.key.toLowerCase()}`}
+              style={{ left: `${band.left}px`, width: `${band.width}px` }}
+              title={band.title}
+            >
+              {band.width > MIN_LABEL_WIDTH && (
+                <span className="session-band-label">{band.label}</span>
+              )}
+            </div>
+          ))}
+        </div>
       </div>
+
+      {isIntraday && (
+        <div className="chart-note">
+          The shaded bands are market hours (MH). Outside them, pre-market (PM), after
+          hours (AH) and overnight (ON) prints are thin and the spread is wide, so a bar
+          there is often a single order rather than a price anyone could have traded size
+          at.
+        </div>
+      )}
 
       {degraded && (
         <div className="chart-note">

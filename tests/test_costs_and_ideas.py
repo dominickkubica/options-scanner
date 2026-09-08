@@ -258,20 +258,23 @@ def test_retired_strategies_never_produce_ideas(seeded: Settings) -> None:
 
 def test_a_stale_symbol_never_becomes_an_idea(tmp_settings: Settings) -> None:
     """A delisted ticker's last session triggers forever and would sit at the top of a
-    list of things to trade today. The backtester keeps those symbols; this must not."""
+    list of things to trade today. The backtester keeps those symbols; this must not.
+
+    The stale symbol here stopped only sixty days ago, deliberately. A ticker dead for
+    two years falls outside the screen's own lookback and is dropped when the bars are
+    read, which excludes it for the wrong reason and would let this pass with the
+    staleness guard removed. Sixty days is inside the read and well past MAX_STALE_DAYS,
+    so the guard is what has to catch it.
+    """
     with db.session(tmp_settings.sqlite_path) as conn:
         import_daily_bars(conn, series("FRESH"))
-        dead = series("DEAD")
-        shifted = [
+        recently_dead = [
             VendorDailyBar(
-                **{
-                    **row.model_dump(),
-                    "session_date": row.session_date - timedelta(days=700),
-                }
+                **{**row.model_dump(), "session_date": row.session_date - timedelta(days=60)}
             )
-            for row in dead
+            for row in series("DEAD")
         ]
-        import_daily_bars(conn, shifted)
+        import_daily_bars(conn, recently_dead)
 
     ideas, notes = find_ideas(tmp_settings, ["FRESH", "DEAD"])
     assert not [idea for idea in ideas if idea.symbol == "DEAD"]

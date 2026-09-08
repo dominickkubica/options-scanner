@@ -1980,3 +1980,55 @@ tr.under-sampled td {
   font-size: 11px;
   color: var(--muted);
 }
+
+/* Session bands.
+ *
+ * Behind the candles, not over them: the bars are the data, and dimming them makes the
+ * quiet part of the day harder to read at exactly the moment somebody has zoomed in to
+ * look at it. Market hours is the lit block and everything else recedes, which is the
+ * opposite of tinting the exceptions and leaves the common case untouched. */
+.chart-canvas {
+  position: relative;
+}
+
+.session-bands {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 0;
+}
+
+.session-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+
+/* Market hours is a shade lighter than the panel. Every other phase is left as the
+ * panel's own background, so the lit region reads as the session and the rest as the
+ * margins around it. */
+.session-band.phase-mh {
+  background: color-mix(in srgb, var(--text) 4.5%, transparent);
+}
+
+.session-band.phase-pm,
+.session-band.phase-ah {
+  background: color-mix(in srgb, var(--text) 1.5%, transparent);
+}
+
+.session-band-label {
+  position: absolute;
+  top: 4px;
+  left: 5px;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+  opacity: 0.75;
+}
+
+.session-band.phase-mh .session-band-label {
+  color: var(--muted);
+  opacity: 0.9;
+}

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "../api.js";
-import PriceChart from "../components/chart/PriceChart.jsx";
+import PriceChart, { INDICATOR_WARMUP } from "../components/chart/PriceChart.jsx";
 import { IvRankGauge, SkewCurve, TermStructure } from "../components/charts.jsx";
 import { ErrorBox, Note, Panel, Provenance, Stat, useAsync } from "../components/common.jsx";
 import { count, num, pct, vol } from "../format.js";
@@ -35,8 +35,13 @@ export default function Underlying({ symbol, summary }) {
   const [interval, setInterval] = useState("1Day");
   const [session, setSession] = useState(null);
 
+  // Extra leading bars so the long indicators have a window to fill. A 200 day moving
+  // average on a six month chart is not a contradiction: the average needs 200 sessions
+  // of history, not 200 sessions on screen, and refusing it because the *window* is
+  // short confuses what is being drawn with what is being looked at. The chart shows the
+  // requested window and keeps the warmup off to the left, one scroll away.
   const history = useAsync(
-    () => api.history(ticker, { days, interval, session }),
+    () => api.history(ticker, { days: days + INDICATOR_WARMUP, interval, session }),
     [ticker, days, interval, session],
   );
   const chain = useAsync(() => api.chain(ticker, skewExpiry), [ticker, skewExpiry], {

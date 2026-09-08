@@ -46,6 +46,15 @@ log = get_logger("optscan.jobs.ideas")
 #: open, so a trigger from last week is a trade that has already been missed.
 DEFAULT_FRESHNESS_DAYS = 3
 
+#: Sessions of history this screen reads per symbol. Enough for the longest indicator
+#: warmup in the registry several times over, and a small fraction of what is stored:
+#: reading everything took thirteen seconds of a fifteen second request, which made the
+#: panel look broken rather than slow.
+#:
+#: It also changes the cost estimate, and for the better. A spread averaged over ten
+#: years describes a symbol's past liquidity; a trade taken tomorrow pays this year's.
+LOOKBACK_SESSIONS = 300
+
 
 class Status(StrEnum):
     #: Survived a pre-specified out-of-sample test. The strongest word available here.
@@ -283,7 +292,7 @@ def find_ideas(
                 for row in conn.execute("SELECT DISTINCT symbol FROM vendor_daily ORDER BY symbol")
             ]
 
-    series, _ = load_series(settings, symbols)
+    series, _ = load_series(settings, symbols, lookback=LOOKBACK_SESSIONS)
     if not series:
         return [], ["No symbol has enough stored history to evaluate."]
 
