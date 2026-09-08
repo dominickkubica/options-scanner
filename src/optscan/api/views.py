@@ -190,12 +190,25 @@ def chain_view(solved, expiry: ExpiryAnalysis, provenance: Provenance) -> ChainO
     )
 
 
-def bar_view(bar: PriceBar) -> BarOut:
+def bar_view(bar: PriceBar, *, intraday: bool = False) -> BarOut:
     """One candle in the shape the chart library wants.
 
     Extracted so the levels panel and the history panel cannot drift into rendering
     the same bar two different ways.
+
+    `intraday` switches the time field from an ISO date to epoch seconds. A date
+    identifies a session, so without the switch every bar within one day carries an
+    identical value and the chart draws one candle where there should be seventy eight.
     """
+    if intraday:
+        return BarOut(
+            time=int(bar.ts.timestamp()),
+            open=bar.open,
+            high=bar.high,
+            low=bar.low,
+            close=bar.close,
+            volume=bar.volume,
+        )
     return BarOut(
         time=bar.ts.date().isoformat(),
         open=bar.open,
@@ -211,7 +224,19 @@ def history_view(
     bars: list[PriceBar],
     note: str | None,
     now: datetime | None = None,
+    *,
+    intraday: bool = False,
 ) -> HistoryOut:
+    """Candles for the chart, daily or intraday.
+
+    `intraday` is passed rather than inferred, and the first draft did infer it: any
+    bar carrying a time of day was treated as intraday. That is wrong on real data.
+    **Alpaca stamps daily bars at 04:00Z**, not midnight, so every symbol served from
+    the provider rather than from storage would have been mislabelled and its whole
+    series keyed by epoch seconds against a chart expecting dates.
+
+    The caller knows which interval it asked for. Nothing else does.
+    """
     provenance = None
     if bars:
         newest = max(bar.fetched_at for bar in bars)
@@ -219,7 +244,7 @@ def history_view(
 
     return HistoryOut(
         symbol=symbol,
-        bars=[bar_view(bar) for bar in sorted(bars, key=lambda bar: bar.ts)],
+        bars=[bar_view(bar, intraday=intraday) for bar in sorted(bars, key=lambda bar: bar.ts)],
         provenance=provenance,
         note=note,
     )

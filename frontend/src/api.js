@@ -65,8 +65,12 @@ export const api = {
   symbol: (symbol) => request(`/symbols/${encodeURIComponent(symbol)}`),
   chain: (symbol, expiry) =>
     request(`/symbols/${encodeURIComponent(symbol)}/chain${query({ expiry })}`),
-  history: (symbol, days) =>
-    request(`/symbols/${encodeURIComponent(symbol)}/history${query({ days })}`),
+  // `session` asks for one named day at an intraday interval, which is a different
+  // question from a rolling window and is why it is not just another `days` value.
+  history: (symbol, { days, interval, session } = {}) =>
+    request(
+      `/symbols/${encodeURIComponent(symbol)}/history${query({ days, interval, session })}`,
+    ),
   levels: (symbol, days, expiry) =>
     request(`/symbols/${encodeURIComponent(symbol)}/levels${query({ days, expiry })}`),
   // near_miss is opt in on the server because collecting it re-checks every rejected

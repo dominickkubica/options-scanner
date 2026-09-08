@@ -13,6 +13,7 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException, Query
 
 from optscan.api.deps import (
+    DAILY_INTERVAL,
     DEFAULT_HISTORY_DAYS,
     ProviderFactory,
     ProviderFactoryDep,
@@ -112,16 +113,44 @@ def symbol_chain(
 @router.get("/{symbol}/history", response_model=HistoryOut)
 def symbol_history(
     symbol: str,
+    settings: SettingsDep,
     provider_factory: ProviderFactoryDep,
+    *,
     days: Annotated[int, Query(ge=MIN_HISTORY_DAYS, le=MAX_HISTORY_DAYS)] = DEFAULT_HISTORY_DAYS,
+    interval: Annotated[
+        str,
+        Query(
+            description=(
+                "1Day, or an intraday interval. Daily bars are read from storage and "
+                "work for any synced symbol; intraday is fetched on demand and needs a "
+                "vendor that serves it."
+            )
+        ),
+    ] = DAILY_INTERVAL,
+    session: Annotated[
+        date | None,
+        Query(
+            description=(
+                "One calendar day, for drilling into a single candle. Bounded to the "
+                "date rather than to market hours, so pre and post market bars are "
+                "included: on a quiet name those are often why somebody opened the day."
+            )
+        ),
+    ] = None,
 ) -> HistoryOut:
-    """Daily candles.
+    """Candles for the underlying.
 
-    The only endpoint that asks a vendor for a price, and it degrades to an empty
-    series with a stated reason rather than a 500. A price chart is the least load
-    bearing panel on the page: losing it should not take the chain and the candidates
-    down with it.
+    Degrades to an empty series with a stated reason rather than a 500. A price chart
+    is the least load bearing panel on the page: losing it should not take the chain
+    and the candidates down with it.
     """
     normalized = symbol.strip().upper()
-    bars, note = price_history(normalized, days, provider_factory=provider_factory)
-    return history_view(normalized, bars, note)
+    bars, note = price_history(
+        normalized,
+        days,
+        interval=interval,
+        session=session,
+        settings=settings,
+        provider_factory=provider_factory,
+    )
+    return history_view(normalized, bars, note, intraday=interval != DAILY_INTERVAL)

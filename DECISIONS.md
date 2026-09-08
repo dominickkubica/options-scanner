@@ -2081,3 +2081,84 @@ the private-mesh interface only, and the shared network never sees the port at a
 The lesson worth keeping: **`--lan` is safe on a network you own and unsafe on one you
 share, and nothing in the flag can tell the difference.** Its warning says there is no
 login; it cannot say who else is on the subnet.
+
+---
+
+## 2026-09-08: charts for every symbol, and drilling into one day
+
+Two complaints, both fair, and a third feature that arrived while fixing them.
+
+### Every unpinned ticker was a dead page
+
+Clicking AA from the catalogue gave `No stored snapshot for AA. Run optscan snapshot`
+and nothing else, while **2,492 sessions of its daily bars sat in the database**. The
+whole Underlying view was gated on a stored option snapshot, which was right when six
+symbols had one and every one of them was pinned. After the bulk price sync it
+describes six of 293.
+
+The price panel now renders from `symbol` alone and every volatility panel below it is
+conditional, with one amber note at the top saying what is missing and how to fix it.
+The red error banner is suppressed on this view: it said the same thing more
+alarmingly, immediately above the calmer sentence.
+
+`price_history` reads **stored bars first** and falls back to the provider. That is
+faster, works with no provider configured, and is the only reason a chart opens for a
+symbol nothing has ever captured.
+
+### There were no intraday candles
+
+The chart's 1D/1W/1M were aggregation intervals over daily bars, not intraday. Alpaca
+serves minute bars back to 2016-01-04, so `get_intraday_bars` was added outside the
+`MarketDataProvider` interface, alongside the bulk daily fetch and for the same reason.
+
+**Which vendor serves a candle is deliberately not `OPTSCAN_PROVIDER`.** That setting
+chooses what captures option chains, and it is load bearing for reasons unrelated to
+charting: an IV history belongs to one vendor, so switching it restarts every rank from
+zero. A minute candle carries none of that history. `get_intraday_provider` is a
+separate, narrow factory: prices only, never volatility, nothing stored.
+
+Nothing intraday is cached to disk. A few hundred symbols at a decade of minute bars is
+hundreds of millions of rows for a chart somebody looks at for ten seconds.
+
+### Click a candle, open that day
+
+Clicking a daily candle offers `1m 2m 5m` for that session. The prompt renders inline
+above the controls rather than as a modal, because it is a small question about the
+thing already on screen and a dialog would cover the chart it is asking about.
+
+The session request is bounded to the **calendar day**, not to market hours. The
+extended session runs 08:00 to 24:00 UTC and clipping to 13:30-20:00 would silently
+drop the pre and post market bars, which on a quiet name are often the whole reason
+somebody opened a specific day.
+
+### Three bugs found while building it
+
+**Intraday bars keyed by date collapse.** `BarOut.time` was an ISO date, which
+identifies a *session*, so all 78 five minute bars in a day carried the same value and
+lightweight-charts drew one candle with the daily axis still on it. It looks like a
+data problem and is not. Intraday now emits epoch seconds; a series is one form or the
+other and never mixes.
+
+**Inferring intraday from the timestamp is wrong on real data.** The first fix decided
+the format by asking whether a bar had a time of day on it. **Alpaca stamps daily bars
+at 04:00Z**, not midnight, so every symbol served from the provider rather than from
+storage would have been mislabelled. Caught by an existing test, not a new one. The
+interval belongs to the caller and is now passed.
+
+**A standalone effect calling `applyOptions` blanked the page.** Setting the time axis
+in its own `useEffect` gave it a lifecycle independent of the chart's, so it could fire
+after the creation effect's cleanup had called `chart.remove()`. The library reports
+that as `Value is null` and React unmounts the tree. Moved into the effect that sets
+the data, which has already proved the chart is alive.
+
+Also: the axis must set `timeVisible` on an intraday series, or every label on a one
+day chart is the same date and the axis says nothing at all. And the degradation notice
+("drawn as a line") advised switching to a weekly interval, which does not exist in
+session mode, so it now names the controls that are actually on the screen.
+
+### A test that reached the network
+
+Writing the fallback test made the suite really call yfinance, logging
+`$NOPE: possibly delisted`. The rule here is that tests never touch the network, and it
+was being broken by a test that otherwise passed. The provider dependency is now
+overridden in that file.

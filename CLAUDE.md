@@ -144,6 +144,27 @@ Robinhood activity export, `optscan trades` reports what the account actually di
 - **An unknown transaction code raises.** Assignment and exercise move real contracts,
   and a skipped row is a profit figure with a hole and nothing to say so.
 
+**Exception, authorized 2026-09-08: charts for any symbol, and intraday drill-in.**
+Full reasoning in the DECISIONS entry of that date.
+
+- **The Underlying view no longer requires a stored option snapshot.** It did, which
+  made every unpinned ticker a dead page while thousands of its daily bars sat in the
+  database. The price panel renders from the symbol alone; volatility panels are
+  conditional.
+- **`price_history` reads stored bars first**, provider second. That is what makes a
+  chart open for a symbol nothing has captured.
+- **Intraday comes from `get_intraday_provider`, not `OPTSCAN_PROVIDER`.** That setting
+  chooses what captures chains and switching it restarts every IV rank from zero. A
+  minute candle carries no such history. Prices only, nothing stored.
+- **Intraday bars are keyed by epoch seconds, daily by ISO date, and never mixed.** A
+  date identifies a session, so date-keyed intraday collapses 78 candles onto one point.
+- **Do not infer which from the timestamp.** Alpaca stamps *daily* bars at 04:00Z, so
+  "has a time of day" misclassifies every provider-served symbol. The caller passes it.
+- **Never call `applyOptions` from a `useEffect` of its own.** It outlives the chart's
+  creation effect, fires after `chart.remove()`, and `Value is null` blanks the page.
+- A session drill-in is bounded to the calendar day, not market hours: extended-hours
+  bars are often why somebody opened that day.
+
 **Two servers on one port is a real trap and `optscan serve` now warns about it.**
 Binding `0.0.0.0` succeeds while another process holds `127.0.0.1` on the same port.
 Windows routes localhost to the older process and the network address to the newer one,

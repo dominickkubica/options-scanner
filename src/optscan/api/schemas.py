@@ -284,7 +284,16 @@ class ChainOut(ApiModel):
 class BarOut(ApiModel):
     """One candle, in the shape lightweight-charts wants."""
 
-    time: str = Field(description="ISO date, which is what the chart library expects.")
+    time: str | int = Field(
+        description=(
+            "An ISO date for a daily bar, or epoch seconds for an intraday one. Both "
+            "are shapes lightweight-charts accepts, and the distinction is not "
+            "cosmetic: a date string identifies a session, so every intraday bar in "
+            "one day would carry the same value and the library would collapse 78 "
+            "five minute candles onto a single point. A series is one or the other "
+            "throughout and never mixes them."
+        )
+    )
     open: float
     high: float
     low: float

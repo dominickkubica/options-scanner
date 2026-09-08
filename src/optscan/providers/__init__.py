@@ -27,6 +27,7 @@ __all__ = [
     "ProviderUnavailable",
     "RateLimited",
     "SymbolNotFound",
+    "get_intraday_provider",
     "get_provider",
     "provider_is_realtime",
 ]
@@ -75,6 +76,23 @@ def get_provider(settings: Settings) -> MarketDataProvider:
         f"provider {settings.provider!r} is not implemented yet. Schwab arrives later: "
         "its three legged OAuth needs a browser redirect and cannot be set up unattended."
     )
+
+
+def get_intraday_provider(settings: Settings) -> MarketDataProvider | None:
+    """A provider that can serve intraday candles, or None if none is configured.
+
+    Deliberately not `get_provider`. `OPTSCAN_PROVIDER` chooses what captures option
+    chains, and that choice is load bearing for reasons unrelated to charting: an IV
+    history belongs to one vendor, so switching it restarts every rank from zero. A
+    minute candle carries none of that, so a chart should not be held hostage to it.
+
+    Narrow on purpose. Prices only, never volatility, and nothing it returns is stored.
+    """
+    if settings.alpaca_credentials_set:
+        from optscan.providers.alpaca import AlpacaProvider
+
+        return AlpacaProvider(settings)
+    return None
 
 
 def provider_is_realtime(settings: Settings) -> bool:

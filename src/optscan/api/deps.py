@@ -31,7 +31,7 @@ import threading
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
@@ -46,9 +46,17 @@ from optscan.jobs.scan import STALE_AFTER_HOURS, load_iv_history
 from optscan.live import LiveHub
 from optscan.logging import get_logger
 from optscan.models import ChainSnapshot, PriceBar, SymbolEvents
-from optscan.providers import MarketDataProvider, ProviderError, get_provider
+from optscan.providers import (
+    MarketDataProvider,
+    NoDataAvailable,
+    ProviderError,
+    get_intraday_provider,
+    get_provider,
+)
 from optscan.screener.config import DEFAULT_CONFIG_FILENAME, ScreenConfig
 from optscan.screener.context import SymbolAnalysis, analyze_snapshot
+from optscan.storage import db
+from optscan.storage.vendor import recent_daily_bars
 
 log = get_logger("optscan.api.deps")
 
@@ -472,42 +480,159 @@ def event_window(
     return result
 
 
+#: Bar intervals the chart may ask for. Anything not "1Day" is intraday and needs a
+#: vendor that serves it, which is a different question from the configured provider:
+#: see `price_history`.
+DAILY_INTERVAL = "1Day"
+INTRADAY_INTERVALS = ("1Min", "2Min", "5Min", "15Min", "30Min", "1Hour")
+
+
 def price_history(
     symbol: str,
     days: int = DEFAULT_HISTORY_DAYS,
     *,
+    interval: str = DAILY_INTERVAL,
+    session: date | None = None,
+    settings: Settings | None = None,
     provider_factory: ProviderFactory | None = None,
 ) -> tuple[list[PriceBar], str | None]:
-    """Daily candles for the underlying, cached briefly.
+    """Candles for the underlying, cached briefly.
 
-    The one place this API asks a vendor for a price. Daily bars are not a quote and
-    the chart is drawn from settled closes, but the last bar of a live session is
-    still forming, which is why the series carries its own provenance and the panel
-    shows its age.
+    Returns (bars, note). An empty list with a note is a stated failure; an empty list
+    with no note cannot happen.
 
-    Returns (bars, note). An empty list with a note is a stated failure. An empty list
-    with no note cannot happen: a provider that returns nothing gets a note too.
+    ## Where the bars come from, and why it is not simply "the provider"
+
+    **Daily candles are read from storage first.** `optscan prices sync` stores a decade
+    of daily bars for every symbol in the universe, which is a few hundred of them
+    against the six the screener captures chains for. Reading those means a chart opens
+    for any symbol the catalogue lists rather than only for the pinned ones, it is a
+    local query instead of a vendor round trip, and it works with no provider
+    configured at all. The provider is the fallback for a symbol nothing has synced.
+
+    **Intraday candles come from a vendor that has them, which may not be the configured
+    one.** `OPTSCAN_PROVIDER` selects what captures option chains, and that choice is
+    load bearing for reasons that have nothing to do with charting: an IV history is per
+    vendor, so switching it restarts the rank from zero. A minute candle carries none of
+    that history, so it is fetched from whichever vendor can serve one.
+
+    That is a deliberate exception to "all market data flows through the configured
+    provider" and it is narrow: prices only, never volatility, never anything stored.
     """
-    key = (symbol, days)
+    key = (symbol, days, interval, session)
     now = datetime.now(UTC).timestamp()
     cached = _HISTORY.get(key, now)
     if isinstance(cached, tuple):
         return cached
 
-    if provider_factory is None:
-        return [], "No market data provider is configured, so there are no candles."
-
-    result: tuple[list[PriceBar], str | None]
-    try:
-        provider = provider_factory()
-        bars = provider.get_history(symbol, days)
-        empty = f"The provider returned no bars for {symbol}."
-        result = (list(bars), None) if bars else ([], empty)
-    except NotImplementedError:
-        result = ([], "The configured provider has no price history, so there are no candles.")
-    except (ProviderError, OSError) as error:
-        result = ([], f"Candles unavailable: {type(error).__name__}: {error}")
-        log.warning("price history unavailable", symbol=symbol, error=str(error))
+    if interval != DAILY_INTERVAL:
+        result = _intraday_history(symbol, interval, days, settings, session)
+    else:
+        result = _daily_history(symbol, days, settings, provider_factory)
 
     _HISTORY.put(key, result, expires_at=now + HISTORY_TTL_SECONDS)
     return result
+
+
+def _daily_history(
+    symbol: str,
+    days: int,
+    settings: Settings | None,
+    provider_factory: ProviderFactory | None,
+) -> tuple[list[PriceBar], str | None]:
+    """Stored bars if there are any, otherwise ask the provider."""
+    if settings is not None:
+        with db.session(settings.sqlite_path) as conn:
+            stored, source = recent_daily_bars(conn, symbol, days)
+        if stored:
+            return [
+                PriceBar(
+                    symbol=bar.symbol,
+                    ts=datetime.combine(bar.session_date, time(), tzinfo=UTC),
+                    open=bar.open,
+                    high=bar.high,
+                    low=bar.low,
+                    close=bar.close,
+                    volume=bar.volume,
+                    fetched_at=datetime.now(UTC),
+                    source=source or "stored",
+                )
+                for bar in stored
+            ], None
+
+    if provider_factory is None:
+        return [], (
+            f"No stored daily bars for {symbol} and no provider configured. "
+            "Run `optscan prices sync` to store them."
+        )
+
+    try:
+        bars = list(provider_factory().get_history(symbol, days))
+    except NotImplementedError:
+        return [], "The configured provider has no price history, so there are no candles."
+    except (ProviderError, OSError) as error:
+        log.warning("price history unavailable", symbol=symbol, error=str(error))
+        return [], f"Candles unavailable: {type(error).__name__}: {error}"
+
+    if not bars:
+        return [], f"The provider returned no bars for {symbol}."
+    return bars, None
+
+
+def _intraday_refusal(interval: str, settings: Settings | None) -> str | None:
+    """Why intraday cannot be served, or None when it can.
+
+    Split out so each refusal keeps its own sentence. They send the reader somewhere
+    different: one is a typo, the other is a missing credential.
+    """
+    if interval not in INTRADAY_INTERVALS:
+        return f"{interval} is not an interval this serves."
+    if settings is None or not settings.alpaca_credentials_set:
+        return (
+            "Intraday candles need Alpaca credentials. Set OPTSCAN_ALPACA_KEY_ID and "
+            "OPTSCAN_ALPACA_SECRET_KEY in .env; daily candles work without them."
+        )
+    return None
+
+
+def _intraday_history(
+    symbol: str,
+    interval: str,
+    days: int,
+    settings: Settings | None,
+    session: date | None = None,
+) -> tuple[list[PriceBar], str | None]:
+    """Minute and hourly candles, from a vendor that serves them.
+
+    Nothing intraday is stored. A few hundred symbols at a decade of minute bars is
+    hundreds of millions of rows for a chart somebody looks at for ten seconds, so this
+    is fetched on demand and cached for the same short window as everything else.
+    """
+    refusal = _intraday_refusal(interval, settings)
+    if refusal is not None:
+        return [], refusal
+
+    try:
+        provider = get_intraday_provider(settings)
+        if provider is None:
+            return [], "No provider here can serve intraday candles."
+        try:
+            bars = provider.get_intraday_bars(symbol, interval, days, session=session)
+        finally:
+            provider.close()
+    except NoDataAvailable:
+        # A shut market is not a failure and must not read like one. The vendor says
+        # "no bars" for a holiday, a weekend and a broken request identically, so the
+        # sentence has to come from what was asked rather than from what came back.
+        bars = []
+    except (ProviderError, OSError) as error:
+        log.warning("intraday history unavailable", symbol=symbol, error=str(error))
+        return [], f"{interval} candles unavailable: {error}"
+
+    if not bars:
+        # Over a weekend a short window contains no sessions at all, which is not a
+        # failure and should not read as one.
+        if session is not None:
+            return [], f"No {interval} bars on {session}. The market was shut, or it is too recent."
+        return [], f"No {interval} bars in the last {days} days. Try a longer window."
+    return bars, None

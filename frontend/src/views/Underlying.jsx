@@ -13,30 +13,65 @@ import { count, num, pct, vol } from "../format.js";
 // daily captures exist there is no rank to publish, so the gauge shows the refusal and
 // the reason instead of a bar at zero.
 
-export default function Underlying({ summary }) {
+// `summary` is optional and usually absent. After a bulk price sync there are a few
+// hundred symbols with a decade of daily bars and a handful with captured option
+// chains, and the chart needs only the first. Gating the whole view on a snapshot made
+// every unpinned ticker a dead page reading "No stored snapshot for AA", while 2,492
+// sessions of its bars sat in the database.
+//
+// So the price panel renders from `symbol` alone and every volatility panel below it
+// is conditional. The absence is stated once, at the top, with what to do about it.
+export default function Underlying({ symbol, summary }) {
+  const ticker = summary?.symbol || symbol;
   // Sessions of history, not calendar days: the endpoint returns one bar per unit. 126
   // is six months of trading, and is the chart's default window.
   const [days, setDays] = useState(126);
   // Null lets the server pick the first screenable expiry. The front week's smile is
   // dominated by gamma and is the least useful one to open on.
   const [skewExpiry, setSkewExpiry] = useState(null);
+  // Intraday drill-in. `session` set means the chart is showing one named day
+  // rather than a rolling window, which is a different question and gets its own
+  // header rather than being folded into the interval control.
+  const [interval, setInterval] = useState("1Day");
+  const [session, setSession] = useState(null);
 
-  const history = useAsync(() => api.history(summary.symbol, days), [summary.symbol, days]);
-  const chain = useAsync(
-    () => api.chain(summary.symbol, skewExpiry),
-    [summary.symbol, skewExpiry],
+  const history = useAsync(
+    () => api.history(ticker, { days, interval, session }),
+    [ticker, days, interval, session],
   );
+  const chain = useAsync(() => api.chain(ticker, skewExpiry), [ticker, skewExpiry], {
+    enabled: Boolean(summary),
+  });
+
+  const openSession = (day, chosen) => {
+    setSession(day);
+    setInterval(chosen || "5Min");
+  };
+
+  const backToDaily = () => {
+    setSession(null);
+    setInterval("1Day");
+  };
 
   return (
     <>
-      {summary.partial && (
+      {!summary && (
+        <Note>
+          No option chains have been captured for {ticker}, so the volatility panels
+          below are not available. The price history is real and is shown. Pin it on
+          Home and the next snapshot run starts capturing chains.
+        </Note>
+      )}
+
+      {summary?.partial && (
         <Note>
           This capture is partial: at least one expiry failed to fetch. What is here is
           real, and what is missing is missing rather than interpolated.
         </Note>
       )}
-      {summary.events_note && <Note>{summary.events_note}</Note>}
+      {summary?.events_note && <Note>{summary.events_note}</Note>}
 
+      {summary && (
       <Panel title="Session">
         <div className="stats">
           <Stat label="spot" value={num(summary.spot)} />
@@ -52,6 +87,7 @@ export default function Underlying({ summary }) {
           />
         </div>
       </Panel>
+      )}
 
       {/* The window control lives inside the chart now, alongside the interval and the
           indicators, because they are one decision made in one place. The panel title
@@ -63,19 +99,25 @@ export default function Underlying({ summary }) {
         <ErrorBox error={history.error} />
         {history.data?.note && <Note>{history.data.note}</Note>}
         <PriceChart
-          symbol={summary.symbol}
+          symbol={ticker}
           bars={history.data?.bars}
           loading={history.loading}
           days={days}
           onDaysChange={setDays}
+          interval={interval}
+          onIntervalChange={setInterval}
+          session={session}
+          onOpenSession={openSession}
+          onBackToDaily={backToDaily}
         />
         <div className="chart-note">
-          Candles come from the vendor at request time, not from the stored snapshot.
-          They are the one thing on this page that is not the last capture. Weekly and
-          monthly candles are those same daily bars grouped, not a second series.
+          {session
+            ? "One session, intraday. Bounded to the calendar day rather than to market hours, so the pre and post market bars are included: on a quiet name those are often the whole reason to open a day."
+            : "Daily candles are read from stored history, so they work for any synced symbol. Weekly and monthly are those same bars grouped, not a second series. Click a candle to open that day."}
         </div>
       </Panel>
 
+      {summary && (
       <div className="grid-2">
         <Panel title="Implied volatility rank">
           <IvRankGauge ivRank={summary.iv_rank} note={summary.iv_rank_note} />
@@ -89,7 +131,10 @@ export default function Underlying({ summary }) {
           />
         </Panel>
       </div>
+      )}
 
+      {summary && (
+        <>
       <Panel
         title="Skew"
         right={<Provenance provenance={chain.data?.provenance} />}
@@ -159,6 +204,8 @@ export default function Underlying({ summary }) {
           the money straddle where one could be solved and from the model otherwise.
         </div>
       </Panel>
+        </>
+      )}
     </>
   );
 }

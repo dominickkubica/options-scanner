@@ -217,7 +217,12 @@ export default function App() {
             sentence naming it. */}
         <ApiDown error={health.error} onRetry={retryConnection} />
         {!apiDown && <ErrorBox error={watchlist.error} onRetry={watchlist.reload} />}
-        {!apiDown && <ErrorBox error={summary.error} onRetry={summary.reload} />}
+        {/* Not shown on views that work without a capture. Underlying draws its chart
+            from stored daily bars, so "No stored snapshot for AA" here would contradict
+            the calmer note the view itself renders, and say it in red first. */}
+        {!apiDown && view !== "underlying" && (
+          <ErrorBox error={summary.error} onRetry={summary.reload} />
+        )}
         {summary.loading && <div className="loading">Loading {symbol}...</div>}
 
         {/* Keyed on the view alone so a crash in one panel clears when you navigate
@@ -275,7 +280,12 @@ export default function App() {
             />
           )}
 
-          {view === "underlying" && summary.data && <Underlying summary={summary.data} />}
+          {/* Not gated on summary.data: a symbol with stored prices and no captured
+              chain still has a chart worth drawing, and gating made every unpinned
+              ticker a dead page. */}
+          {view === "underlying" && symbol && (
+            <Underlying symbol={symbol} summary={summary.data} />
+          )}
 
           {view === "levels" && summary.data && <Levels summary={summary.data} />}
 

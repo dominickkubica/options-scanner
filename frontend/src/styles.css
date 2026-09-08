@@ -1571,6 +1571,25 @@ tr.under-sampled td {
   gap: 12px;
 }
 
+/* Clicking a daily candle offers to open that session. Rendered inline above the
+   controls rather than as a modal: it is a small choice about the thing already on
+   screen, and a dialog would cover the chart it is asking about. */
+.day-prompt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  background: var(--panel-2);
+  border-radius: var(--r-sm);
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+
+.day-prompt strong {
+  font-family: var(--mono);
+}
+
 /* Mobile ------------------------------------------------------------------
    Added 2026-09-08. The app had no layout breakpoints at all: at 375px the fixed
    224px sidebar took two thirds of the screen and never collapsed, and the content

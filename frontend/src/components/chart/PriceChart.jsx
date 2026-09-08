@@ -87,6 +87,10 @@ const INTERVAL_IDS = ["1D", "1W", "1M"];
 // day object, so both shapes are handled rather than trusting one and rendering "n/a"
 // across the whole header if the other ever arrives.
 function timeKey(time) {
+  // Intraday series carry epoch seconds rather than an ISO date, so a number is a
+  // valid key and is returned as-is. Stringifying it here would stop it matching
+  // `bar.time` and silently kill the crosshair readout on every intraday chart.
+  if (typeof time === "number") return time;
   if (typeof time === "string") return time;
   if (time && typeof time === "object" && "year" in time) {
     const month = String(time.month).padStart(2, "0");
@@ -122,7 +126,27 @@ function addPlotSeries(chart, plot, theme) {
   });
 }
 
-export default function PriceChart({ symbol, bars, loading, days, onDaysChange }) {
+//: Intraday intervals offered when drilling into a single session. Deliberately
+//: short: a whole day at one minute is about 880 bars including extended hours, and
+//: anything finer than a minute is not served.
+const SESSION_INTERVALS = ["1Min", "2Min", "5Min"];
+
+export default function PriceChart({
+  symbol,
+  bars,
+  loading,
+  days,
+  onDaysChange,
+  // Session drill-in. When `session` is set the parent is supplying one day of
+  // intraday bars, so the aggregation and window controls below are meaningless and
+  // are replaced rather than disabled: a control that cannot do anything is worse
+  // than one that is not there.
+  interval: dataInterval = "1Day",
+  onIntervalChange,
+  session = null,
+  onOpenSession,
+  onBackToDaily,
+}) {
   // `chooseInterval` rather than `setInterval`, which would shadow the global timer
   // function for the whole component.
   const [interval, chooseInterval] = useState("1D");
@@ -141,8 +165,11 @@ export default function PriceChart({ symbol, bars, loading, days, onDaysChange }
   // The crosshair handler is subscribed once and must see the current bars without
   // being torn down and resubscribed on every data change.
   const barsRef = useRef([]);
+  const clickRef = useRef(null);
+  const [pendingDay, setPendingDay] = useState(null);
 
   const displayBars = useMemo(() => aggregate(bars || [], interval), [bars, interval]);
+  const isIntraday = Boolean(session);
   barsRef.current = displayBars;
 
   const degraded = chartType === "candles" && displayBars.length > CANDLE_LIMIT;
@@ -261,6 +288,14 @@ export default function PriceChart({ symbol, bars, loading, days, onDaysChange }
       setHoveredKey(key);
     });
 
+    // Clicking a candle offers to open that day. Handled through a ref rather than
+    // closing over the prop: this subscription is set up once, and capturing the
+    // first render's callback would leave it pointing at a stale session forever.
+    chart.subscribeClick((param) => {
+      if (!param?.time) return;
+      clickRef.current?.(timeKey(param.time));
+    });
+
     // Double click anywhere on the plot returns to the whole series. The library's own
     // double click reset only covers the axes.
     const node = container.current;
@@ -282,6 +317,17 @@ export default function PriceChart({ symbol, bars, loading, days, onDaysChange }
     const chart = chartRef.current;
     const { candle, area, volume } = seriesRef.current;
     if (!chart || !candle) return;
+
+    // Set here rather than in an effect of its own. A separate effect has its own
+    // lifecycle and can fire after the creation effect's cleanup has called
+    // chart.remove(), which the library reports as "Value is null" and which blanks
+    // the whole page. This effect already proved the chart is alive.
+    //
+    // The axis must show clock times on an intraday series: without it every label on
+    // a one day chart is the same date and the axis says nothing.
+    chart.applyOptions({
+      timeScale: { timeVisible: isIntraday, secondsVisible: false },
+    });
 
     const priceData = displayBars.map((bar) => ({
       time: bar.time,
@@ -315,7 +361,7 @@ export default function PriceChart({ symbol, bars, loading, days, onDaysChange }
     );
 
     chart.timeScale().fitContent();
-  }, [displayBars, effectiveType, theme]);
+  }, [displayBars, effectiveType, theme, isIntraday]);
 
   // Indicator series, reconciled against the registry. Nothing here names an indicator.
   useEffect(() => {
@@ -388,6 +434,13 @@ export default function PriceChart({ symbol, bars, loading, days, onDaysChange }
 
   const windows = WINDOWS[interval];
 
+  // Kept current on every render so the click subscription, which is installed once,
+  // always calls the latest one.
+  clickRef.current = (day) => {
+    if (session || !onOpenSession) return; // already inside a day, or drill-in is off
+    setPendingDay(day);
+  };
+
   function changeInterval(next) {
     chooseInterval(next);
     const allowed = WINDOWS[next].options;
@@ -448,6 +501,52 @@ export default function PriceChart({ symbol, bars, loading, days, onDaysChange }
         )}
       </div>
 
+      {pendingDay && (
+        <div className="day-prompt">
+          <span>
+            Open <strong>{pendingDay}</strong> intraday?
+          </span>
+          <div className="seg" role="group" aria-label="intraday interval">
+            {SESSION_INTERVALS.map((id) => (
+              <button
+                key={id}
+                type="button"
+                className="seg-btn"
+                onClick={() => {
+                  onOpenSession(pendingDay, id);
+                  setPendingDay(null);
+                }}
+              >
+                {id.replace("Min", "m")}
+              </button>
+            ))}
+          </div>
+          <button type="button" className="btn" onClick={() => setPendingDay(null)}>
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {session ? (
+        <div className="chart-controls">
+          <button type="button" className="btn primary" onClick={onBackToDaily}>
+            Back to daily
+          </button>
+          <span className="provenance">showing {session}</span>
+          <div className="seg" role="group" aria-label="intraday interval">
+            {SESSION_INTERVALS.map((id) => (
+              <button
+                key={id}
+                type="button"
+                className={`seg-btn ${dataInterval === id ? "active" : ""}`}
+                onClick={() => onIntervalChange?.(id)}
+              >
+                {id.replace("Min", "m")}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : (
       <div className="chart-controls">
         <div className="seg" role="group" aria-label="interval">
           {INTERVAL_IDS.map((id) => (
@@ -513,6 +612,7 @@ export default function PriceChart({ symbol, bars, loading, days, onDaysChange }
           ))}
         </div>
       </div>
+      )}
 
       <div className="chart-canvas" ref={container}>
         {loading && <div className="chart-skeleton" />}
@@ -521,8 +621,13 @@ export default function PriceChart({ symbol, bars, loading, days, onDaysChange }
       {degraded && (
         <div className="chart-note">
           {displayBars.length} bars is past the point where a candle body is wide enough
-          to read, so this window is drawn as a line. Switch to a weekly or monthly
-          interval, or a shorter window, to get candles back.
+          to read, so this window is drawn as a line.{" "}
+          {/* The advice has to match the controls that exist. In session mode there is
+              no weekly interval and no window control, so naming them sends the reader
+              looking for buttons that are not on the screen. */}
+          {isIntraday
+            ? "Choose a coarser interval above for candles back."
+            : "Switch to a weekly or monthly interval, or a shorter window, to get candles back."}
         </div>
       )}
     </div>

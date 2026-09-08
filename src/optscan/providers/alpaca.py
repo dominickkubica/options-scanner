@@ -54,7 +54,7 @@ for a listed contract and the liquidity filter treats the two very differently.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, ClassVar
 
 import httpx
@@ -153,6 +153,11 @@ EXPIRY_LOOKAHEAD_DAYS = 730
 #: How far ahead to look for a dividend. Longer than any expiry this screen will
 #: trade, so the nearest ex date inside a position's life is always found.
 EVENT_LOOKAHEAD_DAYS = 400
+
+#: Earliest session with minute bars. Measured, not documented: 2015-01-02 comes
+#: back empty and every year from 2016 has data, so this is the vendor's boundary
+#: rather than any one symbol's listing date.
+ALPACA_INTRADAY_START = date(2016, 1, 4)
 
 #: Refuse to walk more pages than this for one call. A runaway page_token loop against
 #: a rate limited endpoint is the failure that costs a capture window.
@@ -625,6 +630,76 @@ class AlpacaProvider(MarketDataProvider):
                     pages=max_pages,
                 )
         return merged
+
+    def get_intraday_bars(
+        self,
+        symbol: str,
+        interval: str,
+        days: int = 1,
+        *,
+        session: date | None = None,
+    ) -> list[PriceBar]:
+        """Intraday candles. Outside `MarketDataProvider`, like the bulk daily fetch.
+
+        The interface is daily bars only, which was right while the only consumer was
+        a screener reading settled closes. A chart is a different consumer.
+
+        **Minute bars reach back to 2016-01-04.** Measured: 2015-01-02 returns an empty
+        series and every year from 2016 returns data, so the boundary is the vendor's
+        rather than the symbol's. A QQQ session is about 879 minute bars, which includes
+        extended hours: the first bar of a day is 08:00Z, four in the morning in New
+        York, not the 09:30 open.
+
+        That last point matters for a chart. Roughly half of those bars are pre and post
+        market, where the spread is wide and a handful of prints set the price, so a
+        minute chart of a quiet name is mostly a flat line with two spikes at the edges.
+        The bars are returned as the vendor sends them and the caller decides; nothing
+        is filtered here, because silently dropping half a session is worse than showing
+        it.
+        """
+        ticker = symbol.strip().upper()
+        if session is not None:
+            # One named day. Bounded to the calendar date rather than to market hours,
+            # because the extended session runs 08:00 to 24:00 UTC and clipping to
+            # 13:30-20:00 would silently drop the pre and post market bars that are
+            # often the whole reason somebody opened a specific day.
+            start = datetime.combine(session, time(), tzinfo=UTC)
+            end = start + timedelta(days=1)
+            # Still cannot ask for the most recent quarter hour, even on a past day:
+            # the plan refuses the window, not the date.
+            end = min(end, self.now() - timedelta(minutes=SIP_RECENCY_MINUTES))
+            if end <= start:
+                raise NoDataAvailable(
+                    f"{session} is not far enough in the past for consolidated data yet."
+                )
+        else:
+            end = self.now() - timedelta(minutes=SIP_RECENCY_MINUTES)
+            start = end - timedelta(days=max(days, 1))
+        if start.date() < ALPACA_INTRADAY_START:
+            log.warning(
+                "intraday history starts before alpaca has any",
+                requested=str(start.date()),
+                available_from=str(ALPACA_INTRADAY_START),
+            )
+
+        bars = self._paged(
+            f"{self.settings.alpaca_data_url}{STOCK_BARS_PATH}",
+            {
+                "symbols": ticker,
+                "timeframe": interval,
+                "start": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "end": end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "feed": STOCK_BARS_FEED,
+                "limit": 10_000,
+                "adjustment": "all",
+                "sort": "asc",
+            },
+            collect="bars",
+        )
+        rows = (bars or {}).get(ticker) if isinstance(bars, dict) else None
+        if not rows:
+            raise NoDataAvailable(f"alpaca returned no {interval} bars for {ticker}")
+        return [_bar(ticker, row, self.name) for row in rows]
 
     def get_option_bars(
         self,

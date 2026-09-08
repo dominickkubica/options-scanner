@@ -373,3 +373,77 @@ def import_history(conn: sqlite3.Connection, limit: int = 20) -> list[dict]:
         (limit,),
     )
     return [dict(row) for row in rows]
+
+
+def preferred_source(conn: sqlite3.Connection, symbol: str) -> str | None:
+    """Which vendor's series to draw for this symbol, or None if there is none.
+
+    The one with the most recent session, ties broken on the name so the answer is
+    stable between calls rather than depending on scan order.
+
+    A choice rather than a merge, for the same reason `choose_iv_history` chooses: two
+    vendors' bars for one day are not two observations, and interleaving them produces
+    a series with duplicate dates and a "daily change" that is really the disagreement
+    between the vendors. That exact bug shipped once already, reading +0.00% on the two
+    symbols with the richest history.
+    """
+    row = conn.execute(
+        """
+        SELECT source FROM vendor_daily
+        WHERE symbol = ?
+        GROUP BY source
+        ORDER BY MAX(session_date) DESC, source
+        LIMIT 1
+        """,
+        (symbol.strip().upper(),),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def recent_daily_bars(
+    conn: sqlite3.Connection, symbol: str, sessions: int
+) -> tuple[list[VendorDailyBar], str | None]:
+    """The last `sessions` stored bars for a symbol, from one vendor.
+
+    Sessions, not calendar days: the caller asks for a bar count and gets that many
+    rows. Weekends and holidays are simply absent from the table, so counting rows is
+    the honest reading of "six months of candles" and counting days is not.
+    """
+    ticker = symbol.strip().upper()
+    source = preferred_source(conn, ticker)
+    if source is None:
+        return [], None
+
+    rows = conn.execute(
+        """
+        SELECT * FROM vendor_daily
+        WHERE source = ? AND symbol = ?
+        ORDER BY session_date DESC
+        LIMIT ?
+        """,
+        (source, ticker, max(sessions, 1)),
+    ).fetchall()
+
+    bars = [
+        VendorDailyBar(
+            source=row["source"],
+            symbol=row["symbol"],
+            session_date=date.fromisoformat(row["session_date"]),
+            open=row["open"],
+            high=row["high"],
+            low=row["low"],
+            close=row["close"],
+            adj_close=row["adj_close"],
+            volume=row["volume"],
+            vwap=row["vwap"],
+            trade_count=row["trade_count"],
+            iv30=row["iv30"],
+            call_volume=row["call_volume"],
+            put_volume=row["put_volume"],
+            call_open_interest=row["call_open_interest"],
+            put_open_interest=row["put_open_interest"],
+        )
+        for row in rows
+    ]
+    bars.reverse()  # ascending, which is what every consumer assumes
+    return bars, source
