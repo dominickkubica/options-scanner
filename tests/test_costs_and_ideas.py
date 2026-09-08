@@ -303,3 +303,43 @@ def test_ideas_are_ordered_cheapest_to_trade_first(seeded: Settings) -> None:
     same_age = [i for i in ideas if i.age == ideas[0].age] if ideas else []
     costs = [i.cost for i in same_age]
     assert costs == sorted(costs)
+
+
+# --------------------------------------------------------------------------------
+# The ideas endpoint
+# --------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def client(seeded: Settings):
+    from fastapi.testclient import TestClient
+
+    from optscan.api.app import create_app
+    from optscan.api.deps import clear_caches
+
+    clear_caches()
+    return TestClient(create_app(seeded))
+
+
+def test_the_endpoint_returns_evidence_in_the_same_payload_as_the_symbols(client) -> None:
+    """A separate call for the evidence is the design that ends up showing tickers with
+    no numbers on them whenever the second request is slow or never wired up."""
+    payload = client.get("/api/ideas").json()
+    assert payload["strategies"]
+    for row in payload["strategies"]:
+        assert row["evidence"]["tested_on"]
+        assert row["evidence"]["blocks"] > 0
+
+
+def test_the_endpoint_includes_retired_strategies(client) -> None:
+    """A panel showing only survivors looks like a list of things that work."""
+    payload = client.get("/api/ideas").json()
+    assert any(row["status"] == "retired" for row in payload["strategies"])
+
+
+def test_an_unreasonable_freshness_window_is_refused(client) -> None:
+    from optscan.api.routers.ideas import MAX_FRESHNESS_DAYS
+
+    assert client.get("/api/ideas", params={"freshness": -1}).status_code == 422
+    assert client.get("/api/ideas", params={"freshness": MAX_FRESHNESS_DAYS + 1}).status_code == 422
+    assert client.get("/api/ideas", params={"freshness": 0}).status_code == 200

@@ -1908,3 +1908,75 @@ tr.under-sampled td {
 .backtest-form input[type="number"] {
   width: 90px;
 }
+
+/* Trade ideas.
+ *
+ * The strategy cards sit under the symbol list rather than behind a disclosure, because
+ * a list of tickers reads as a recommendation whatever the caption says, and the only
+ * thing that stops it is the evidence being on the same screen. */
+.idea-strategy {
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+
+.idea-strategy:first-of-type {
+  border-top: none;
+}
+
+/* Retired strategies stay visible and recede. Hiding them would leave the panel looking
+ * like a list of things that work, rather than the residue of a search that mostly
+ * found nothing. */
+.idea-strategy.retired {
+  opacity: 0.62;
+}
+
+.idea-strategy-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.idea-rationale {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  max-width: 76ch;
+}
+
+.idea-evidence {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin: 8px 0 4px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.idea-evidence em {
+  color: var(--dim);
+  font-style: normal;
+  margin-right: 5px;
+}
+
+.idea-caveats {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+  max-width: 76ch;
+}
+
+.idea-caveats li {
+  margin-bottom: 5px;
+}
+
+/* A label-and-select pair that sits inline in a panel header. */
+.inline-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}

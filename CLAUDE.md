@@ -73,6 +73,7 @@ venv\Scripts\python -m optscan search --group tech # grid search, holdout, multi
 venv\Scripts\python -m optscan search --group tech --json
 venv\Scripts\python -m optscan ideas          # what is triggering a validated strategy
 venv\Scripts\python -m optscan ideas --evidence # the full record, retired ones included
+# The dashboard's Trade ideas tab is the same data: GET /api/ideas
 venv\Scripts\python -m optscan validate # does the score actually separate outcomes
 venv\Scripts\python -m optscan schedule # the recurring jobs and whether Windows has them
 venv\Scripts\python -m optscan backup # copy the db, mirror the captures, verify

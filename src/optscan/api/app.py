@@ -29,6 +29,7 @@ from optscan.api.routers import (
     backtest,
     catalogue,
     health,
+    ideas,
     journal,
     levels,
     live,
@@ -111,6 +112,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     for router in (
         health.router,
         backtest.router,
+        ideas.router,
         watchlist.router,
         catalogue.router,
         symbols.router,

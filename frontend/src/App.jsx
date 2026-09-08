@@ -21,6 +21,7 @@ import Payoff from "./views/Payoff.jsx";
 import Positions from "./views/Positions.jsx";
 import Signals from "./views/Signals.jsx";
 import Backtest from "./views/Backtest.jsx";
+import Ideas from "./views/Ideas.jsx";
 import Underlying from "./views/Underlying.jsx";
 import { num } from "./format.js";
 
@@ -38,6 +39,7 @@ const VIEWS = [
   { key: "opportunities", label: "Opportunities" },
   { key: "chain", label: "Chain" },
   { key: "underlying", label: "Underlying" },
+  { key: "ideas", label: "Trade ideas" },
   { key: "signals", label: "Signals" },
   { key: "backtest", label: "Backtest" },
   { key: "levels", label: "Levels" },
@@ -53,6 +55,7 @@ const TITLES = {
   browse: "Browse",
   signals: "Signals",
   backtest: "Backtest",
+  ideas: "Trade ideas",
 };
 
 export default function App() {
@@ -306,6 +309,17 @@ export default function App() {
               panel's whole job is to tell you which one to go and look at. */}
           {!apiDown && view === "signals" && (
             <Signals
+              onSelect={(name) => {
+                setSymbol(name);
+                setView("underlying");
+              }}
+            />
+          )}
+
+          {/* Not gated on a symbol: the list is the answer to "which symbol should I be
+              looking at", so gating it on one would invert the point. */}
+          {!apiDown && view === "ideas" && (
+            <Ideas
               onSelect={(name) => {
                 setSymbol(name);
                 setView("underlying");

@@ -234,6 +234,56 @@ class BacktestOut(ApiModel):
     seconds: float = 0.0
 
 
+class EvidenceOut(ApiModel):
+    """What was measured for a strategy. Travels with every idea, never on request."""
+
+    edge: float = 0.0
+    p_value: float = 1.0
+    blocks: int = 0
+    trades: int = 0
+    net_return: float = 0.0
+    tested_on: str = ""
+    tested_at: str = ""
+    cost_basis: str = ""
+    caveats: list[str] = Field(default_factory=list)
+
+
+class StrategyOut(ApiModel):
+    key: str
+    label: str = ""
+    rationale: str = ""
+    status: str = "provisional"
+    strategy: dict = Field(default_factory=dict)
+    evidence: EvidenceOut | None = None
+
+
+class IdeaOut(ApiModel):
+    """One symbol currently triggering one validated strategy."""
+
+    symbol: str
+    strategy: str
+    label: str = ""
+    session: str = ""
+    price: float = 0.0
+    #: Sessions since the trigger. These rules act on the next open, so an old one is a
+    #: trade that has already been and gone.
+    age: int = 0
+    #: This symbol's own estimated round trip cost, which decides what the edge is worth
+    #: on this particular name.
+    cost_bp: float = 0.0
+    horizon: int = 0
+    direction: str = "long"
+
+
+class IdeasOut(ApiModel):
+    generated_at: str = ""
+    ideas: list[IdeaOut] = Field(default_factory=list)
+    #: Every strategy, including retired ones. A failure kept visible is what stops the
+    #: next search being as credulous as the last.
+    strategies: list[StrategyOut] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
 class WatchlistChangeOut(ApiModel):
     """What adding or removing a symbol actually did."""
 

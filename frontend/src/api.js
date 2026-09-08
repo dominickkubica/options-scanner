@@ -83,6 +83,10 @@ export const api = {
   // dashboard refresh cannot consume the once-per-session suppression the scheduled
   // scan relies on. `recentSignals` reads the record of what was actually delivered.
   signals: (symbol) => request(`/signals${query({ symbol })}`),
+  // The evidence comes back in the same payload as the symbols, deliberately. A
+  // separate call for it is the design that ends up showing tickers with no numbers.
+  ideas: ({ freshness, provisional } = {}) =>
+    request(`/ideas${query({ freshness, provisional: provisional || undefined })}`),
   backtestRules: () => request("/backtest/rules"),
   // The one POST in this client that computes rather than writes. It can take seconds,
   // so callers show a running state rather than assuming a request is instant.
