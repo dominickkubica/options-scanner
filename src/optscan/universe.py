@@ -120,7 +120,20 @@ def load_universe(path: Path | None = None) -> Universe:
         # itself; symbols() sorts when it merges.
         seen: dict[str, None] = {}
         for member in members:
-            ticker = str(member).strip().upper()
+            # Refused rather than coerced. YAML 1.1 reads a bare ON, OFF, YES, NO, Y or
+            # N as a boolean, so `- ON` for ON Semiconductor arrives here as True and
+            # `str(True).upper()` is the ticker "TRUE". That happened: ON was silently
+            # absent from every sync and a phantom TRUE was requested in its place,
+            # which the vendor answered with nothing and the report blamed on a
+            # delisting. Quoting the symbol in the file fixes the data; refusing the
+            # type is what stops the next one being invisible.
+            if not isinstance(member, str):
+                raise UniverseError(
+                    f"group {name!r} contains {member!r} ({type(member).__name__}), "
+                    "not a ticker. YAML reads a bare ON, OFF, YES or NO as a boolean, "
+                    'so quote it: - "ON"'
+                )
+            ticker = member.strip().upper()
             if ticker:
                 seen[ticker] = None
         groups[str(name)] = tuple(seen)

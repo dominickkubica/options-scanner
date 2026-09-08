@@ -145,6 +145,27 @@ Robinhood activity export, `optscan trades` reports what the account actually di
 - **An unknown transaction code raises.** Assignment and exercise move real contracts,
   and a skipped row is a profit figure with a hole and nothing to say so.
 
+**A bare `ON` in universe.yaml is the boolean `True`.** YAML 1.1 does this to ON, OFF,
+YES, NO, Y and N. ON Semiconductor was silently absent from every price sync because
+`str(True).upper()` is the ticker `"TRUE"`, which the vendor answered with nothing and
+the report blamed on a delisting. Symbols are quoted in the file, and **the loader now
+refuses a non-string rather than coercing it**, which is the half that stops the next
+one being invisible.
+
+**`prices` (16:05) refreshes daily bars for the universe; without it the price history
+silently stops moving**, which is invisible on a chart that still draws. Ten day window,
+~7s for 286 symbols, because a re-import of a held session is a no-op. Like `capture`
+it is `default_install=False`: neither runs without Alpaca keys.
+
+**Delisted tickers are commented out with their last session, not deleted.** Their
+stored history is real. Leaving them in the request list prints failures every day, and
+a warning that fires daily is one nobody reads.
+
+**`resolve` is scheduled at 05:00 local and this machine wakes around 11:30**, with
+`WakeToRun` false. It has missed five days. Fix is either `WakeToRun` or moving
+`resolve_time_local` to after the close, where it would settle through today's expiry
+rather than yesterday's.
+
 **Tradier and Schwab were removed on 2026-09-08.** Providers are now `yfinance` and
 `alpaca`. Tradier implemented four of the interface's nine methods, had **no corporate
 calendar** (`get_events` was never implemented), had a measured-unusable `mid_iv`, and a

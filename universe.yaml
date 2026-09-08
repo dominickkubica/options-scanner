@@ -93,7 +93,7 @@ groups:
     - IBM
     - UBER
     - SHOP
-    - SQ
+    # - SQ  # retired: Block, retickered; last session 2025-01-17
     - PYPL
     - ABNB
     - SNOW
@@ -107,7 +107,7 @@ groups:
     - FTNT
     - MRVL
     - NXPI
-    - ON
+    - "ON"   # quoted: bare ON is a YAML boolean
     - MCHP
     - ADI
     - TER
@@ -148,7 +148,7 @@ groups:
     - PCTY
     - GEN
     - AKAM
-    - JNPR
+    # - JNPR  # retired: Juniper, acquired by HPE; last session 2025-07-01
     - KEYS
     - TDY
     - GRMN
@@ -193,14 +193,14 @@ groups:
     - BHP
     - VALE
     - AA
-    - X
+    # - X  # retired: US Steel, acquired; last session 2025-06-17
     - CLF
     - NUE
     - STLD
     - MT
     - ATI
     - CRS
-    - HAYN
+    # - HAYN  # retired: Haynes International, acquired; last session 2024-11-20
 
   # Uranium: miners, developers, and the physical trusts.
   uranium:
@@ -234,8 +234,8 @@ groups:
     - LAC
     - ALB
     - SQM
-    - LTHM
-    - PLL
+    # - LTHM  # retired: Livent, merged into Arcadium; last session 2024-01-03
+    # - PLL  # retired: Piedmont Lithium, merged; last session 2025-08-29
     - SGML
     - IONR
     - NB
@@ -264,7 +264,7 @@ groups:
     - AXP
     - PGR
     - CB
-    - MMC
+    # - MMC  # retired: no bars since 2026-01-13
     - LLY
     - UNH
     - JNJ

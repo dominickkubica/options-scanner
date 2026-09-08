@@ -70,6 +70,14 @@ BACKUP_DELAY_MINUTES = 15
 #: nine minute, three hundred symbol job starts spending the rate limit.
 UNIVERSE_CAPTURE_DELAY_MINUTES = 5
 
+#: The universe capture takes about nine minutes, so the price refresh starts
+#: after it rather than competing with it for the same rate limit.
+PRICES_DELAY_MINUTES = 20
+
+#: How far back the daily refresh asks for. Long enough to cover a holiday weekend
+#: and any day the machine was off, short enough that it is a handful of requests.
+PRICE_REFRESH_DAYS = 10
+
 MINUTES_PER_HOUR = 60
 MINUTES_PER_DAY = 24 * MINUTES_PER_HOUR
 
@@ -174,6 +182,21 @@ def jobs(settings: Settings) -> tuple[ScheduledJob, ...]:
             ),
             # Deliberately excluded from the default install. See the summary: it is
             # the only job here that cannot run without a specific vendor's keys.
+            default_install=False,
+        ),
+        ScheduledJob(
+            key="prices",
+            task_name="OptscanDailyPrices",
+            arguments=(f"-m optscan prices sync --provider alpaca --days {PRICE_REFRESH_DAYS}"),
+            at=shift(settings.snapshot_time, PRICES_DELAY_MINUTES),
+            summary=(
+                "Refresh daily bars for every universe symbol. Without this the price "
+                "history is whatever was synced by hand and silently stops moving, "
+                "which is invisible on a chart that still draws. A short window rather "
+                "than the full decade: a re-import of a session already held is a "
+                "no-op, so only the gap since yesterday actually costs anything."
+            ),
+            # Same reasoning as the capture job: it cannot run without Alpaca keys.
             default_install=False,
         ),
         ScheduledJob(

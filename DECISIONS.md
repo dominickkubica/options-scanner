@@ -2413,3 +2413,79 @@ publishing a documented delay, which is now Alpaca's indicative feed rather than
 Tradier's sandbox, and they test the same behaviour against the vendor that still has
 it. That is the useful shape: a test that only fails because its example vanished is
 testing the example, and one worth keeping is testing the rule.
+
+---
+
+## 2026-09-08: closing the holes before the first real capture day
+
+### Nothing was refreshing the daily bars
+
+293 symbols were synced by hand once. There was no scheduled job, so tomorrow's bars
+would never have arrived and the price history would have silently stopped moving,
+which is invisible on a chart that still draws.
+
+`prices` now runs at 16:05 market time, after the universe capture rather than
+competing with it for the same rate limit. It asks for ten days rather than the full
+decade: a re-import of a session already held is a no-op, so only the genuine gap
+costs anything, and the whole 286 symbol refresh takes **7.3 seconds**.
+
+`--provider` was added to `prices sync` for the same reason `snapshot` has one: the
+bulk fetch needs a vendor that takes many symbols per request, and the configured
+default cannot.
+
+### A phantom ticker, hidden by a silent coercion
+
+The first refresh reported eight symbols returning no bars. Seven were real
+delistings, and the eighth was `TRUE`, which is not a ticker and was never in the file.
+
+**YAML 1.1 reads a bare `ON` as the boolean `True`.** `- ON` for ON Semiconductor
+arrived at the loader as `True`, and `str(True).upper()` is `"TRUE"`. So ON Semi had
+been silently absent from every sync since the file was written, a phantom was
+requested in its place, the vendor answered with nothing, and the daily report blamed
+it on a delisting. The same trap takes `NO`, `OFF`, `YES`, `Y` and `N`.
+
+Two fixes, and the second is the one that matters. The symbol is quoted in the file,
+which fixes the data. **The loader now refuses a non-string rather than `str()`-ing
+it**, which is what stops the next one being invisible. ON was backfilled with 2,510
+sessions it never had.
+
+Seven delisted tickers were commented out with their last session rather than deleted:
+LTHM 2024-01-03, HAYN 2024-11-20, SQ 2025-01-17, X 2025-06-17, JNPR 2025-07-01, PLL
+2025-08-29, MMC 2026-01-13. Their stored history is real and stays. Leaving them in the
+request list would have printed eight failures every single day, and a warning that
+fires daily is one nobody reads, which is the same argument the health job already makes
+about crying wolf.
+
+The refresh now reports **286 of 286** with no warning.
+
+### The resolve job cannot run at the time it is scheduled
+
+Diagnosed rather than assumed. `WakeToRun` is false and this machine's wake events are
+around 11:30 local, while `resolve` is scheduled for 05:00 local. It has missed five
+days, and `StartWhenAvailable` has only caught it up once.
+
+Not changed here, because both fixes are the user's call about their own machine:
+
+- **Enable `WakeToRun`** and the machine wakes at 05:00 to settle. Preserves the
+  original design, which runs it before the open so every expiry it can see is
+  finished and its close is published.
+- **Move `resolve_time_local` to after the close.** It would then settle through
+  *today's* expiry rather than yesterday's, which is strictly more current, and it
+  lands in the window the machine is reliably awake. The risk is the daily bar not
+  being published in the first minutes after the close, which the job already refuses
+  correctly rather than mis-settling: a trading day with no bar yet is missing, not
+  shut.
+
+### The schedule as it now stands
+
+    snapshot  15:45  watchlist chains          installed
+    capture   15:50  293 symbol chains, ~9m    NOT installed
+    prices    16:05  daily bar refresh, ~7s    NOT installed
+    record    16:15  validation logging        installed
+    backup    16:30                            installed
+    resolve   08:00  settle expiries           installed, missing days
+
+Both new jobs are `default_install=False` because neither can run without Alpaca
+credentials. All four installed tasks were verified as `DisallowStartIfOnBatteries`
+false and `StartWhenAvailable` true, so the trap recorded in the scheduled task notes
+is not present here.

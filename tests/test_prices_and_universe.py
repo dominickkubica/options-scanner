@@ -182,3 +182,49 @@ class TestReport:
         warning = SyncReport(requested=missing, missing=missing).warning()
         assert "30 symbols returned no bars" in warning
         assert "and 18 more" in warning
+
+
+class TestYamlCoercion:
+    """A ticker that YAML reads as something other than text is refused, not coerced.
+
+    YAML 1.1 reads a bare ON, OFF, YES, NO, Y or N as a boolean. `- ON` for ON
+    Semiconductor therefore arrives as `True`, and `str(True).upper()` is the ticker
+    "TRUE". That is exactly what happened here: ON was silently absent from every sync
+    for as long as the file existed, a phantom TRUE was requested in its place, the
+    vendor answered with nothing, and the daily report blamed it on a delisting.
+
+    Quoting the symbol fixes the data. Refusing the type is what stops the next one
+    being invisible.
+    """
+
+    def test_a_bare_on_is_refused_rather_than_becoming_true(self, tmp_path) -> None:
+        path = tmp_path / "universe.yaml"
+        path.write_text(
+            "meta:\n  date_checked: 2026-09-08\ngroups:\n  tech:\n    - AAPL\n    - ON\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(UniverseError, match="boolean"):
+            load_universe(path)
+
+    def test_the_message_says_how_to_fix_it(self, tmp_path) -> None:
+        path = tmp_path / "universe.yaml"
+        path.write_text(
+            "meta:\n  date_checked: 2026-09-08\ngroups:\n  metals:\n    - NO\n",
+            encoding="utf-8",
+        )
+        with pytest.raises(UniverseError, match=r"quote it"):
+            load_universe(path)
+
+    def test_a_quoted_symbol_survives(self, tmp_path) -> None:
+        path = tmp_path / "universe.yaml"
+        path.write_text(
+            'meta:\n  date_checked: 2026-09-08\ngroups:\n  tech:\n    - "ON"\n    - AAPL\n',
+            encoding="utf-8",
+        )
+        assert load_universe(path).symbols("tech") == ["AAPL", "ON"]
+
+    def test_the_shipped_universe_has_no_coerced_entries(self) -> None:
+        """The real file, which is where this bug actually lived."""
+        universe = load_universe()
+        assert "ON" in universe.symbols("all")
+        assert "TRUE" not in universe.symbols("all")

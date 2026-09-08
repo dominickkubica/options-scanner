@@ -381,6 +381,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Sync this symbol instead of a group. Repeatable.",
     )
     prices_sync.add_argument(
+        "--provider",
+        default=None,
+        help=(
+            "Override the configured provider for this run. Bulk history needs one "
+            "that takes many symbols per request; the default cannot, and says so."
+        ),
+    )
+    prices_sync.add_argument(
         "--days",
         type=int,
         default=None,
@@ -1260,7 +1268,13 @@ def _cmd_prices(settings: Settings, args: argparse.Namespace) -> int:
     if stale:
         print(console.bad(stale))
 
-    report = sync_daily_history(settings, symbols, days=days)
+    provider = None
+    if args.provider:
+        from optscan.providers import get_provider
+
+        provider = get_provider(settings.model_copy(update={"provider": args.provider}))
+
+    report = sync_daily_history(settings, symbols, days=days, provider=provider)
     print(f"\n{report.summary()}")
     warning = report.warning()
     if warning:
