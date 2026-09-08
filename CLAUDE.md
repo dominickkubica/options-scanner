@@ -31,13 +31,15 @@ src/optscan/
   models/           pydantic: Quote, Chain, Contract, Snapshot, Opportunity, Position
   storage/          sqlite + duckdb writers, migrations
   analytics/        greeks.py, iv.py, probability.py, levels.py, projection.py,
-                    portfolio.py, triggers.py, outcomes.py, calibration.py
+                    portfolio.py, triggers.py, signals.py, outcomes.py, calibration.py
   screener/         rules/, scoring.py, strategies/
   console.py        terminal colour, and the rules about when not to use it
   jobs/             snapshot.py, schedule.py, manage.py, validate.py, backup.py,
-                    launcher.py, health.py
+                    launcher.py, health.py, prices.py, signals.py
   live/             the polling refresh loop and its delta encoder
-  alerts.py         alert sinks, and once-per-condition delivery
+  alerts.py         alert sinks, and once-per-condition delivery. Carries both a
+                    position Trigger and a market Signal; position_id is None for
+                    the latter
   api/              schemas, deps, views, app, routers/
   imports/          broker statement parsers, one module per broker
 frontend/           React app: src/views, src/components, gitignored node_modules and dist
@@ -55,6 +57,9 @@ venv\Scripts\python -m optscan status # market state, watchlist, recent captures
 venv\Scripts\python -m optscan health # are the recurring jobs actually running
 venv\Scripts\python -m optscan manage # mark held positions, evaluate, alert once
 venv\Scripts\python -m optscan record # log every scored candidate for validation
+venv\Scripts\python -m optscan signals # market conditions worth knowing, delivered once
+venv\Scripts\python -m optscan signals --dry-run --all # preview without consuming suppression
+venv\Scripts\python -m optscan signals --recent 14 # what was actually delivered
 venv\Scripts\python -m optscan validate # does the score actually separate outcomes
 venv\Scripts\python -m optscan schedule # the recurring jobs and whether Windows has them
 venv\Scripts\python -m optscan backup # copy the db, mirror the captures, verify
@@ -113,6 +118,20 @@ and `optscan-web` entries in `.claude/launch.json`.
   a chain and resolve together, so 903 of them are a few dozen observations. Whenever
   something is counted, ask what the unit of independence actually is before putting an
   interval on it. See `cluster_key` in analytics/calibration.py.
+- **A detector defined on "the most recent bar" reports a delisted ticker forever.**
+  The twelfth instance, found on the signal scan's first live run: five of fifteen
+  signals came from eight symbols that stopped trading between 2024 and early 2026,
+  including a 15.6x "volume surge" that was the last day before an acquisition closed,
+  which is the highest volume day a ticker ever has. A third of the output was
+  archaeology presented as news. `jobs/signals.py` now skips a symbol whose last
+  session is more than `MAX_STALE_DAYS` behind **the newest session held anywhere in
+  the database** rather than behind today's date, because the calendar does not know
+  which weekdays were holidays and a wall clock reference would declare the whole
+  universe stale every morning before the price sync lands.
+- **A signal that is a state needs an edge; a signal that is an event does not.** A
+  squeeze runs a median of 4 sessions and up to 41, so firing while it holds sends six
+  alerts for every one thing that happened, and per-session suppression cannot fix that
+  because each of those days is legitimately a different day. Fire on the transition.
 - Two filters aimed at the same thing will hide each other. The confounded one in front
   of the principled one does not merely fail to help, it starves the good one of the
   data it needs.
@@ -130,6 +149,33 @@ new scope and is **not authorized**: ask first.
 Robinhood activity export, `optscan trades` reports what the account actually did.
 `models/broker.py`, `imports/robinhood.py`, `analytics/ledger.py`,
 `storage/ledger.py`, migration 6. Full reasoning in the DECISIONS entry of that date.
+
+**Exception, authorized 2026-09-08: market signals.** `optscan signals` evaluates every
+symbol with fresh stored bars and delivers what is new through the existing alert sinks.
+`analytics/signals.py`, `jobs/signals.py`, `storage/signals.py`, `api/routers/signals.py`,
+`frontend/src/views/Signals.jsx`, migration 9.
+
+- **Every threshold was measured before it shipped**, over 44,113 symbol-days (294
+  symbols, one session in five across three years). At the defaults the whole universe
+  produces roughly 9 signals a day, 2 of them at severity 3 or above. The dump and the
+  sweep are reproducible: see the module docstring.
+- **The squeeze is bands-inside-channels, not a fixed band width.** A fixed 4% cut fires
+  on 0% of days for the tenth-percentile symbol and 12% for the ninetieth, so it reports
+  which symbol it is looking at rather than what that symbol is doing. Comparing the
+  spread of closes to the same symbol's own ATR normalises itself.
+- **Only levels with a p-value can raise an alert.** Round numbers, volume nodes and
+  value areas have nothing to have survived. That also settles a question the module
+  could otherwise only answer badly, since `value_area_low` and `value_area_high` share
+  one `LevelKind` and cannot be told apart from the level alone.
+- **Suppression is keyed (symbol, kind, session)**, not (position_id, kind). A break in
+  March and another in July are two events. `signal_sent` is a separate table for that
+  reason; a sentinel position_id would have meant a foreign key pointing at nothing.
+- **The dashboard route evaluates but never delivers or records.** A page refresh that
+  consumed the once-per-session suppression would leave the scheduled run silent, which
+  is the worst failure an alerting tool has: it still looks like it is working.
+- The composites are only *approximately* independent. Measured lift over independence
+  is 1.4x and 1.6x, because the decline that carves a swing low is the same decline that
+  depresses RSI. Mild, and stated rather than assumed.
 
 - **Rows are stored raw and positions are derived.** Exports overlap, so a re-import
   must be a no-op. Identity is `(source, digest, dup_index)`: the index is there

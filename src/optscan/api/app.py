@@ -34,6 +34,7 @@ from optscan.api.routers import (
     payoff,
     positions,
     scan,
+    signals,
     symbols,
     watchlist,
 )
@@ -117,6 +118,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         levels.router,
         positions.router,
         journal.router,
+        signals.router,
     ):
         app.include_router(router, prefix=API_PREFIX)
 

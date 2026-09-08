@@ -19,6 +19,7 @@ import Levels from "./views/Levels.jsx";
 import Opportunities from "./views/Opportunities.jsx";
 import Payoff from "./views/Payoff.jsx";
 import Positions from "./views/Positions.jsx";
+import Signals from "./views/Signals.jsx";
 import Underlying from "./views/Underlying.jsx";
 import { num } from "./format.js";
 
@@ -36,11 +37,16 @@ const VIEWS = [
   { key: "opportunities", label: "Opportunities" },
   { key: "chain", label: "Chain" },
   { key: "underlying", label: "Underlying" },
+  { key: "signals", label: "Signals" },
   { key: "levels", label: "Levels" },
   { key: "payoff", label: "Payoff" },
   { key: "positions", label: "Positions" },
   { key: "journal", label: "Journal" },
 ];
+
+// Views that are about the whole universe rather than the selected symbol, so the
+// topbar names the view instead of a ticker the panel below is not showing.
+const TITLES = { home: "optscan", browse: "Browse", signals: "Signals" };
 
 export default function App() {
   const health = useAsync(() => api.health(), []);
@@ -202,7 +208,7 @@ export default function App() {
           >
             ☰
           </button>
-          <h1>{view === "home" ? "optscan" : view === "browse" ? "Browse" : symbol || "no symbol"}</h1>
+          <h1>{TITLES[view] || symbol || "no symbol"}</h1>
           {summary.data && <span className="spot">{num(summary.data.spot)}</span>}
           {summary.data && <Provenance provenance={summary.data.provenance} />}
           <ConnectionBadge
@@ -288,6 +294,17 @@ export default function App() {
           )}
 
           {view === "levels" && summary.data && <Levels summary={summary.data} />}
+
+          {/* Not gated on a symbol either: signals span every pinned symbol, and the
+              panel's whole job is to tell you which one to go and look at. */}
+          {!apiDown && view === "signals" && (
+            <Signals
+              onSelect={(name) => {
+                setSymbol(name);
+                setView("underlying");
+              }}
+            />
+          )}
 
           {/* Not gated on a symbol: the portfolio spans every symbol held, and a
               positions page that went blank because the sidebar selection had no

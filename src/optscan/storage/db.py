@@ -357,6 +357,33 @@ MIGRATIONS: tuple[str, ...] = (
     """
     ALTER TABLE vendor_daily ADD COLUMN trade_count INTEGER;
     """,
+    # 9: market signals, which need their own suppression key.
+    #
+    # `alert_sent` is keyed on (position_id, kind) because a position trigger fires once
+    # for the life of that position. A market signal has no position, and "once ever"
+    # is the wrong rule for it: a level break in March and another in July are two
+    # events, not a repeat. So the key carries the session, and the unit of suppression
+    # is one symbol, one kind, one day.
+    #
+    # Reusing `alert_sent` with a sentinel position_id was the alternative and would
+    # have meant a foreign key pointing at nothing and a column that means two things.
+    """
+    CREATE TABLE signal_sent (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        symbol          TEXT NOT NULL,
+        kind            TEXT NOT NULL,
+        session_date    TEXT NOT NULL,
+        fired_at        TEXT NOT NULL,
+        severity        INTEGER NOT NULL,
+        price           REAL,
+        detail          TEXT
+    );
+
+    CREATE UNIQUE INDEX idx_signal_once ON signal_sent (symbol, kind, session_date);
+
+    -- The dashboard's question is "what fired lately", across symbols, newest first.
+    CREATE INDEX idx_signal_recent ON signal_sent (session_date DESC, severity DESC);
+    """,
 )
 
 

@@ -145,6 +145,32 @@ class HomeOut(ApiModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class SignalOut(ApiModel):
+    """One market condition, live or as recorded."""
+
+    symbol: str
+    kind: str
+    session: str
+    severity: int = 1
+    message: str = ""
+    value: float | None = None
+    threshold: float | None = None
+    price: float | None = None
+    #: Set only on rows read back from the record, so the UI can tell a condition that
+    #: holds right now from one that fired and was delivered at some point earlier.
+    fired_at: str | None = None
+
+
+class SignalsOut(ApiModel):
+    """The signal panel payload."""
+
+    signals: list[SignalOut] = Field(default_factory=list)
+    counts: dict[str, int] = Field(default_factory=dict)
+    scanned: int = 0
+    #: What could not be evaluated and why, rather than a short list with no explanation.
+    notes: list[str] = Field(default_factory=list)
+
+
 class WatchlistChangeOut(ApiModel):
     """What adding or removing a symbol actually did."""
 

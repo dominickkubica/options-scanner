@@ -20,7 +20,13 @@ from optscan.screener.config import ScreenConfig
 #: Commands whose runs are logged, so `optscan health` can say whether the work has
 #: happened. Exactly the scheduled jobs: logging `status` or `config` would bury the
 #: rows that matter under rows nobody asked about.
-TRACKED_JOBS = frozenset({"snapshot", "record", "resolve", "backup", "manage"})
+TRACKED_JOBS = frozenset({"snapshot", "record", "resolve", "backup", "manage", "signals"})
+
+#: Where the signal listing changes colour. Presentation only: the severities
+#: themselves live in `analytics.signals`, and these mirror them rather than deciding
+#: anything.
+SIGNAL_URGENT = 4
+SIGNAL_NOTABLE = 3
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -162,6 +168,49 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Positions. Entry is manual and the fill price is required, because it is the one
     # number the tool cannot reconstruct and the one every P/L is measured against.
+    signals = sub.add_parser(
+        "signals",
+        help="Scan every symbol for market conditions worth knowing about.",
+    )
+    signals.add_argument(
+        "symbols",
+        nargs="*",
+        help="Symbols to scan. Defaults to every symbol with stored price history.",
+    )
+    signals.add_argument(
+        "--group",
+        help="Scan one universe group instead, by name.",
+    )
+    signals.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Evaluate and print without delivering or recording. A preview that "
+            "consumed the suppression would leave the real run silent."
+        ),
+    )
+    signals.add_argument(
+        "--min-severity",
+        type=int,
+        default=None,
+        help=(
+            "Deliver at or above this severity. Default 3: level breaks and the two "
+            "composites. Below that a signal waits in the dashboard rather than "
+            "chasing anyone."
+        ),
+    )
+    signals.add_argument(
+        "--all",
+        action="store_true",
+        help="Print every signal found, not just the ones that would be delivered.",
+    )
+    signals.add_argument(
+        "--recent",
+        type=int,
+        metavar="DAYS",
+        help="Instead of scanning, print what has already fired in the last DAYS.",
+    )
+
     position = sub.add_parser("position", help="Track positions you actually hold.")
     position_sub = position.add_subparsers(dest="position_command", required=True)
 
@@ -760,6 +809,108 @@ def _cmd_backup(settings: Settings, args: argparse.Namespace) -> int:
     for note in result.notes:
         print(f"  note: {note}")
     return 0
+
+
+def _cmd_signals(settings: Settings, args: argparse.Namespace) -> int:
+    from datetime import UTC, datetime, timedelta
+
+    from optscan.console import Console
+    from optscan.jobs.signals import DEFAULT_MIN_SEVERITY, run_scan
+    from optscan.storage import db
+    from optscan.storage import signals as store
+
+    console = Console.for_stream(settings.color_mode)
+    threshold = args.min_severity if args.min_severity is not None else DEFAULT_MIN_SEVERITY
+
+    # --recent reads the record instead of evaluating. Kept on the same command rather
+    # than a separate one because the question "what fired" and the question "what is
+    # firing" are the same question a day apart.
+    if args.recent is not None:
+        since = (datetime.now(UTC) - timedelta(days=args.recent)).date()
+        with db.session(settings.sqlite_path) as conn:
+            rows = store.recent_signals(conn, since=since)
+        if not rows:
+            print(f"Nothing has fired since {since}.")
+            return 0
+        for row in rows:
+            print(
+                f"  {row['session']}  [{row['severity']}] {row['symbol']:<6} "
+                f"{row['kind']:<26} {row['message']}"
+            )
+        print()
+        print(f"{len(rows)} signals since {since}.")
+        return 0
+
+    symbols = _signal_symbols(settings, args)
+    if not symbols:
+        print(
+            console.warn(
+                "No symbols to scan. Sync some price history first: `optscan prices sync`."
+            )
+        )
+        return 1
+
+    report = run_scan(
+        settings,
+        symbols,
+        min_severity=threshold,
+        send_alerts=not args.dry_run,
+    )
+
+    shown = [signal for signal in report.found if args.all or signal.severity >= threshold]
+    for signal in sorted(shown, key=lambda s: (-s.severity, s.symbol)):
+        if signal.severity >= SIGNAL_URGENT:
+            tone = "bad"
+        elif signal.severity >= SIGNAL_NOTABLE:
+            tone = "warn"
+        else:
+            tone = "dim"
+        label = console.paint(f"[{signal.severity}]", tone)
+        print(f"  {label} {signal.symbol:<6} {signal.kind.value:<26} {signal.message}")
+
+    if shown:
+        print()
+    print(report.summary())
+
+    if args.dry_run:
+        print(
+            console.dim(
+                "Dry run: nothing was delivered or recorded, so the real run will still fire these."
+            )
+        )
+    elif not args.all and len(report.found) > len(shown):
+        print(
+            console.dim(
+                f"{len(report.found) - len(shown)} more below severity {threshold} "
+                "are in the dashboard. Use --all to see them."
+            )
+        )
+
+    warning = report.warning()
+    if warning:
+        print()
+        print(console.warn(warning))
+    return 0
+
+
+def _signal_symbols(settings: Settings, args: argparse.Namespace) -> list[str]:
+    """What to scan: the arguments, a named group, or everything with stored bars."""
+    if args.symbols:
+        return [symbol.upper() for symbol in args.symbols]
+
+    if args.group:
+        from optscan.universe import load_universe
+
+        groups = load_universe(settings)
+        return list(groups.get(args.group, ()))
+
+    from optscan.storage import db
+
+    with db.session(settings.sqlite_path) as conn:
+        return [
+            row[0]
+            for row in conn.execute("SELECT DISTINCT symbol FROM vendor_daily ORDER BY symbol")
+        ]
 
 
 def _cmd_health(settings: Settings, args: argparse.Namespace) -> int:
@@ -1408,6 +1559,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "backup": _cmd_backup,
         "shortcut": _cmd_shortcut,
         "health": _cmd_health,
+        "signals": _cmd_signals,
         "import": _cmd_import,
         "import-history": _cmd_import_history,
         "prices": _cmd_prices,

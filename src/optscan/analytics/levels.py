@@ -107,6 +107,9 @@ DEFAULT_MAX_P_VALUE = 0.05
 DEFAULT_ATR_PERIOD = 14
 DEFAULT_BOLLINGER_PERIOD = 20
 DEFAULT_BOLLINGER_DEVIATIONS = 2.0
+#: ATRs either side of the EMA for a Keltner channel. 1.5 is the value the indicator's
+#: author specified and the one the frontend draws.
+DEFAULT_KELTNER_MULTIPLE = 1.5
 DEFAULT_VOLUME_BINS = 60
 
 #: A volume bin must reach this share of the busiest bin to count as a high volume
@@ -202,6 +205,22 @@ class BollingerBands:
     def width(self) -> float:
         """Band width as a fraction of the middle. The usual squeeze measure."""
         return (self.upper - self.lower) / self.middle if self.middle > 0 else 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class KeltnerChannels:
+    """An EMA with a band of ATRs either side.
+
+    Kept next to BollingerBands because the pair is only interesting together: one
+    measures the spread of closes, the other the size of the daily range, and the
+    squeeze is the statement that the first has fallen inside the second.
+    """
+
+    middle: float
+    upper: float
+    lower: float
+    period: int
+    multiple: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -334,6 +353,85 @@ def bollinger_bands(
         period=period,
         deviations=deviations,
     )
+
+
+def ema(bars: Sequence[PriceBar], period: int) -> float | None:
+    """Exponential moving average of closes. None when history is shorter than period.
+
+    Seeded with the simple average of the first window rather than the first close, so
+    the series does not spend its early bars converging from an arbitrary value. This
+    matches the frontend's `compute.js` deliberately: the chart draws the channel and
+    the alert fires on it, and the two disagreeing about where the band sits would be
+    a bug nobody could see.
+    """
+    if period < 1:
+        raise ValueError("period must be at least 1")
+    if len(bars) < period:
+        return None
+    k = 2.0 / (period + 1)
+    value = sum(bar.close for bar in bars[:period]) / period
+    for bar in bars[period:]:
+        value = bar.close * k + value * (1 - k)
+    return value
+
+
+def keltner_channels(
+    bars: Sequence[PriceBar],
+    period: int = DEFAULT_BOLLINGER_PERIOD,
+    multiple: float = DEFAULT_KELTNER_MULTIPLE,
+) -> KeltnerChannels | None:
+    """An EMA centre with a band of `multiple` ATRs.
+
+    None unless both the centre and the width exist. A centre line without a width is
+    not a channel, and returning one would be a bare EMA wearing the Keltner label.
+    """
+    middle = ema(bars, period)
+    width = atr(bars, period)
+    if middle is None or width is None:
+        return None
+    return KeltnerChannels(
+        middle=middle,
+        upper=middle + multiple * width,
+        lower=middle - multiple * width,
+        period=period,
+        multiple=multiple,
+    )
+
+
+def rsi(bars: Sequence[PriceBar], period: int = 14) -> float | None:
+    """Relative strength index of the most recent bar, or None without enough history.
+
+    Wilder's recursive smoothing, not a rolling mean. The distinction is not pedantry:
+    a simple mean gives an RSI that disagrees with every other platform by a point or
+    two, which is exactly the size of disagreement nobody investigates and everybody
+    eventually trades on. The chart's JavaScript implementation is seeded and smoothed
+    the same way so the two cannot report different numbers for the same bars.
+
+    Returns the latest value only. Nothing here plots a series; the caller is asking
+    whether a condition holds right now.
+    """
+    closes = [bar.close for bar in bars]
+    if len(closes) < period + 1:
+        return None
+
+    gains: list[float] = []
+    losses: list[float] = []
+    for previous, current in pairwise(closes):
+        change = current - previous
+        gains.append(max(change, 0.0))
+        losses.append(max(-change, 0.0))
+
+    average_gain = sum(gains[:period]) / period
+    average_loss = sum(losses[:period]) / period
+    for index in range(period, len(gains)):
+        average_gain = (average_gain * (period - 1) + gains[index]) / period
+        average_loss = (average_loss * (period - 1) + losses[index]) / period
+
+    # No losses in the window is the definition's limit rather than a divide by zero,
+    # and it is a state a strong trend really reaches.
+    if average_loss == 0:
+        return 100.0
+    return 100.0 - 100.0 / (1 + average_gain / average_loss)
 
 
 def realized_volatility(

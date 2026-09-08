@@ -79,6 +79,12 @@ export const api = {
     request(`/scan${query({ symbols, limit, near_miss: nearMiss || undefined })}`),
   gaps: (symbols) => request(`/gaps${query({ symbols })}`),
   journal: ({ symbol, strategy } = {}) => request(`/journal${query({ symbol, strategy })}`),
+  // Two calls, deliberately not one. `signals` evaluates and delivers nothing, so a
+  // dashboard refresh cannot consume the once-per-session suppression the scheduled
+  // scan relies on. `recentSignals` reads the record of what was actually delivered.
+  signals: (symbol) => request(`/signals${query({ symbol })}`),
+  recentSignals: ({ days, symbol, minSeverity } = {}) =>
+    request(`/signals/recent${query({ days, symbol, min_severity: minSeverity })}`),
   payoff: (body) =>
     request("/payoff", {
       method: "POST",
