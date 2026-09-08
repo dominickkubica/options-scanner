@@ -20,7 +20,19 @@ from optscan.screener.config import ScreenConfig
 #: Commands whose runs are logged, so `optscan health` can say whether the work has
 #: happened. Exactly the scheduled jobs: logging `status` or `config` would bury the
 #: rows that matter under rows nobody asked about.
-TRACKED_JOBS = frozenset({"snapshot", "record", "resolve", "backup", "manage"})
+TRACKED_JOBS = frozenset({"snapshot", "record", "resolve", "backup", "manage", "signals"})
+
+#: Where the signal listing changes colour. Presentation only: the severities
+#: themselves live in `analytics.signals`, and these mirror them rather than deciding
+#: anything.
+SIGNAL_URGENT = 4
+SIGNAL_NOTABLE = 3
+
+#: Imported at module scope only for the argument parser's `choices`. Everything else
+#: the backtest needs is imported inside the handler, so `optscan status` does not pay
+#: for the analytics stack.
+from optscan.analytics.backtest import DEFAULT_COST  # noqa: E402
+from optscan.jobs.backtest import MODES, SIGNIFICANT  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -162,6 +174,116 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Positions. Entry is manual and the fill price is required, because it is the one
     # number the tool cannot reconstruct and the one every P/L is measured against.
+    signals = sub.add_parser(
+        "signals",
+        help="Scan every symbol for market conditions worth knowing about.",
+    )
+    signals.add_argument(
+        "symbols",
+        nargs="*",
+        help="Symbols to scan. Defaults to every symbol with stored price history.",
+    )
+    signals.add_argument(
+        "--group",
+        help="Scan one universe group instead, by name.",
+    )
+    signals.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Evaluate and print without delivering or recording. A preview that "
+            "consumed the suppression would leave the real run silent."
+        ),
+    )
+    signals.add_argument(
+        "--min-severity",
+        type=int,
+        default=None,
+        help=(
+            "Deliver at or above this severity. Default 3: level breaks and the two "
+            "composites. Below that a signal waits in the dashboard rather than "
+            "chasing anyone."
+        ),
+    )
+    signals.add_argument(
+        "--all",
+        action="store_true",
+        help="Print every signal found, not just the ones that would be delivered.",
+    )
+    signals.add_argument(
+        "--recent",
+        type=int,
+        metavar="DAYS",
+        help="Instead of scanning, print what has already fired in the last DAYS.",
+    )
+
+    backtest = sub.add_parser(
+        "backtest",
+        help="Run a strategy against stored history and report what the answer is worth.",
+    )
+    backtest.add_argument(
+        "--list-rules",
+        action="store_true",
+        help="Print the entry rules and their parameters, then exit.",
+    )
+    backtest.add_argument("--name", default="unnamed", help="Label for the run.")
+    backtest.add_argument("--entry", default="every_bar", help="Entry rule name.")
+    backtest.add_argument(
+        "--param",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Entry rule parameter. Repeatable.",
+    )
+    backtest.add_argument("--symbols", nargs="*", default=[], help="Symbols to test.")
+    backtest.add_argument("--group", help="A universe group instead of symbols.")
+    backtest.add_argument(
+        "--mode",
+        default="underlying",
+        choices=MODES,
+        help=(
+            "underlying trades the stock. The option modes model the entry credit from "
+            "stored vendor implied vol and settle exactly against the real close, and "
+            "they refuse any symbol with no stored IV history."
+        ),
+    )
+    backtest.add_argument("--direction", default="long", choices=("long", "short"))
+    backtest.add_argument("--horizon", type=int, default=21, help="Bars held.")
+    backtest.add_argument("--target", type=float, help="Take profit, as a fraction.")
+    backtest.add_argument("--stop", type=float, help="Stop loss, as a fraction.")
+    backtest.add_argument("--cost", type=float, default=DEFAULT_COST, help="Round trip cost.")
+    backtest.add_argument("--dte", type=int, default=30, help="Option mode: days to expiry.")
+    backtest.add_argument(
+        "--offset", type=float, default=0.05, help="Option mode: how far out of the money."
+    )
+    backtest.add_argument(
+        "--slippage",
+        type=float,
+        default=0.05,
+        help="Option mode: fraction of the credit given up to the spread.",
+    )
+    backtest.add_argument("--draws", type=int, default=500, help="Null draws.")
+    backtest.add_argument("--seed", type=int, default=0)
+    backtest.add_argument(
+        "--sweep",
+        metavar="KEY=V1,V2,V3",
+        help=(
+            "Try several values of one entry parameter. Reports the winner alongside "
+            "what the best of that many cells is worth by chance, which is the only "
+            "reading of a sweep that survives contact with statistics."
+        ),
+    )
+    backtest.add_argument(
+        "--spec", help="Read the whole strategy from a JSON file instead of flags."
+    )
+    backtest.add_argument("--save", help="Write the full result to a JSON file.")
+    backtest.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the result as JSON rather than a table.",
+    )
+    backtest.add_argument("--trades", action="store_true", help="Also print every trade.")
+
     position = sub.add_parser("position", help="Track positions you actually hold.")
     position_sub = position.add_subparsers(dest="position_command", required=True)
 
@@ -760,6 +882,285 @@ def _cmd_backup(settings: Settings, args: argparse.Namespace) -> int:
     for note in result.notes:
         print(f"  note: {note}")
     return 0
+
+
+def _parse_params(pairs: list[str]) -> dict:
+    """KEY=VALUE strings into typed parameters.
+
+    Numbers are parsed as numbers, because a threshold that arrived as the string "30"
+    would compare as a string against a float and silently never fire.
+    """
+    out: dict = {}
+    for pair in pairs:
+        if "=" not in pair:
+            raise ValueError(f"--param needs KEY=VALUE, got {pair!r}")
+        key, _, raw = pair.partition("=")
+        try:
+            out[key] = int(raw) if raw.lstrip("-").isdigit() else float(raw)
+        except ValueError:
+            out[key] = raw
+    return out
+
+
+def _strategy_from(args: argparse.Namespace):
+    from optscan.jobs.backtest import Strategy
+
+    if args.spec:
+        import json as json_module
+
+        payload = json_module.loads(Path(args.spec).read_text(encoding="utf-8"))
+        return Strategy.from_dict(payload)
+
+    return Strategy(
+        name=args.name,
+        symbols=[s.upper() for s in args.symbols],
+        group=args.group,
+        entry=args.entry,
+        entry_params=_parse_params(args.param),
+        direction=args.direction,
+        horizon=args.horizon,
+        target=args.target,
+        stop=args.stop,
+        cost=args.cost,
+        mode=args.mode,
+        dte=args.dte,
+        offset=args.offset,
+        slippage=args.slippage,
+        draws=args.draws,
+        seed=args.seed,
+    )
+
+
+def _cmd_backtest(settings: Settings, args: argparse.Namespace) -> int:
+    import json as json_module
+
+    from optscan.analytics import rules as rule_registry
+    from optscan.console import Console
+    from optscan.jobs.backtest import run, run_sweep
+
+    console = Console.for_stream(settings.color_mode)
+
+    if args.list_rules:
+        for row in rule_registry.describe():
+            params = ", ".join(f"{k}={v}" for k, v in row["params"].items()) or "none"
+            print(f"  {row['name']:<16} {row['label']}")
+            print(f"  {'':<16} {row['about']}")
+            print(f"  {'':<16} parameters: {params}\n")
+        return 0
+
+    try:
+        strategy = _strategy_from(args)
+        strategy.validate()
+    except (ValueError, OSError) as error:
+        print(console.bad(str(error)))
+        return 1
+
+    if args.sweep:
+        key, _, values = args.sweep.partition("=")
+        if not values:
+            print(console.bad("--sweep needs KEY=V1,V2,V3"))
+            return 1
+        try:
+            result = run_sweep(settings, strategy, key, [v.strip() for v in values.split(",")])
+        except ValueError as error:
+            print(console.bad(str(error)))
+            return 1
+        if args.json:
+            print(json_module.dumps(result.as_dict(), indent=2))
+            return 0
+        print(f"  {'cell':<24} {'mean':>9} {'trades':>7} {'independent':>12}")
+        for cell in result.cells:
+            trades = cell.stats.trades if cell.stats else 0
+            effective = cell.stats.effective_sample if cell.stats else 0
+            # A cell that never fired has no mean. Printing the sentinel as "-inf%" is
+            # noise where "no trades" is the actual answer.
+            mean = f"{cell.mean_return:+.3%}" if trades else "no trades"
+            print(f"  {cell.label:<24} {mean:>9} {trades:>7} {effective:>12}")
+        print()
+        print(console.warn(result.note))
+        return 0
+
+    try:
+        result = run(settings, strategy)
+    except (ValueError, OSError) as error:
+        print(console.bad(str(error)))
+        return 1
+
+    payload = result.as_dict()
+    payload["strategy"] = strategy.to_dict()
+
+    if args.save:
+        Path(args.save).write_text(json_module.dumps(payload, indent=2), encoding="utf-8")
+
+    if args.json:
+        # Trades are dropped from the printed JSON unless asked for: a decade across
+        # three hundred symbols is tens of thousands of rows and nobody reads them in a
+        # terminal. --save keeps them.
+        if not args.trades:
+            payload.pop("trades", None)
+        print(json_module.dumps(payload, indent=2))
+        return 0
+
+    _print_backtest(console, strategy, result, show_trades=args.trades)
+    return 0
+
+
+def _print_backtest(console, strategy, result, *, show_trades: bool) -> None:
+    from optscan.analytics.backtest import MIN_BLOCKS_FOR_A_CLAIM
+
+    stats = result.stats
+    if stats is None:
+        for note in result.notes:
+            print(console.warn(note))
+        return
+
+    print(f"  {strategy.name}: {strategy.entry} {strategy.entry_params or ''}")
+    print(
+        f"  mode {strategy.mode}, horizon {strategy.horizon}, "
+        f"{len(result.skipped)} symbols skipped\n"
+    )
+
+    print(f"  trades              {stats.trades}")
+    label = "independent blocks"
+    tone = console.good if stats.effective_sample >= MIN_BLOCKS_FOR_A_CLAIM else console.warn
+    print(f"  {label:<19} {tone(str(stats.effective_sample))}")
+    print(f"  mean per trade      {stats.mean_return:+.3%}")
+    print(f"  median              {stats.median_return:+.3%}")
+    print(f"  win rate            {stats.win_rate:.0%}")
+    print(f"  best / worst        {stats.best:+.1%} / {stats.worst:+.1%}")
+
+    edge = result.edge
+    if edge is not None:
+        print()
+        print(
+            f"  random-entry null   {edge.null_mean:+.3%} "
+            f"(5-95%: {edge.null_low:+.2%} to {edge.null_high:+.2%})"
+        )
+        verdict = console.good if edge.p_value <= SIGNIFICANT else console.warn
+        print(f"  edge over null      {edge.edge:+.3%}   p={verdict(f'{edge.p_value:.3f}')}")
+
+    if result.by_year:
+        print(f"\n  {'year':<6} {'trades':>7} {'mean':>9} {'win':>6} {'total':>10}")
+        for row in result.by_year:
+            print(
+                f"  {row.year:<6} {row.trades:>7} {row.mean_return:>+9.3%} "
+                f"{row.win_rate:>6.0%} {row.total_return:>+10.1%}"
+            )
+
+    if show_trades:
+        print(f"\n  {'symbol':<8} {'entry':<12} {'exit':<12} {'return':>9} reason")
+        for trade in result.trades:
+            print(
+                f"  {trade.symbol:<8} {trade.entry_date.isoformat():<12} "
+                f"{trade.exit_date.isoformat():<12} {trade.net_return:>+9.2%} "
+                f"{trade.reason.value}"
+            )
+
+    print()
+    for note in result.notes:
+        print(console.warn(note))
+
+
+def _cmd_signals(settings: Settings, args: argparse.Namespace) -> int:
+    from datetime import UTC, datetime, timedelta
+
+    from optscan.console import Console
+    from optscan.jobs.signals import DEFAULT_MIN_SEVERITY, run_scan
+    from optscan.storage import db
+    from optscan.storage import signals as store
+
+    console = Console.for_stream(settings.color_mode)
+    threshold = args.min_severity if args.min_severity is not None else DEFAULT_MIN_SEVERITY
+
+    # --recent reads the record instead of evaluating. Kept on the same command rather
+    # than a separate one because the question "what fired" and the question "what is
+    # firing" are the same question a day apart.
+    if args.recent is not None:
+        since = (datetime.now(UTC) - timedelta(days=args.recent)).date()
+        with db.session(settings.sqlite_path) as conn:
+            rows = store.recent_signals(conn, since=since)
+        if not rows:
+            print(f"Nothing has fired since {since}.")
+            return 0
+        for row in rows:
+            print(
+                f"  {row['session']}  [{row['severity']}] {row['symbol']:<6} "
+                f"{row['kind']:<26} {row['message']}"
+            )
+        print()
+        print(f"{len(rows)} signals since {since}.")
+        return 0
+
+    symbols = _signal_symbols(settings, args)
+    if not symbols:
+        print(
+            console.warn(
+                "No symbols to scan. Sync some price history first: `optscan prices sync`."
+            )
+        )
+        return 1
+
+    report = run_scan(
+        settings,
+        symbols,
+        min_severity=threshold,
+        send_alerts=not args.dry_run,
+    )
+
+    shown = [signal for signal in report.found if args.all or signal.severity >= threshold]
+    for signal in sorted(shown, key=lambda s: (-s.severity, s.symbol)):
+        if signal.severity >= SIGNAL_URGENT:
+            tone = "bad"
+        elif signal.severity >= SIGNAL_NOTABLE:
+            tone = "warn"
+        else:
+            tone = "dim"
+        label = console.paint(f"[{signal.severity}]", tone)
+        print(f"  {label} {signal.symbol:<6} {signal.kind.value:<26} {signal.message}")
+
+    if shown:
+        print()
+    print(report.summary())
+
+    if args.dry_run:
+        print(
+            console.dim(
+                "Dry run: nothing was delivered or recorded, so the real run will still fire these."
+            )
+        )
+    elif not args.all and len(report.found) > len(shown):
+        print(
+            console.dim(
+                f"{len(report.found) - len(shown)} more below severity {threshold} "
+                "are in the dashboard. Use --all to see them."
+            )
+        )
+
+    warning = report.warning()
+    if warning:
+        print()
+        print(console.warn(warning))
+    return 0
+
+
+def _signal_symbols(settings: Settings, args: argparse.Namespace) -> list[str]:
+    """What to scan: the arguments, a named group, or everything with stored bars."""
+    if args.symbols:
+        return [symbol.upper() for symbol in args.symbols]
+
+    if args.group:
+        from optscan.universe import load_universe
+
+        groups = load_universe(settings)
+        return list(groups.get(args.group, ()))
+
+    from optscan.storage import db
+
+    with db.session(settings.sqlite_path) as conn:
+        return [
+            row[0]
+            for row in conn.execute("SELECT DISTINCT symbol FROM vendor_daily ORDER BY symbol")
+        ]
 
 
 def _cmd_health(settings: Settings, args: argparse.Namespace) -> int:
@@ -1408,6 +1809,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "backup": _cmd_backup,
         "shortcut": _cmd_shortcut,
         "health": _cmd_health,
+        "signals": _cmd_signals,
+        "backtest": _cmd_backtest,
         "import": _cmd_import,
         "import-history": _cmd_import_history,
         "prices": _cmd_prices,

@@ -78,6 +78,16 @@ PRICES_DELAY_MINUTES = 20
 #: and any day the machine was off, short enough that it is a handful of requests.
 PRICE_REFRESH_DAYS = 10
 
+#: The signal scan runs after the price sync, because it reads stored bars and a scan
+#: over yesterday's closes is a scan of yesterday. Fifteen minutes rather than five: if
+#: the sync overruns, the scan keys its suppression on the older session and today's
+#: signals arrive a day late, which is recoverable but pointless to risk for ten
+#: minutes. The scan itself is a couple of seconds and touches no network at all.
+#:
+#: It also has to miss `record` at +30 and `backup` at +45. Landing on the backup would
+#: put this job's writes either side of the copy depending on which finished first.
+SIGNALS_DELAY_MINUTES = PRICES_DELAY_MINUTES + 15
+
 MINUTES_PER_HOUR = 60
 MINUTES_PER_DAY = 24 * MINUTES_PER_HOUR
 
@@ -209,6 +219,23 @@ def jobs(settings: Settings) -> tuple[ScheduledJob, ...]:
                 "Runs after the capture because it scores the stored snapshot, and a "
                 "candidate never logged when it was scored cannot be settled later."
             ),
+        ),
+        ScheduledJob(
+            key="signals",
+            task_name="OptscanDailySignals",
+            arguments="-m optscan signals",
+            at=shift(settings.snapshot_time, SIGNALS_DELAY_MINUTES),
+            summary=(
+                "Evaluate every universe symbol for level breaks, squeezes and volume "
+                "surges, and deliver what is new. Reads only stored bars, so it needs "
+                "no credentials and contacts nothing. Safe to run repeatedly: a signal "
+                "is delivered once per symbol, kind and session. Runs after the price "
+                "sync, because a scan over stale bars is a scan of yesterday."
+            ),
+            # Off by default. It depends on the price sync, which is itself off by
+            # default because it needs Alpaca keys, and a scan of bars nobody is
+            # refreshing would quietly report the same stale day forever.
+            default_install=False,
         ),
         ScheduledJob(
             key="backup",

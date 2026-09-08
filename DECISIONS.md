@@ -2570,3 +2570,244 @@ Verified numerically rather than by looking at it: RSI was enabled in the browse
 its chip read **53.95**, against **53.95** from a reference implementation written
 separately in the console over the same 126 bars, producing 112 values with no leading
 ramp.
+
+## 2026-09-08: algo-style alerts, and the twelfth instance
+
+### The question a signal module has to answer first
+
+Not "is this condition interesting" but "how often does it hold anyway". An alert that
+fires often is not an alert, it is a log line that trains its reader to ignore the
+channel, and a muted alerting tool is worse than none because it is still believed to
+be working. That argument is already in `alerts.py`; what was missing was the
+measurement behind it.
+
+So nothing shipped on a guessed threshold. `analytics/signals.py` is six detectors, and
+every cut in it was chosen against a dump of the raw quantities over **44,113
+symbol-days**: 294 symbols, one session in five across three years, levels rebuilt from
+a trailing two years at each sample with no lookahead. Recording the quantities rather
+than the verdicts meant sweeping a threshold cost nothing and no cut was picked by the
+same pass that measured it.
+
+At the defaults the whole universe produces about **nine signals a day, two of them at
+severity 3 or above**. That is a channel someone reads.
+
+### The fixed threshold was the trap, and it was the familiar one
+
+The obvious squeeze is "Bollinger width below four percent of price". Measured, that
+detector fires on **0% of days for the tenth-percentile symbol and 12% for the
+ninetieth**. It is not measuring compression, it is measuring whether the ticker is a
+utility or a biotech — the same shape as every constant-offset instance before it,
+wearing volatility as its costume.
+
+The standard squeeze avoids it by construction: Bollinger bands entirely **inside**
+Keltner channels compares the spread of closes to the same symbol's own average true
+range, so the comparison normalises itself. The measured spread under that rule is 3%
+to 16% around a median of 9% — still a spread, but a spread of behaviour rather than of
+identity.
+
+### A state is not an event, and per-day suppression cannot fix that
+
+The first measurement had the squeeze firing 27.8 times a day, which made no sense for
+a rare condition until the obvious thing surfaced: **a squeeze runs a median of 4
+sessions and up to 41**. It was firing every day it held. The once-per-symbol-per-kind-
+per-session key is right and could not help, because each of those days legitimately is
+a different day.
+
+Edge triggering — fire on the transition into compression, not while in it — cut it
+6.0x, from 10.44% of symbol-days to 1.75%. Level breaks needed no such fix; a crossing
+is already an event.
+
+### The twelfth instance, found by running it
+
+The first live run reported `TRUE` breaking a swing high. Its last stored session was
+**2026-01-21**, eight months earlier.
+
+Every signal here is defined on the most recent bar, so a symbol whose history stopped
+updating reports its final session forever, and reports it as though it were today.
+Eight universe symbols had stopped trading between 2024 and early 2026, and they
+produced **five of the fifteen signals**: LTHM at 5.8x volume, TRUE at 15.6x, PLL at
+5.5x. Those are not surges. They are the last day of trading before an acquisition
+closed, which is the highest volume day a ticker ever has. A third of the output was
+archaeology presented as news.
+
+The guard compares a symbol's last session to **the newest session held anywhere in the
+database**, not to today's date. The calendar does not know which weekdays were
+holidays, and a wall-clock reference would declare the entire universe stale every
+morning until the price sync landed. After the guard: 286 symbols scanned, 9 signals,
+the 8 dead tickers named in the report rather than silently dropped.
+
+### Rarity is a conjunction, and the conjunction was checked rather than assumed
+
+The composites require two conditions at once — RSI at an extreme *and* price at a
+swing level that beat its own significance test. The argument for that being rare is
+that two independent conditions at 10% coincide at 1%, and the argument is worth
+nothing if the halves are correlated.
+
+Measured: the composites fire **1.4x and 1.6x** more often than independence predicts,
+because the decline that carves a swing low is the same decline that depresses RSI. A
+mild positive lift, not the tenfold one that would mean the two halves were the same
+condition wearing different names. So the docstring says 1.4x rather than claiming
+independence it does not have.
+
+The related trap was avoided by omission: "oversold **and** at the lower Bollinger
+band" is not offered, because RSI and band position are both functions of the same
+recent closes. That is one condition counted twice.
+
+### Only a level with a p-value may raise an alert
+
+`Level.p_value` is None for the kinds where there is nothing to test — a round number
+has no touch count, and a volume node's height is not a count of events. Value areas
+are in that group, which turned out to settle a design question rather than merely
+exclude a case: `value_area_low` and `value_area_high` share one `LevelKind`, so a
+level alert could not tell a floor from a ceiling even if it wanted to. Support means a
+swing low that beat chance; resistance means a swing high that did.
+
+An earlier draft had value areas in the support and resistance predicates, which was
+dead code advertising a capability it did not have.
+
+### Two smaller decisions
+
+**A level that broke does not also report as approached.** Price is necessarily near a
+line it just closed through, so reporting both is one event told twice — and the
+composite goes with it, because closing *through* support is a breakdown, not a bounce,
+and "oversold at support" would invert what happened. A test pins this; it was found by
+a test failing on a fixture whose level sat exactly on the last close.
+
+**The dashboard route evaluates and delivers nothing.** A page refresh that consumed
+the once-per-session suppression would leave the scheduled run silent — the worst
+failure this kind of tool has, because it still looks like it is working.
+
+### Plumbing
+
+`Alert` now carries either a position `Trigger` or a market `Signal`, with
+`position_id: int | None`. None rather than a sentinel zero, so a reader of
+`alerts.jsonl` can tell "no position" from "position 0" and no foreign key points at
+nothing; the key is omitted from the payload entirely for a market alert, so existing
+rows keep exactly the shape they had. Suppression lives in a new `signal_sent` table
+keyed `(symbol, kind, session)` — migration 9 — because a break in March and another in
+July are two events rather than a repeat.
+
+`ema` and `keltner_channels` were added to `analytics/levels.py`, seeded the same way
+the frontend seeds them. Verified against the JavaScript the chart actually draws:
+EMA, ATR, Keltner and RSI agree to the last bit, Bollinger to 1e-12 (the JS carries a
+rolling sum of squares, Python re-sums the window). The chart and the alert cannot
+disagree about where a band sits, which matters when one draws the line and the other
+sends mail about it.
+
+1536 tests pass. The new modules are at 90% with the router at 100%; the aggregate
+moved 83 to 84.
+
+## 2026-09-08: a backtester, and four ways it tried to lie
+
+### The data decided the scope, not the request
+
+The ask was a backtesting tab for strategies. What is actually testable came out of one
+query: 294 symbols and ten years of daily bars, historical implied volatility for **two**
+symbols, and nine stored option chain captures.
+
+Nine captures cannot backtest anything. So underlying rules run on the full universe with
+real data, and the option modes run on QQQ and AAPL and **refuse everywhere else**. The
+refusal is a feature and it is enforced in code: the obvious workaround is to substitute
+realized volatility for implied, and that is not a degraded approximation, it is the
+removal of the quantity being measured. The implied-to-realized gap *is* the variance
+risk premium; pricing entry at realized vol prices it at fair value, where expected
+profit is zero by construction. A backtest built that way reports no edge for a strategy
+that has one, and the next move is always to fudge it. `require_implied_vol` raises.
+
+What *can* be done honestly is better than it sounds. Held to expiry, a short option's
+profit is `credit - intrinsic at expiry`, and the second term is exact because the
+underlying's path is real stored history. Only the fill is modelled.
+
+### Four ways a backtest lies, and the guard for each
+
+**It compares against zero.** A long rule over the last decade made money because the
+market rose. Every number is measured against a null instead.
+
+**It counts overlapping trades as independent.** The unit is a block, not a row.
+
+**It is the best of many tries.** `sweep` reports the winner against the best-of-N under
+the same null.
+
+**It trades on information it did not have.** Entries fill at the **next bar's open**. A
+rule reading today's close cannot be filled at today's close, and for any close-based
+rule that delay is most of the difference between a backtest and a fantasy.
+
+Two smaller ones worth recording. A bar that hits both the target and the stop is booked
+as the **stop**, because the intrabar order is unknowable and assuming the good one is a
+few basis points a trade that never existed. And a trade that has not finished inside the
+stored history is **dropped** rather than marked to market, because keeping it fills the
+most recent weeks with truncated winners, which is exactly the period a reader studies
+hardest.
+
+### The null was wrong the first time, and the way it was wrong is the interesting part
+
+The first null drew fresh random entry days per symbol, matched on count and horizon. It
+looked principled and it is far too generous on a correlated universe.
+
+A rule that fires across ninety-eight technology names in the same week produces a mean
+with the variance of roughly **one** observation, because those names share almost all of
+their variance. A null that scatters each symbol's entries independently averages that
+co-movement away and produces a mean with the variance of ninety-eight. Comparing a noisy
+number against a stable one clears the bar almost regardless of merit.
+
+The replacement is a **circular shift of the whole entry pattern**: every symbol's entries
+move by the same number of bars, wrapping at the end. That preserves the trade count per
+symbol, the clustering in time and the synchronisation across symbols, and destroys only
+the alignment between the rule and what the market did next — which is the thing on trial
+and the only thing that should be destroyed.
+
+`effective_sample` had the same shape of error. It keyed on (symbol, block), which sounds
+more careful and measures nothing: with overlapping entries suppressed, consecutive
+trades on one symbol are already at least a horizon apart, so each lands in its own block
+and the count comes back equal to the number of trades. On a real run it reported 9,606
+independent observations from 9,606 trades. Pooling by calendar block across symbols gives
+106, and 106 is the number that belongs next to a claim.
+
+### The +2,737,313 percent year
+
+The first per-year table reported 2025 at +2,737,313%. The equity curve multiplied every
+trade's return together, which treats them as a sequence of bets each staking the whole
+account. They are not a sequence: a rule firing across ninety-eight symbols opens
+ninety-eight concurrent positions, and compounding those fabricates leverage of about
+ninety-eight to one. The absurd number was the giveaway; a subtler version of the same
+error at three symbols would have passed for a good year.
+
+An equity curve needs a capital model, so there is one now and it is stated rather than
+implied: hold every trade exiting in a month at equal weight, compound the months. One
+point per month, not per trade.
+
+### What it says about this tool's own signals
+
+The honest part of building this was pointing it at the signals shipped the same day.
+
+None of the indicator rules beat the null on the tech group at a 21 day horizon.
+`rsi_below` came closest at +3.26% against a null of +2.45%, a margin of +0.79% inside a
+null whose 5th-to-95th range ran from +0.86% to +4.59%, p=0.244. The squeeze and the
+overbought rules came out slightly negative. `every_bar` returned an edge of exactly
++0.000%, which is the sanity check working.
+
+Selling 5% out of the money 30 day puts on QQQ and AAPL won **88%** of the time for
+**+0.12% of collateral** per trade, and went **negative at 15% slippage**. That last line
+is the most useful output the tool produced all day: the entire margin of the strategy
+sits inside plausible transaction costs.
+
+And a sweep of seven RSI thresholds picked 20 as the winner at +9.23%, against +4.69% for
+the best of seven cells under the null — on **five trades in four independent blocks**.
+The report now says that in the note, because a tighter parameter selects a rarer
+condition, so the winning cell is very nearly always the one with the least evidence
+behind it.
+
+None of that is a reason to stop. It is a reason to have built the null first.
+
+### Plumbing
+
+`rules.py` holds rolling indicators because calling `levels.py`'s scalar forms once per
+bar is quadratic: 2,500 sessions across 294 symbols is about four billion operations for
+a single pass's worth of question. That makes a second implementation of the same
+arithmetic, which is a standing hazard rather than a tidy separation, so
+`tests/test_rules.py` pins every one against its scalar twin at several points in the
+series — the same check already run between `levels.py` and the frontend's `compute.js`.
+
+`optscan backtest --json` exists so an agent can run one and read the result.
+
+1,608 tests pass. The new modules are at 89%.
