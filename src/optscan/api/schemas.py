@@ -299,11 +299,26 @@ class WatchlistChangeOut(ApiModel):
     )
 
 
+class QuoteOut(ApiModel):
+    """The last stored close and the move into it, in both dollars and percent."""
+
+    last: float
+    change: float | None = None
+    change_pct: float | None = None
+
+
 class WatchlistOut(ApiModel):
     symbols: list[str]
     captured: dict[str, date | None] = Field(
         default_factory=dict,
         description="Most recent stored session per symbol, or null if never captured.",
+    )
+    quotes: dict[str, QuoteOut] = Field(
+        default_factory=dict,
+        description=(
+            "Last close and daily move per symbol, from stored bars. Absent for a "
+            "symbol with no price history."
+        ),
     )
 
 

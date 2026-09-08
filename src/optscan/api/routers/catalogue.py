@@ -42,27 +42,41 @@ log = get_logger("optscan.api.catalogue")
 MAX_RESULTS = 200
 
 
-def _last_moves(settings: Settings, symbols: list[str]) -> dict[str, tuple[float, float | None]]:
-    """Last stored close and the percent move into it, per symbol.
+def last_quotes(settings: Settings, symbols: list[str]) -> dict[str, dict]:
+    """Last stored close, and the move into it in both dollars and percent.
 
     From `vendor_daily` rather than a quote, for three reasons: it costs one query for
     the whole watchlist instead of a request per symbol, it works when the market is
     shut and when no provider is configured, and it cannot be mistaken for live because
     the row it came from is dated and the UI shows that date.
+
+    Both forms of the change are returned rather than one, because the caller lets a
+    reader switch between them and deriving one from the other in the browser means the
+    rounding happens twice in different places.
     """
     if not symbols:
         return {}
     placeholders = ",".join("?" * len(symbols))
     rows = db_moves(settings, placeholders, symbols)
-    out: dict[str, tuple[float, float | None]] = {}
+    out: dict[str, dict] = {}
     for symbol, close, previous in rows:
         if close is None:
             continue
-        change = None
-        if previous:
-            change = (close - previous) / previous
-        out[symbol] = (close, change)
+        change = None if not previous else close - previous
+        out[symbol] = {
+            "last": close,
+            "change": change,
+            "change_pct": None if change is None else change / previous,
+        }
     return out
+
+
+def _last_moves(settings: Settings, symbols: list[str]) -> dict[str, tuple[float, float | None]]:
+    """The shape the catalogue rows already expect: (close, percent move)."""
+    return {
+        symbol: (quote["last"], quote["change_pct"])
+        for symbol, quote in last_quotes(settings, symbols).items()
+    }
 
 
 def db_moves(settings: Settings, placeholders: str, symbols: list[str]):

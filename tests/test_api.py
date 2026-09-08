@@ -570,3 +570,71 @@ def test_a_built_frontend_is_mounted_with_a_client_side_route_fallback(
         assert "optscan" in client.get("/payoff/SPY").text
         # The API still wins over the catch all.
         assert client.get("/api/health").json()["status"] == "ok"
+
+
+def test_the_watchlist_carries_a_quote_for_every_symbol_with_prices(tmp_settings):
+    """The pinned sidebar reads price and daily move from here.
+
+    One query for the whole list rather than one request per symbol, because this
+    endpoint loads on every page.
+    """
+    from datetime import date, timedelta
+
+    from fastapi.testclient import TestClient
+
+    from optscan.api.app import create_app
+    from optscan.models.vendor import VendorDailyBar
+    from optscan.storage import db
+    from optscan.storage.vendor import import_daily_bars
+
+    with db.session(tmp_settings.sqlite_path) as conn:
+        db.seed_watchlist(conn, ["ZZZ"])
+        base = date(2026, 9, 4)
+        import_daily_bars(
+            conn,
+            [
+                VendorDailyBar(
+                    source="test",
+                    symbol="ZZZ",
+                    session_date=base - timedelta(days=1),
+                    open=100.0,
+                    high=100.0,
+                    low=100.0,
+                    close=100.0,
+                    volume=1,
+                ),
+                VendorDailyBar(
+                    source="test",
+                    symbol="ZZZ",
+                    session_date=base,
+                    open=110.0,
+                    high=110.0,
+                    low=110.0,
+                    close=110.0,
+                    volume=1,
+                ),
+            ],
+        )
+
+    payload = TestClient(create_app(tmp_settings)).get("/api/watchlist").json()
+    quote = payload["quotes"]["ZZZ"]
+    assert quote["last"] == 110.0
+    assert quote["change"] == pytest.approx(10.0)
+    # Both forms come from the server so the rounding happens once, rather than the
+    # browser deriving one from the other.
+    assert quote["change_pct"] == pytest.approx(0.10)
+
+
+def test_a_symbol_with_no_price_history_has_no_quote(tmp_settings):
+    """Absent rather than zero: no history is ignorance, not a flat day."""
+    from fastapi.testclient import TestClient
+
+    from optscan.api.app import create_app
+    from optscan.storage import db
+
+    with db.session(tmp_settings.sqlite_path) as conn:
+        db.seed_watchlist(conn, ["NOPE"])
+
+    payload = TestClient(create_app(tmp_settings)).get("/api/watchlist").json()
+    assert "NOPE" in payload["symbols"]
+    assert "NOPE" not in payload["quotes"]

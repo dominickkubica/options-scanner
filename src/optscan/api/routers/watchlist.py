@@ -11,6 +11,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from optscan.api.deps import SettingsDep
+from optscan.api.routers.catalogue import last_quotes
 from optscan.api.schemas import WatchlistOut
 from optscan.catalogue import last_capture
 from optscan.storage import db
@@ -27,4 +28,7 @@ def watchlist(settings: SettingsDep) -> WatchlistOut:
     return WatchlistOut(
         symbols=symbols,
         captured={symbol: last_capture(settings, symbol) for symbol in symbols},
+        # One query for the whole list rather than one per symbol, which matters here
+        # because this endpoint loads on every page.
+        quotes=last_quotes(settings, symbols),
     )

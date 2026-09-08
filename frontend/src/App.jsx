@@ -50,6 +50,54 @@ const VIEWS = [
 
 // Views that are about the whole universe rather than the selected symbol, so the
 // topbar names the view instead of a ticker the panel below is not showing.
+//: The three things the pinned column can show, in the order the control cycles them.
+//:
+//: Price first because it is the one people read without thinking, then the move in
+//: dollars, then in percent. The dollar and percent forms both come from the server
+//: rather than one being derived from the other in here, so the rounding happens once.
+const asPercent = (q) =>
+  q.change_pct === null || q.change_pct === undefined
+    ? "-"
+    : `${q.change_pct >= 0 ? "+" : ""}${(q.change_pct * 100).toFixed(2)}%`;
+
+const asChange = (q) =>
+  q.change === null || q.change === undefined
+    ? "-"
+    : `${q.change >= 0 ? "+" : ""}${num(q.change)}`;
+
+const QUOTE_MODES = {
+  price: {
+    title: "last price",
+    render: (q) => num(q.last),
+    secondary: asPercent,
+  },
+  change: {
+    title: "change on the day, in dollars",
+    render: asChange,
+    secondary: asPercent,
+  },
+  percent: {
+    title: "change on the day, in percent",
+    render: asPercent,
+    // The percent is already in the pill, so the line underneath shows the price
+    // instead. Repeating the same number twice would waste the row, and the price is
+    // the thing you still want to know while reading a percent.
+    secondary: (q) => num(q.last),
+  },
+};
+
+const QUOTE_ORDER = ["price", "change", "percent"];
+const QUOTE_STORAGE_KEY = "optscan.pinned.mode";
+
+function readQuoteMode() {
+  try {
+    const stored = window.localStorage.getItem(QUOTE_STORAGE_KEY);
+    return QUOTE_ORDER.includes(stored) ? stored : "price";
+  } catch {
+    return "price";
+  }
+}
+
 const TITLES = {
   home: "optscan",
   browse: "Browse",
@@ -71,6 +119,20 @@ export default function App() {
   // Drawer state. Only has an effect below the mobile breakpoint, where the
   // sidebar is off canvas; on a wide screen the class is inert.
   const [navOpen, setNavOpen] = useState(false);
+  // Which quantity the pinned list shows. Remembered per browser: it is a reading
+  // preference, and being asked to set it again on every reload is the kind of small
+  // friction that makes somebody stop using the control.
+  const [quoteMode, setQuoteMode] = useState(readQuoteMode);
+
+  const nextQuoteMode = () => {
+    const next = QUOTE_ORDER[(QUOTE_ORDER.indexOf(quoteMode) + 1) % QUOTE_ORDER.length];
+    try {
+      window.localStorage.setItem(QUOTE_STORAGE_KEY, next);
+    } catch {
+      // A browser refusing storage still gets the change for this session.
+    }
+    return next;
+  };
 
   // Subscribed only while a view that can actually show live numbers is open. A
   // stream held open behind the payoff diagram would spend the request budget
@@ -160,19 +222,56 @@ export default function App() {
           <div className="symbol-list">
             {(watchlist.data?.symbols || []).map((name) => {
               const captured = watchlist.data.captured[name];
+              const quote = watchlist.data.quotes?.[name];
+              // The pill's colour always follows the day's direction, even in price
+              // mode where the number itself carries no sign. That is what makes the
+              // column scannable: the colour answers "which way" before the eye has
+              // read a single digit.
+              const dir =
+                quote?.change === null || quote?.change === undefined
+                  ? null
+                  : quote.change >= 0
+                    ? "up"
+                    : "down";
+              const mode = QUOTE_MODES[quoteMode];
               return (
-                <button
+                <div
                   key={name}
-                  type="button"
-                  className={`symbol-btn ${name === symbol ? "active" : ""} ${
+                  className={`symbol-row ${name === symbol ? "active" : ""} ${
                     captured ? "" : "empty"
                   }`}
-                  onClick={() => setSymbol(name)}
-                  title={captured ? `last captured ${captured}` : "never captured"}
                 >
-                  {name}
-                  <span className="captured">{captured || "no data"}</span>
-                </button>
+                  <button
+                    type="button"
+                    className="symbol-btn"
+                    onClick={() => setSymbol(name)}
+                    title={
+                      captured ? `chains captured ${captured}` : "no chains captured"
+                    }
+                  >
+                    {name}
+                  </button>
+                  {quote ? (
+                    /* A sibling of the symbol button rather than inside it: a button
+                       nested in a button is invalid, and the browser does not deliver
+                       the inner click reliably. */
+                    <button
+                      type="button"
+                      className="quote-stack"
+                      onClick={() => setQuoteMode(nextQuoteMode)}
+                      title={`Showing ${mode.title}. Click to cycle.`}
+                    >
+                      <span className={`quote-pill ${dir || "flat"}`}>
+                        {mode.render(quote)}
+                      </span>
+                      <span className={`quote-sub ${dir || "flat"}`}>
+                        {mode.secondary(quote)}
+                      </span>
+                    </button>
+                  ) : (
+                    <span className="captured">no data</span>
+                  )}
+                </div>
               );
             })}
           </div>
