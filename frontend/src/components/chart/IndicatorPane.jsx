@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CrosshairMode, LineStyle, createChart } from "lightweight-charts";
 import { themeColour, withAlpha } from "./theme.js";
+import { resolvePlotColour } from "./colours.js";
 import { num } from "../../format.js";
 
 // One indicator, in its own chart below the price.
@@ -42,8 +43,7 @@ export const AXIS_MIN_WIDTH = 64;
 /** True while a range is being applied, so the echo does not bounce back. */
 let syncing = false;
 
-function seriesFor(chart, plot, theme) {
-  const colour = themeColour(theme, plot.colourToken);
+function seriesFor(chart, plot, colour) {
   const shared = {
     priceLineVisible: false,
     lastValueVisible: false,
@@ -63,6 +63,7 @@ export default function IndicatorPane({
   indicator,
   bars,
   theme,
+  colours,
   mainChart,
   onClose,
   onDragStart,
@@ -113,7 +114,9 @@ export default function IndicatorPane({
 
     chartRef.current = chart;
     const map = new Map();
-    for (const plot of indicator.plots) map.set(plot.key, seriesFor(chart, plot, theme));
+    for (const plot of indicator.plots) {
+      map.set(plot.key, seriesFor(chart, plot, resolvePlotColour(theme, colours, indicator.id, plot)));
+    }
     seriesRef.current = map;
 
     // Reference levels, straight from the registry. An oscillator without its levels is
@@ -171,6 +174,19 @@ export default function IndicatorPane({
     // has never been hovered is still reading something.
     setValues(last);
   }, [indicator, bars]);
+
+  // Colours, applied in place. Not a dependency of the create effect: rebuilding the
+  // chart to change a line colour would throw away the reader's scroll position.
+  useEffect(() => {
+    for (const plot of indicator.plots) {
+      const series = seriesRef.current.get(plot.key);
+      if (!series) continue;
+      const colour = resolvePlotColour(theme, colours, indicator.id, plot);
+      series.applyOptions({
+        color: plot.seriesType === "histogram" ? withAlpha(colour, 0.5) : colour,
+      });
+    }
+  }, [indicator, theme, colours]);
 
   // Two-way range sync with the price chart, plus crosshair in one direction.
   useEffect(() => {
@@ -261,7 +277,7 @@ export default function IndicatorPane({
           <span
             key={plot.key}
             className="pane-value"
-            style={{ color: themeColour(theme, plot.colourToken) }}
+            style={{ color: resolvePlotColour(theme, colours, indicator.id, plot) }}
           >
             {plot.label}:{values?.[plot.key] === null || values?.[plot.key] === undefined
               ? " -"

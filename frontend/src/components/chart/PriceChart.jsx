@@ -3,6 +3,13 @@ import { CrosshairMode, LineStyle, createChart } from "lightweight-charts";
 import { aggregate } from "./aggregate.js";
 import { DEFAULT_ENABLED, INDICATORS, INDICATORS_BY_ID, latestValue } from "./indicators.js";
 import IndicatorPane, { AXIS_MIN_WIDTH } from "./IndicatorPane.jsx";
+import ColourPicker from "./ColourPicker.jsx";
+import {
+  loadColours,
+  resolveCoreColour,
+  resolvePlotColour,
+  saveColours,
+} from "./colours.js";
 import { readChartTheme, themeColour, withAlpha } from "./theme.js";
 import { compact, num, pct } from "../../format.js";
 
@@ -91,6 +98,20 @@ const EASTERN = new Intl.DateTimeFormat("en-US", {
   minute: "2-digit",
   hour12: false,
 });
+
+/**
+ * Intraday axis labels in Eastern market time, 24 hour.
+ *
+ * lightweight-charts renders epoch timestamps in UTC, so a session that ran 09:30 to
+ * 16:00 was labelled 13:30 to 20:00 and every band looked misplaced against the clock.
+ * The bars themselves are left alone: shifting the timestamps to fake a timezone is the
+ * usual workaround and it corrupts every range and coordinate calculation downstream,
+ * including the session bands, which read the same times.
+ */
+function easternClock(time) {
+  if (typeof time !== "number") return "";
+  return EASTERN.format(new Date(time * 1000));
+}
 
 function easternMinutes(epochSeconds) {
   const parts = EASTERN.formatToParts(new Date(epochSeconds * 1000));
@@ -193,8 +214,7 @@ function timeKey(time) {
   return null;
 }
 
-function addPlotSeries(chart, plot, theme, priceScaleId) {
-  const colour = themeColour(theme, plot.colourToken);
+function addPlotSeries(chart, plot, theme, colour, priceScaleId) {
   const shared = {
     priceLineVisible: false,
     lastValueVisible: false,
@@ -257,6 +277,19 @@ function ChartTypeToggle({ chartType, setChartType }) {
   );
 }
 
+function ColourButton({ open, onToggle }) {
+  return (
+    <button
+      type="button"
+      className={`seg-btn colour-button ${open ? "active" : ""}`}
+      onClick={onToggle}
+      title="Adjust the colour of any line on the chart"
+    >
+      Colours
+    </button>
+  );
+}
+
 function IndicatorChips({ chips, theme, onToggle }) {
   return (
     <div className="chip-toggles">
@@ -313,6 +346,10 @@ export default function PriceChart({
   // that have to re-render once it exists in order to subscribe to it.
   const [chartReady, setChartReady] = useState(null);
   const [dragId, setDragId] = useState(null);
+  // Per-line colour overrides. Empty by default, so the stylesheet stays the source
+  // of the palette until somebody actually changes something.
+  const [colours, setColours] = useState(loadColours);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const container = useRef(null);
   const chartRef = useRef(null);
@@ -417,8 +454,12 @@ export default function PriceChart({
       timeScale: {
         borderVisible: false,
         rightOffset: 4,
-        fixLeftEdge: true,
-        fixRightEdge: true,
+        // Not pinned to the data's edges. Pinning is right for a chart that always shows
+        // everything it loaded, and wrong here: both the intraday view and the daily
+        // warmup deliberately open on a slice, and clamping the scroll to the loaded
+        // range makes dragging past the opening view feel broken.
+        fixLeftEdge: false,
+        fixRightEdge: false,
       },
       crosshair: {
         mode: CrosshairMode.Magnet,
@@ -457,6 +498,7 @@ export default function PriceChart({
       },
     });
 
+    // Read at creation and re-applied by the effect below whenever they change.
     const candle = chart.addCandlestickSeries({
       upColor: theme.up,
       downColor: theme.down,
@@ -540,7 +582,17 @@ export default function PriceChart({
     // The axis must show clock times on an intraday series: without it every label on
     // a one day chart is the same date and the axis says nothing.
     chart.applyOptions({
-      timeScale: { timeVisible: isIntraday, secondsVisible: false },
+      timeScale: {
+        timeVisible: isIntraday,
+        secondsVisible: false,
+        // Eastern, so the labels agree with the session bands drawn above them and with
+        // every market hour anybody quotes. Daily bars keep the library's own date
+        // formatting, which is already right.
+        tickMarkFormatter: isIntraday ? (time) => easternClock(time) : undefined,
+      },
+      localization: {
+        timeFormatter: isIntraday ? (time) => easternClock(time) : undefined,
+      },
     });
 
     const priceData = displayBars.map((bar) => ({
@@ -574,22 +626,38 @@ export default function PriceChart({
       })),
     );
 
-    // What to show is not what was loaded. Intraday opens on the most recent slice so a
-    // two minute candle has a readable body; a daily chart opens on the window that was
-    // asked for, with the indicator warmup sitting off to the left rather than shrinking
-    // everything to fit. fitContent is only right when there is nothing extra to hide.
-    const visible = isIntraday
-      ? Math.min(INTRADAY_VISIBLE_BARS, displayBars.length)
-      : windowBars;
-
-    if (visible > 0 && visible < displayBars.length) {
-      chart.timeScale().setVisibleLogicalRange({
-        from: displayBars.length - visible,
-        to: displayBars.length,
-      });
-    } else {
-      chart.timeScale().fitContent();
+    // What to show is not what was loaded.
+    //
+    // Intraday opens on the **regular session**, not on the most recent bars. Opening on
+    // the last 130 bars put the view at the end of the day, which on a symbol with
+    // extended-hours data is four hours of thin after-market prints and almost no
+    // market hours at all: the bit somebody drilled in to look at was off screen to the
+    // left. A daily chart opens on the window that was asked for, with the indicator
+    // warmup off to the left rather than shrinking everything to fit.
+    let range = null;
+    if (isIntraday) {
+      let first = -1;
+      let last = -1;
+      for (let index = 0; index < displayBars.length; index += 1) {
+        if (sessionPhase(displayBars[index].time)?.key !== "MH") continue;
+        if (first < 0) first = index;
+        last = index;
+      }
+      // A holiday or a symbol with no regular-hours prints has no session to open on,
+      // so fall back to the most recent slice rather than showing nothing.
+      range =
+        first >= 0 && last > first
+          ? { from: Math.max(0, first - 4), to: Math.min(displayBars.length, last + 4) }
+          : {
+              from: Math.max(0, displayBars.length - INTRADAY_VISIBLE_BARS),
+              to: displayBars.length,
+            };
+    } else if (windowBars > 0 && windowBars < displayBars.length) {
+      range = { from: displayBars.length - windowBars, to: displayBars.length };
     }
+
+    if (range) chart.timeScale().setVisibleLogicalRange(range);
+    else chart.timeScale().fitContent();
   }, [displayBars, effectiveType, theme, isIntraday, windowBars]);
 
   // Indicator series, reconciled against the registry. Nothing here names an indicator.
@@ -615,17 +683,42 @@ export default function PriceChart({
       if (!entry) {
         entry = new Map();
         for (const plot of indicator.plots) {
-          entry.set(plot.key, addPlotSeries(chart, plot, theme));
+          const colour = resolvePlotColour(theme, colours, id, plot);
+          entry.set(plot.key, addPlotSeries(chart, plot, theme, colour));
         }
         live.set(id, entry);
       }
 
       const computed = indicator.compute(displayBars);
       for (const plot of indicator.plots) {
-        entry.get(plot.key).setData(computed[plot.key] || []);
+        const series = entry.get(plot.key);
+        series.setData(computed[plot.key] || []);
+        // Re-applied every pass rather than only at creation, so changing a colour
+        // recolours the line in place instead of tearing the series down and back up.
+        const colour = resolvePlotColour(theme, colours, id, plot);
+        series.applyOptions(
+          plot.seriesType === "histogram" ? { color: colour } : { color: colour },
+        );
       }
     }
-  }, [enabled, displayBars, theme]);
+  }, [enabled, displayBars, theme, colours]);
+
+  // Candle and volume colours, applied separately from creation so a colour change does
+  // not rebuild the price series and lose the reader's scroll position.
+  useEffect(() => {
+    const { candle } = seriesRef.current;
+    if (!candle) return;
+    const up = resolveCoreColour(theme, colours, "candle.up");
+    const down = resolveCoreColour(theme, colours, "candle.down");
+    candle.applyOptions({
+      upColor: up,
+      downColor: down,
+      borderUpColor: up,
+      borderDownColor: down,
+      wickUpColor: up,
+      wickDownColor: down,
+    });
+  }, [theme, colours]);
 
   // Chip state for every registered indicator, whether on or off, so a chip can say
   // why it cannot draw instead of silently doing nothing when clicked.
@@ -679,6 +772,23 @@ export default function PriceChart({
     if (!allowed.some((option) => option.days === days)) {
       onDaysChange(WINDOWS[next].fallback);
     }
+  }
+
+  function setColour(key, value) {
+    setColours((current) => {
+      const next = { ...current };
+      // null means revert, which deletes the override rather than storing today's
+      // default: freezing it would make the line ignore a future palette change.
+      if (value === null) delete next[key];
+      else next[key] = value;
+      saveColours(next);
+      return next;
+    });
+  }
+
+  function resetColours() {
+    saveColours({});
+    setColours({});
   }
 
   function toggleIndicator(id) {
@@ -805,6 +915,7 @@ export default function PriceChart({
               somebody wants a moving average and an RSI on the thing they are looking
               at, so both rows are shared with the daily view now. */}
           <ChartTypeToggle chartType={chartType} setChartType={setChartType} />
+          <ColourButton open={pickerOpen} onToggle={() => setPickerOpen((v) => !v)} />
           <IndicatorChips chips={chips} theme={theme} onToggle={toggleIndicator} />
         </div>
       ) : (
@@ -836,8 +947,19 @@ export default function PriceChart({
         </div>
 
         <ChartTypeToggle chartType={chartType} setChartType={setChartType} />
+        <ColourButton open={pickerOpen} onToggle={() => setPickerOpen((v) => !v)} />
         <IndicatorChips chips={chips} theme={theme} onToggle={toggleIndicator} />
       </div>
+      )}
+
+      {pickerOpen && (
+        <ColourPicker
+          theme={theme}
+          colours={colours}
+          onChange={setColour}
+          onReset={resetColours}
+          onClose={() => setPickerOpen(false)}
+        />
       )}
 
       <div className="chart-canvas" ref={container}>
@@ -867,6 +989,7 @@ export default function PriceChart({
             indicator={indicator}
             bars={displayBars}
             theme={theme}
+            colours={colours}
             mainChart={chartReady}
             dragging={dragId === id}
             onClose={() => toggleIndicator(id)}
