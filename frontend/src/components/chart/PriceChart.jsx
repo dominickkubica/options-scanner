@@ -100,12 +100,16 @@ function timeKey(time) {
   return null;
 }
 
-function addPlotSeries(chart, plot, theme) {
+function addPlotSeries(chart, plot, theme, priceScaleId) {
   const colour = themeColour(theme, plot.colourToken);
   const shared = {
     priceLineVisible: false,
     lastValueVisible: false,
     crosshairMarkerVisible: false,
+    // Overlays share the price axis. A lower pane indicator gets its own, because an
+    // RSI bounded 0 to 100 drawn against a price axis is a flat line at the bottom of
+    // the chart and a MACD centred on zero is a flat line off the top.
+    ...(priceScaleId ? { priceScaleId } : {}),
   };
   if (plot.seriesType === "histogram") {
     return chart.addHistogramSeries({ ...shared, color: colour });
@@ -130,6 +134,16 @@ function addPlotSeries(chart, plot, theme) {
 //: short: a whole day at one minute is about 880 bars including extended hours, and
 //: anything finer than a minute is not served.
 const SESSION_INTERVALS = ["1Min", "2Min", "5Min"];
+
+//: Where the lower pane sits, as fractions of the chart height. Above the volume
+//: histogram at 0.82 and below the price, so all three read as stacked bands rather
+//: than as overlapping series.
+const LOWER_PANE_MARGINS = { top: 0.66, bottom: 0.2 };
+
+//: How far the price is squeezed when a lower pane indicator is on. Without this the
+//: candles would draw straight through the oscillator.
+const PRICE_MARGINS_WITH_LOWER = { top: 0.06, bottom: 0.42 };
+const PRICE_MARGINS_ALONE = { top: 0.08, bottom: 0.28 };
 
 export default function PriceChart({
   symbol,
@@ -384,8 +398,17 @@ export default function PriceChart({
       let entry = live.get(id);
       if (!entry) {
         entry = new Map();
+        // One scale per lower indicator, keyed by its id. Two of them would fight over
+        // one axis, which is why the chip row only ever enables one.
+        const scaleId = indicator.group === "lower" ? `lower-${id}` : undefined;
         for (const plot of indicator.plots) {
-          entry.set(plot.key, addPlotSeries(chart, plot, theme));
+          entry.set(plot.key, addPlotSeries(chart, plot, theme, scaleId));
+        }
+        if (scaleId) {
+          chart.priceScale(scaleId).applyOptions({
+            scaleMargins: LOWER_PANE_MARGINS,
+            borderVisible: false,
+          });
         }
         live.set(id, entry);
       }
@@ -395,6 +418,12 @@ export default function PriceChart({
         entry.get(plot.key).setData(computed[plot.key] || []);
       }
     }
+    // The price pane gives up room only while something is using it. Applied here
+    // rather than at creation because it has to follow the chips.
+    const hasLower = enabled.some((id) => INDICATORS_BY_ID.get(id)?.group === "lower");
+    chart.priceScale("right").applyOptions({
+      scaleMargins: hasLower ? PRICE_MARGINS_WITH_LOWER : PRICE_MARGINS_ALONE,
+    });
   }, [enabled, displayBars, theme]);
 
   // Chip state for every registered indicator, whether on or off, so a chip can say
@@ -452,9 +481,21 @@ export default function PriceChart({
   }
 
   function toggleIndicator(id) {
-    setEnabled((current) =>
-      current.includes(id) ? current.filter((item) => item !== id) : [...current, id],
-    );
+    setEnabled((current) => {
+      if (current.includes(id)) return current.filter((item) => item !== id);
+
+      // Turning on a lower pane indicator turns off whichever one was there. They do
+      // not share an axis: RSI is bounded 0 to 100 and MACD is unbounded and centred
+      // on zero, so stacking them would draw one of them against the other's scale.
+      // Replacing is the honest behaviour and it needs no explanation on screen,
+      // because the previous chip visibly turns off as the new one turns on.
+      const incoming = INDICATORS_BY_ID.get(id);
+      const cleared =
+        incoming?.group === "lower"
+          ? current.filter((item) => INDICATORS_BY_ID.get(item)?.group !== "lower")
+          : current;
+      return [...cleared, id];
+    });
   }
 
   const direction = readout && readout.change !== null && readout.change < 0 ? "neg" : "pos";

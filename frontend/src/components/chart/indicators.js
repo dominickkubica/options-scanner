@@ -1,3 +1,16 @@
+import {
+  atr,
+  bollinger,
+  donchian,
+  ema,
+  keltner,
+  macd,
+  relativeVolume,
+  rsi,
+  stochastic,
+  vwap,
+} from "./compute.js";
+
 // The indicator registry.
 //
 // Adding an indicator to the price chart should mean adding an entry to this file and
@@ -82,12 +95,161 @@ function movingAverage(period, colourToken) {
   };
 }
 
-// Order here is the order of the chips.
+function expo(period, colourToken) {
+  const label = `EMA${period}`;
+  return {
+    id: `ema${period}`,
+    label,
+    group: "overlay",
+    minBars: period,
+    plots: [{ key: "value", label, seriesType: "line", colourToken, lineWidth: 1.2 }],
+    compute: (bars) => ({ value: ema(bars, period) }),
+    unavailable: (barCount) => `needs ${period} bars, have ${barCount}`,
+  };
+}
+
+// Order here is the order of the chips. Overlays first, then the lower pane, which is
+// the order they stack on the screen.
 export const INDICATORS = [
   movingAverage(20, "--chart-ma-fast"),
   movingAverage(50, "--chart-ma-slow"),
   movingAverage(200, "--chart-axis"),
+  expo(9, "--chart-ma-fast"),
+  expo(21, "--chart-ma-slow"),
+
+  {
+    id: "vwap",
+    label: "VWAP",
+    group: "overlay",
+    minBars: 20,
+    plots: [
+      { key: "value", label: "VWAP20", seriesType: "line", colourToken: "--accent", lineWidth: 1.4 },
+    ],
+    compute: (bars) => ({ value: vwap(bars, 20) }),
+    unavailable: (barCount) =>
+      barCount < 20 ? `needs 20 bars, have ${barCount}` : "no volume on these bars",
+  },
+
+  {
+    id: "bb",
+    label: "Bollinger",
+    group: "overlay",
+    minBars: 20,
+    plots: [
+      { key: "upper", label: "BB up", seriesType: "line", colourToken: "--chart-axis", lineWidth: 1 },
+      { key: "middle", label: "BB mid", seriesType: "line", colourToken: "--chart-axis", lineWidth: 0.8 },
+      { key: "lower", label: "BB low", seriesType: "line", colourToken: "--chart-axis", lineWidth: 1 },
+    ],
+    compute: (bars) => bollinger(bars, 20, 2),
+    unavailable: (barCount) => `needs 20 bars, have ${barCount}`,
+  },
+
+  {
+    id: "keltner",
+    label: "Keltner",
+    group: "overlay",
+    minBars: 21,
+    plots: [
+      { key: "upper", label: "KC up", seriesType: "line", colourToken: "--chart-ma-slow", lineWidth: 1 },
+      { key: "middle", label: "KC mid", seriesType: "line", colourToken: "--chart-ma-slow", lineWidth: 0.8 },
+      { key: "lower", label: "KC low", seriesType: "line", colourToken: "--chart-ma-slow", lineWidth: 1 },
+    ],
+    compute: (bars) => keltner(bars, 20, 1.5),
+    unavailable: (barCount) => `needs 21 bars, have ${barCount}`,
+  },
+
+  {
+    id: "donchian",
+    label: "Donchian",
+    group: "overlay",
+    minBars: 20,
+    plots: [
+      { key: "upper", label: "DC high", seriesType: "line", colourToken: "--chart-up", lineWidth: 1 },
+      { key: "lower", label: "DC low", seriesType: "line", colourToken: "--chart-down", lineWidth: 1 },
+    ],
+    compute: (bars) => donchian(bars, 20),
+    unavailable: (barCount) => `needs 20 bars, have ${barCount}`,
+  },
+
+  // Lower pane. One at a time: RSI is bounded 0 to 100 and MACD is unbounded and
+  // centred on zero, so sharing an axis would put one of them in a corner and label it
+  // with the other's scale. The chart enforces the swap and the chip says so.
+  {
+    id: "rsi",
+    label: "RSI",
+    group: "lower",
+    minBars: 15,
+    bounds: { min: 0, max: 100, guides: [30, 70] },
+    plots: [
+      { key: "value", label: "RSI14", seriesType: "line", colourToken: "--accent", lineWidth: 1.4 },
+    ],
+    compute: (bars) => ({ value: rsi(bars, 14) }),
+    unavailable: (barCount) => `needs 15 bars, have ${barCount}`,
+  },
+
+  {
+    id: "macd",
+    label: "MACD",
+    group: "lower",
+    minBars: 35,
+    bounds: { guides: [0] },
+    plots: [
+      { key: "histogram", label: "hist", seriesType: "histogram", colourToken: "--chart-axis" },
+      { key: "macd", label: "MACD", seriesType: "line", colourToken: "--accent", lineWidth: 1.4 },
+      { key: "signal", label: "signal", seriesType: "line", colourToken: "--chart-ma-fast", lineWidth: 1.1 },
+    ],
+    compute: (bars) => macd(bars, 12, 26, 9),
+    unavailable: (barCount) => `needs 35 bars, have ${barCount}`,
+  },
+
+  {
+    id: "stoch",
+    label: "Stochastic",
+    group: "lower",
+    minBars: 16,
+    bounds: { min: 0, max: 100, guides: [20, 80] },
+    plots: [
+      { key: "k", label: "%K", seriesType: "line", colourToken: "--accent", lineWidth: 1.3 },
+      { key: "d", label: "%D", seriesType: "line", colourToken: "--chart-ma-fast", lineWidth: 1.1 },
+    ],
+    compute: (bars) => stochastic(bars, 14, 3),
+    unavailable: (barCount) => `needs 16 bars, have ${barCount}`,
+  },
+
+  {
+    id: "atr",
+    label: "ATR",
+    group: "lower",
+    minBars: 15,
+    plots: [
+      { key: "value", label: "ATR14", seriesType: "line", colourToken: "--chart-ma-slow", lineWidth: 1.3 },
+    ],
+    compute: (bars) => ({ value: atr(bars, 14) }),
+    unavailable: (barCount) => `needs 15 bars, have ${barCount}`,
+  },
+
+  {
+    id: "relvol",
+    label: "Rel volume",
+    group: "lower",
+    minBars: 21,
+    // One is average. The guide is what makes the series readable at a glance, which
+    // is the whole reason to plot a ratio rather than raw volume.
+    bounds: { min: 0, guides: [1] },
+    plots: [
+      { key: "value", label: "rel vol", seriesType: "histogram", colourToken: "--accent" },
+    ],
+    compute: (bars) => ({ value: relativeVolume(bars, 20) }),
+    unavailable: (barCount) =>
+      barCount < 21 ? `needs 21 bars, have ${barCount}` : "no volume on these bars",
+  },
 ];
+
+/** Indicators that draw on the price pane. */
+export const OVERLAYS = INDICATORS.filter((item) => item.group === "overlay");
+
+/** Indicators that need the lower pane. At most one is shown at a time. */
+export const LOWER = INDICATORS.filter((item) => item.group === "lower");
 
 export const INDICATORS_BY_ID = new Map(
   INDICATORS.map((indicator) => [indicator.id, indicator]),

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { api } from "../api.js";
+import { useMeasuredWidth } from "../components/chart/plot.jsx";
 import { ErrorBox, Notes, Panel, useAsync } from "../components/common.jsx";
 import { count, money, num, pct } from "../format.js";
 
@@ -73,7 +74,11 @@ function Tile({ label, value, sub, tone }) {
 
 // Single series, so no legend: the panel title names it. 2px line, recessive grid,
 // crosshair on hover.
-function EquityCurve({ days, width = 720 }) {
+function EquityCurve({ days }) {
+  // Measured rather than a 720 pixel assumption. An equity curve is the most
+  // persuasive object on this page and it was being scaled to fit whatever the
+  // panel happened to be, which grew the axis type along with it.
+  const [ref, width] = useMeasuredWidth(720);
   const [hover, setHover] = useState(null);
 
   const geom = useMemo(() => {
@@ -111,7 +116,7 @@ function EquityCurve({ days, width = 720 }) {
   const ticks = [geom.high, (geom.high + geom.low) / 2, geom.low];
 
   return (
-    <div className="curve-wrap">
+    <div className="curve-wrap" ref={ref}>
       <svg
         viewBox={`0 0 ${width} ${CURVE_HEIGHT}`}
         className="curve"

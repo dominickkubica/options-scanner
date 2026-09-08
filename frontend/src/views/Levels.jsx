@@ -195,7 +195,7 @@ function Histogram({ distribution, spot }) {
             y={140 - height}
             width={Math.max(width - 1, 1)}
             height={height}
-            fill={straddles ? "var(--accent, #4f7fbf)" : "var(--line)"}
+            fill={straddles ? "var(--accent)" : "var(--line)"}
             opacity={straddles ? 0.9 : 0.7}
           />
         );

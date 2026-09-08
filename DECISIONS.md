@@ -2489,3 +2489,84 @@ Both new jobs are `default_install=False` because neither can run without Alpaca
 credentials. All four installed tasks were verified as `DisallowStartIfOnBatteries`
 false and `StartWhenAvailable` true, so the trap recorded in the scheduled task notes
 is not present here.
+
+---
+
+## 2026-09-08: the other charts, and eleven more indicators
+
+### What "price chart quality" actually meant
+
+The price chart's quality was never the library. It was a set of decisions already
+recorded in its own file: hovered values in a **fixed header rather than a floating
+tooltip**, because a tooltip covers the part of the curve being pointed at; a measured
+width; horizontal gridlines and no axis rule; controls that say *why* they cannot draw.
+
+Six charts sat below that bar, and all six were hand rolled SVG at **fixed viewBox
+widths** of 700, 460, 460, 260, 900 and 720. A fixed viewBox scaled to fit does not
+just letterbox: it scales the type with it, so the same 11px axis label rendered at
+7px in a narrow panel and 16px in a wide one.
+
+**They stay SVG, and that is the decision worth recording.** lightweight-charts is a
+time series library. A payoff diagram is profit against underlying price, a smile is
+implied vol against strike, a term structure is implied vol against days. Forcing those
+into a time series library means lying to its axis, and the lie surfaces as a date
+formatter on a strike axis. Only the equity curve is temporal, and it is not worth a
+second charting library on its own.
+
+So `chart/plot.jsx` is the price chart's *behaviour* in one place: a measured width, a
+`<Plot>` frame with the same grid and axis treatment, and `<PlotReadout>` for the
+header. `PayoffChart` and the two volatility charts moved onto it and each gained a
+readout, which is most of the point: hovering a payoff diagram is asking "what do I
+make if it finishes here", and until now the answer had to be estimated off the axis by
+eye.
+
+`charts.jsx` went from 396 lines to 86 and re-exports the moved components, so no view
+had to change an import.
+
+**Width is measured in a layout effect, not only by ResizeObserver.** The observer
+alone leaves the first frame at the fallback, which is a visible jump on a narrow
+panel, and reports nothing at all for a container that is not being laid out.
+
+Two smaller repairs found on the way. `LevelsChart` carried five colour fallbacks like
+`var(--bad, #c85f5f)` from **before** the Webull palette rebase, so a token that failed
+to resolve would have repainted the chart in last year's scheme; `theme.js` already
+documents why a duplicated palette drifts. And its width was a `900` default the view
+never passed.
+
+### Eleven indicators, and the lower pane the registry had been waiting for
+
+The registry's own docstring said an oscillator would need "a second price scale, which
+is the one extension this file cannot absorb on its own". That extension is here.
+
+Added: EMA9, EMA21, VWAP, Bollinger, Keltner and Donchian on the price pane; RSI, MACD,
+Stochastic, ATR and relative volume on a lower one. With the three moving averages that
+is fourteen chips.
+
+**Only one lower indicator runs at a time, and that is a correctness rule rather than a
+simplification.** RSI is bounded 0 to 100. MACD is unbounded and centred on zero.
+Sharing one axis puts one of them in a corner labelled with the other's scale. Enabling
+a second replaces the first, which needs no explanation on screen because the previous
+chip visibly turns off as the new one turns on. Overlays are unaffected and stack
+freely.
+
+The maths lives in `chart/compute.js`, separate from the registry that declares it, and
+every function keeps the rule the moving average already kept: **emit a point only
+where the full window exists.** A fourteen period RSI over six bars is a different
+statistic wearing the same label.
+
+Three details in there worth not rediscovering:
+
+- **RSI and ATR use Wilder's recursive smoothing, not a rolling mean.** Substituting a
+  simple mean is the common error that makes an RSI disagree with every other platform
+  by a point or two, which is exactly the size of disagreement nobody investigates.
+- **Keltner emits a point only where both the EMA and the ATR exist.** A centre line
+  without a width is not a channel, and drawing one would be a bare EMA wearing the
+  Keltner label.
+- **VWAP and relative volume refuse a window containing a bar with unknown volume**
+  rather than treating it as zero weight. Same null-is-not-zero rule as the storage
+  layer.
+
+Verified numerically rather than by looking at it: RSI was enabled in the browser and
+its chip read **53.95**, against **53.95** from a reference implementation written
+separately in the console over the same 126 bars, producing 112 values with no leading
+ramp.

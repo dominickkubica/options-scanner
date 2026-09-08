@@ -145,6 +145,23 @@ Robinhood activity export, `optscan trades` reports what the account actually di
 - **An unknown transaction code raises.** Assignment and exercise move real contracts,
   and a skipped row is a profit figure with a hole and nothing to say so.
 
+**Every chart that is not a time series draws on `chart/plot.jsx`.** Payoff, skew and
+term structure are profit-vs-price, vol-vs-strike and vol-vs-days; a time series library
+would need its axis lied to. The shared plot gives them the price chart's *behaviour*
+instead: measured width, a readout in a fixed header rather than a floating tooltip
+(a tooltip covers what you are pointing at), horizontal gridlines, no axis rule.
+**Width is measured in a layout effect, not only by ResizeObserver** - the observer
+alone leaves the first frame at the fallback and reports nothing for a container that
+is not being laid out.
+
+**Fourteen indicators; only one lower-pane indicator at a time.** RSI is bounded 0-100
+and MACD is unbounded and centred on zero, so sharing an axis would draw one against the
+other's scale. Enabling a second replaces the first. Overlays stack freely. Maths lives
+in `chart/compute.js`, and every function emits a point **only where the full window
+exists** - RSI and ATR use Wilder's recursive smoothing, not a rolling mean, which is
+the error that makes an RSI disagree with other platforms by the point or two nobody
+investigates.
+
 **A bare `ON` in universe.yaml is the boolean `True`.** YAML 1.1 does this to ON, OFF,
 YES, NO, Y and N. ON Semiconductor was silently absent from every price sync because
 `str(True).upper()` is the ticker `"TRUE"`, which the vendor answered with nothing and

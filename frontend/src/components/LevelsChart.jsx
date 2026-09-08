@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useMeasuredWidth } from "./chart/plot.jsx";
 import { num, pct, vol } from "../format.js";
 
 // The one chart Phase 6 exists to produce: price, the levels it respected, the expected
@@ -25,8 +26,8 @@ const HEIGHT = 380;
 const PROJECTION_SHARE = 0.32;
 
 const KIND_STYLE = {
-  swing_high: { colour: "var(--bad, #c85f5f)", label: "swing high" },
-  swing_low: { colour: "var(--good, #4f9d69)", label: "swing low" },
+  swing_high: { colour: "var(--chart-down)", label: "swing high" },
+  swing_low: { colour: "var(--chart-up)", label: "swing low" },
   point_of_control: { colour: "#c9a227", label: "point of control" },
   value_area: { colour: "#8a7a2f", label: "value area" },
   volume_node: { colour: "#6b7a8f", label: "volume node" },
@@ -44,7 +45,11 @@ function popColour(pop) {
   return `hsl(205, 65%, ${light}%)`;
 }
 
-export default function LevelsChart({ data, width = 900 }) {
+export default function LevelsChart({ data }) {
+  // Measured rather than assumed. The old default of 900 was drawn into whatever
+  // the panel really was, so on a narrow one the viewBox scaled and every label
+  // grew with it. Same fix, and same reason, as the shared plot.
+  const [ref, width] = useMeasuredWidth(900);
   const [hovered, setHovered] = useState(null);
 
   const geometry = useMemo(() => {
@@ -95,8 +100,8 @@ export default function LevelsChart({ data, width = 900 }) {
     .join(" ");
 
   return (
-    <div>
-      <svg viewBox={`0 0 ${width} ${HEIGHT}`} style={{ width: "100%", height: "auto" }}>
+    <div ref={ref}>
+      <svg viewBox={`0 0 ${width} ${HEIGHT}`} width="100%" height={HEIGHT}>
         {/* The cone, drawn first so price and levels sit on top of it. Widest band
             first so the one sigma band reads as denser than the two sigma one. */}
         {[...data.cone[0]?.bands ?? []]
@@ -122,7 +127,7 @@ export default function LevelsChart({ data, width = 900 }) {
               <polygon
                 key={deviations}
                 points={`${start} ${upper.join(" ")} ${lower.join(" ")}`}
-                fill="var(--accent, #4f7fbf)"
+                fill="var(--accent)"
                 opacity={deviations >= 2 ? 0.08 : 0.16}
                 stroke="none"
               />
@@ -158,7 +163,7 @@ export default function LevelsChart({ data, width = 900 }) {
         {/* Price. A close line rather than candles: this panel is about where price
             sat relative to levels over a year, and a year of candles at this width is
             a smear. The Underlying view has the candles. */}
-        <path d={closeLine} fill="none" stroke="var(--text, #d8d8e0)" strokeWidth="1.3" />
+        <path d={closeLine} fill="none" stroke="var(--text)" strokeWidth="1.3" />
 
         {/* The divider between what happened and what is projected. */}
         <line
@@ -214,7 +219,7 @@ export default function LevelsChart({ data, width = 900 }) {
           x2={width - PADDING.right}
           y1={spotY}
           y2={spotY}
-          stroke="var(--accent, #4f7fbf)"
+          stroke="var(--accent)"
           strokeWidth="1"
         />
         <text x={width - PADDING.right + 4} y={spotY - 4} fontSize="9" fill="var(--accent)">

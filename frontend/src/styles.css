@@ -1590,6 +1590,37 @@ tr.under-sampled td {
   font-family: var(--mono);
 }
 
+/* The shared plot frame. Everything that is not the price chart draws into this, so
+   a readout row and an axis look the same wherever they appear. */
+
+.plot {
+  width: 100%;
+}
+
+.plot-readout {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  font-family: var(--mono);
+  font-size: 12px;
+  margin-bottom: 6px;
+  min-height: 18px;
+}
+
+.plot-stat em {
+  font-style: normal;
+  color: var(--dim);
+  margin-right: 4px;
+}
+
+.plot-stat.up {
+  color: var(--good);
+}
+
+.plot-stat.down {
+  color: var(--bad);
+}
+
 /* Mobile ------------------------------------------------------------------
    Added 2026-09-08. The app had no layout breakpoints at all: at 375px the fixed
    224px sidebar took two thirds of the screen and never collapsed, and the content
