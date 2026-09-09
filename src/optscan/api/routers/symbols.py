@@ -23,11 +23,22 @@ from optscan.api.deps import (
     price_history,
     solved_symbol,
 )
-from optscan.api.schemas import ChainOut, HistoryOut, SymbolSummaryOut
+from optscan.api.schemas import (
+    ChainOut,
+    HistoryOut,
+    NewsItemOut,
+    NewsOut,
+    SymbolSummaryOut,
+)
 from optscan.api.views import chain_view, history_view, symbol_summary_view
 from optscan.config import Settings
+from optscan.logging import get_logger
+from optscan.providers import get_news_provider
+from optscan.providers.errors import NoDataAvailable, ProviderError
 from optscan.screener.config import ScreenConfig
 from optscan.screener.context import ExpiryAnalysis
+
+log = get_logger("optscan.api.symbols")
 
 router = APIRouter(prefix="/symbols", tags=["symbols"])
 
@@ -154,3 +165,63 @@ def symbol_history(
         provider_factory=provider_factory,
     )
     return history_view(normalized, bars, note, intraday=interval != DAILY_INTERVAL)
+
+
+@router.get("/{symbol}/news", response_model=NewsOut)
+def symbol_news(
+    symbol: str,
+    settings: SettingsDep,
+    limit: int = Query(20, ge=1, le=50),
+) -> NewsOut:
+    """Recent stories for one symbol.
+
+    Fetched live rather than stored. News ages out of relevance in hours, so a cached
+    copy would be worse than useless: it would look current and be a day old. The
+    provider's own short-lived HTTP cache is the only layer wanted here.
+
+    A provider that cannot serve news returns an explanation rather than an error,
+    because "this vendor has no news endpoint" is a fact about the configuration and
+    not a failure of the request.
+    """
+    ticker = symbol.upper()
+    provider = get_news_provider(settings)
+    if provider is None:
+        return NewsOut(
+            symbol=ticker,
+            note=(
+                "No configured provider serves news. Alpaca does, on the free plan: "
+                "set OPTSCAN_ALPACA_KEY_ID and OPTSCAN_ALPACA_SECRET_KEY."
+            ),
+        )
+    try:
+        items = provider.get_news(ticker, limit=limit)
+    except NoDataAvailable:
+        return NewsOut(symbol=ticker, note=f"No recent stories tagged {ticker}.")
+    except (ProviderError, OSError) as error:
+        log.warning("news unavailable", symbol=ticker, error=str(error))
+        return NewsOut(symbol=ticker, note=f"News unavailable: {error}")
+    finally:
+        # Not every provider owns a connection, so this cannot assume `close` exists.
+        closer = getattr(provider, "close", None)
+        if closer:
+            closer()
+
+    return NewsOut(
+        symbol=ticker,
+        items=[
+            NewsItemOut(
+                id=item.id,
+                headline=item.headline,
+                published_at=item.published_at.isoformat(),
+                wire=item.wire,
+                author=item.author,
+                summary=item.summary,
+                url=item.url,
+                image=item.image,
+                symbols=list(item.symbols),
+                primary=item.primary_for(ticker),
+            )
+            for item in items
+        ],
+        note=None if items else f"No recent stories tagged {ticker}.",
+    )

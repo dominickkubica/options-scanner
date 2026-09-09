@@ -226,3 +226,41 @@ class OptionChain(Record):
             if contract.right is wanted and contract.strike == strike:
                 return contract
         return None
+
+
+class NewsItem(Record):
+    """One published story about a symbol.
+
+    Vendor text, carried through rather than interpreted. A `Record` like everything
+    else that came from outside the process, so it says which provider wrote it and
+    when it was fetched: a headline with no attribution is the kind of thing that ends
+    up quoted back as fact.
+
+    The tagged symbols are whatever the wire attached, which on a market wrap can be
+    thirty tickers. `primary_for` exists so a caller can tell "this story is about
+    AAPL" from "AAPL appeared in a list of thirty".
+    """
+
+    id: int
+    headline: str
+    published_at: UtcDatetime
+    wire: str = ""
+    author: str = ""
+    summary: str = ""
+    url: str | None = None
+    image: str | None = None
+    symbols: tuple[str, ...] = ()
+
+    @property
+    def breadth(self) -> int:
+        """How many symbols the story was tagged with."""
+        return len(self.symbols)
+
+    def primary_for(self, symbol: str, limit: int = 6) -> bool:
+        """Is this plausibly *about* the symbol, rather than a list it appears in?
+
+        A market wrap tagged with thirty tickers is not news about any one of them. It
+        is still shown, dimmed, because occasionally the wrap is the thing that moved
+        the price.
+        """
+        return symbol.upper() in self.symbols and self.breadth <= limit

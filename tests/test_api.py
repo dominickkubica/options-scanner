@@ -638,3 +638,79 @@ def test_a_symbol_with_no_price_history_has_no_quote(tmp_settings):
     payload = TestClient(create_app(tmp_settings)).get("/api/watchlist").json()
     assert "NOPE" in payload["symbols"]
     assert "NOPE" not in payload["quotes"]
+
+
+# --------------------------------------------------------------------------------
+# News
+# --------------------------------------------------------------------------------
+
+
+def test_news_explains_itself_when_no_provider_can_serve_it(tmp_settings):
+    """No Alpaca credentials means no news, which is a fact about the configuration
+    rather than a failed request. Also the reason this test touches no network."""
+    from fastapi.testclient import TestClient
+
+    from optscan.api.app import create_app
+
+    payload = TestClient(create_app(tmp_settings)).get("/api/symbols/AAPL/news").json()
+    assert payload["items"] == []
+    assert "Alpaca" in payload["note"]
+
+
+def test_news_maps_a_story_and_marks_whether_it_is_about_the_symbol(tmp_settings, monkeypatch):
+    """A market wrap tagged with thirty tickers is not news about any one of them."""
+    from datetime import UTC, datetime
+
+    from fastapi.testclient import TestClient
+
+    from optscan.api.app import create_app
+    from optscan.models import NewsItem
+
+    def story(ident, headline, symbols):
+        return NewsItem(
+            id=ident,
+            headline=headline,
+            published_at=datetime(2026, 9, 8, 12, ident, tzinfo=UTC),
+            wire="benzinga",
+            summary="body",
+            url="https://example.test/story",
+            symbols=symbols,
+            source="alpaca",
+            fetched_at=datetime.now(UTC),
+        )
+
+    class Stub:
+        name = "alpaca"
+
+        def get_news(self, symbol, limit=20):
+            return [
+                story(1, "Apple beats", ("AAPL",)),
+                story(2, "Market wrap", (*(f"S{n}" for n in range(30)), "AAPL")),
+            ]
+
+    monkeypatch.setattr("optscan.api.routers.symbols.get_news_provider", lambda settings: Stub())
+
+    payload = TestClient(create_app(tmp_settings)).get("/api/symbols/AAPL/news").json()
+    assert payload["note"] is None
+    by_headline = {item["headline"]: item for item in payload["items"]}
+    assert by_headline["Apple beats"]["primary"] is True
+    assert by_headline["Market wrap"]["primary"] is False
+    assert by_headline["Apple beats"]["wire"] == "benzinga"
+
+
+def test_a_story_with_no_headline_or_timestamp_is_dropped():
+    """Either one makes the row unusable, and a blank line in a news list reads as a
+    rendering fault rather than as bad vendor data."""
+    from optscan.config import Settings
+    from optscan.providers.alpaca import AlpacaProvider
+
+    provider = AlpacaProvider.__new__(AlpacaProvider)
+    rows = {
+        "news": [
+            {"id": 1, "headline": "", "created_at": "2026-09-08T12:00:00Z"},
+            {"id": 2, "headline": "Fine", "created_at": None},
+        ]
+    }
+    provider._get = lambda url, params: rows
+    provider.settings = Settings(_env_file=None)
+    assert provider.get_news("AAPL") == []

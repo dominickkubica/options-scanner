@@ -284,6 +284,30 @@ class IdeasOut(ApiModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class NewsItemOut(ApiModel):
+    """One story. Vendor text, carried through rather than interpreted."""
+
+    id: int
+    headline: str
+    published_at: str
+    wire: str = ""
+    author: str = ""
+    summary: str = ""
+    url: str | None = None
+    image: str | None = None
+    symbols: list[str] = Field(default_factory=list)
+    #: Whether the story looks like it is *about* this symbol rather than a list it
+    #: appears in. A market wrap tagged with thirty tickers is not news about any of
+    #: them, and the UI dims those rather than hiding them.
+    primary: bool = True
+
+
+class NewsOut(ApiModel):
+    symbol: str
+    items: list[NewsItemOut] = Field(default_factory=list)
+    note: str | None = None
+
+
 class WatchlistChangeOut(ApiModel):
     """What adding or removing a symbol actually did."""
 

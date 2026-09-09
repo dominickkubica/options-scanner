@@ -28,6 +28,7 @@ __all__ = [
     "RateLimited",
     "SymbolNotFound",
     "get_intraday_provider",
+    "get_news_provider",
     "get_provider",
     "provider_is_realtime",
 ]
@@ -71,6 +72,22 @@ def get_intraday_provider(settings: Settings) -> MarketDataProvider | None:
     minute candle carries none of that, so a chart should not be held hostage to it.
 
     Narrow on purpose. Prices only, never volatility, and nothing it returns is stored.
+    """
+    if settings.alpaca_credentials_set:
+        from optscan.providers.alpaca import AlpacaProvider
+
+        return AlpacaProvider(settings)
+    return None
+
+
+def get_news_provider(settings: Settings) -> MarketDataProvider | None:
+    """A provider that can serve news, or None if none is configured.
+
+    Same reasoning as `get_intraday_provider`, and the same narrowness. `OPTSCAN_PROVIDER`
+    decides which vendor's implied volatility becomes the stored history, which is a
+    choice with consequences that outlive the session. A headline carries none of that
+    and nothing here is stored, so the panel should not go blank because the capture
+    provider happens to be the one without a news endpoint.
     """
     if settings.alpaca_credentials_set:
         from optscan.providers.alpaca import AlpacaProvider

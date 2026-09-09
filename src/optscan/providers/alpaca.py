@@ -62,6 +62,7 @@ import httpx
 from optscan.config import ALPACA_OPTIONS_START, Settings
 from optscan.logging import get_logger
 from optscan.models import (
+    NewsItem,
     OptionChain,
     OptionContract,
     PriceBar,
@@ -93,6 +94,18 @@ CORPORATE_ACTIONS_PATH = "/v1/corporate-actions"
 #: Trading host. Contract metadata, and the only place open interest is published.
 TRADING_URL = "https://paper-api.alpaca.markets"
 OPTION_CONTRACTS_PATH = "/v2/options/contracts"
+
+#: News. Measured working on the free Basic plan, 2026-09-08: 200, with real Benzinga
+#: stories carrying a headline, a summary, symbol tags and image URLs. Worth recording
+#: because most of this vendor's interesting endpoints are gated and this one is not.
+NEWS_PATH = "/v1beta1/news"
+
+#: Stories per request. The endpoint pages, and nobody reads past the first screen of a
+#: news panel.
+NEWS_LIMIT = 25
+
+#: Hard ceiling the vendor enforces on `limit`.
+NEWS_MAX = 50
 
 #: The feed name differs per endpoint, and each is rejected where the other works.
 #: Measured 2026-09-07 on QQQ:
@@ -621,6 +634,52 @@ class AlpacaProvider(MarketDataProvider):
         if not rows:
             raise NoDataAvailable(f"alpaca returned no daily bars for {ticker}")
         return [_bar(ticker, row, self.name) for row in rows]
+
+    def get_news(self, symbol: str, limit: int = NEWS_LIMIT) -> list[NewsItem]:
+        """Recent stories tagged with this symbol, newest first.
+
+        Re-sorted here even though the vendor is asked for descending order: relying on
+        a vendor's ordering is how a list quietly stops being newest-first months later,
+        and the cost of sorting twenty-five rows is nothing.
+        """
+        body = self._get(
+            f"{self.settings.alpaca_data_url}{NEWS_PATH}",
+            {
+                "symbols": symbol.upper(),
+                "limit": min(limit, NEWS_MAX),
+                "sort": "desc",
+            },
+        )
+
+        items: list[NewsItem] = []
+        for row in body.get("news") or []:
+            published = row.get("created_at")
+            headline = (row.get("headline") or "").strip()
+            # A story with no timestamp cannot be placed and a story with no headline
+            # cannot be read. Either one is a broken row rather than a quiet default.
+            if not published or not headline:
+                continue
+            images = row.get("images") or []
+            items.append(
+                NewsItem(
+                    id=row.get("id", 0),
+                    headline=headline,
+                    # `source` on a Record is the provider this came through. The wire
+                    # that wrote the story is a different fact and gets its own field,
+                    # or Benzinga and Alpaca end up recorded as the same thing.
+                    source=self.name,
+                    wire=row.get("source") or "",
+                    author=row.get("author") or "",
+                    summary=(row.get("summary") or "").strip(),
+                    url=row.get("url"),
+                    # Several sizes come back, largest first. A list wants the smallest.
+                    image=(images[-1] or {}).get("url") if images else None,
+                    symbols=tuple(row.get("symbols") or ()),
+                    published_at=datetime.fromisoformat(published.replace("Z", "+00:00")),
+                    fetched_at=datetime.now(UTC),
+                )
+            )
+        return sorted(items, key=lambda item: item.published_at, reverse=True)
 
     def get_events(self, symbol: str) -> SymbolEvents:
         """Ex dividend dates, and an honest refusal to guess at earnings.
