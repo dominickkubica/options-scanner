@@ -2,9 +2,16 @@
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.version]
+path = "src/optscan/__init__.py"
+
 [project]
 name = "optscan"
-version = "0.1.0"
+# Read from optscan.__version__ rather than repeated here. The app serves the version
+# from that module, so a literal in this file is a second copy that drifts the first
+# time somebody bumps one of them, and the symptom is a dashboard confidently reporting
+# a build that was never released.
+dynamic = ["version"]
 description = "Options selling scanner and dashboard"
 requires-python = ">=3.12,<3.13"
 dependencies = [

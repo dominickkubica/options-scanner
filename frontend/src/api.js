@@ -71,6 +71,10 @@ export const api = {
     request(
       `/symbols/${encodeURIComponent(symbol)}/history${query({ days, interval, session })}`,
     ),
+  // Never cached. News ages out of relevance in hours, so a cached copy would look
+  // current and be a day old.
+  news: (symbol, limit) =>
+    request(`/symbols/${encodeURIComponent(symbol)}/news${query({ limit })}`),
   levels: (symbol, days, expiry) =>
     request(`/symbols/${encodeURIComponent(symbol)}/levels${query({ days, expiry })}`),
   // near_miss is opt in on the server because collecting it re-checks every rejected

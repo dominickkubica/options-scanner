@@ -2337,3 +2337,155 @@ tr.under-sampled td {
   background: var(--panel-2);
   color: var(--muted);
 }
+
+/* Per-symbol tabs.
+ *
+ * Under the ticker header rather than in the sidebar, so they read as belonging to the
+ * symbol above them. An underline rather than a filled pill: the strip sits directly on
+ * the content it switches, and a row of filled buttons there competes with the panels
+ * below for the eye. */
+.ticker-tabs {
+  display: flex;
+  gap: 4px;
+  align-items: flex-end;
+  border-bottom: 1px solid var(--line);
+  margin: 0 0 12px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.ticker-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.ticker-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font-size: 14px;
+  padding: 9px 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+.ticker-tab:hover {
+  color: var(--text);
+}
+
+.ticker-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  font-weight: 500;
+}
+
+/* News. */
+.story-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.story {
+  display: flex;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+
+.story:first-child {
+  border-top: none;
+}
+
+/* Market wraps tagged with thirty tickers. Present but quiet: dropping them would
+ * occasionally hide the only story that moved the price. */
+.story.broad {
+  opacity: 0.62;
+}
+
+.story-image {
+  width: 92px;
+  height: 62px;
+  object-fit: cover;
+  border-radius: 6px;
+  flex: none;
+}
+
+.story-body {
+  min-width: 0;
+}
+
+.story-headline {
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.4;
+  text-decoration: none;
+}
+
+.story-headline:hover {
+  color: var(--accent);
+}
+
+.story-summary {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  max-width: 86ch;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.story-meta {
+  display: flex;
+  gap: 12px;
+  margin-top: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--dim);
+}
+
+/* Information. */
+.info-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.info-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 7px 0;
+  border-top: 1px solid rgba(28, 36, 52, 0.6);
+}
+
+.info-row:first-child {
+  border-top: none;
+}
+
+.info-label {
+  color: var(--muted);
+  font-size: 12px;
+  min-width: 130px;
+}
+
+.info-value {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text);
+}
+
+.info-value.muted {
+  color: var(--dim);
+}
+
+.info-hint {
+  color: var(--dim);
+  font-size: 11px;
+}

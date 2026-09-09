@@ -93,12 +93,15 @@ function SignalTable({ signals, onSelect, empty }) {
   );
 }
 
-export default function Signals({ onSelect }) {
+export default function Signals({ onSelect, symbol = null }) {
   const [tab, setTab] = useState("now");
   const [days, setDays] = useState(14);
 
-  const now = useAsync(() => api.signals(), [], { enabled: tab === "now" });
-  const recent = useAsync(() => api.recentSignals({ days }), [days], {
+  // `symbol` scopes both halves to one ticker, which is how this renders inside the
+  // per-symbol Key levels tab. Unscoped it spans the whole watchlist, which is the
+  // question Trade ideas asks instead.
+  const now = useAsync(() => api.signals(symbol), [symbol], { enabled: tab === "now" });
+  const recent = useAsync(() => api.recentSignals({ days, symbol }), [days, symbol], {
     enabled: tab === "recent",
   });
 

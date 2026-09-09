@@ -47,6 +47,11 @@ src/optscan/
   api/              schemas, deps, views, app, routers/
   imports/          broker statement parsers, one module per broker
 frontend/           React app: src/views, src/components, gitignored node_modules and dist
+                    Two levels of navigation. The sidebar holds account-level views
+                    (Home, Browse, Trade ideas, Backtest, Positions, Journal); every
+                    per-symbol view is a tab inside that symbol's page (Chart, Options
+                    chain, News, Information, Key levels, Best plays, Payoff). Adding a
+                    view means deciding which of the two it belongs to.
 scripts/            coverage_floor.py, the per module coverage gate
 tests/              mirrors src layout; fixtures/ holds frozen chains
 data/               gitignored: snapshots, sqlite db

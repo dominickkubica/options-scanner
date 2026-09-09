@@ -158,10 +158,15 @@ function BlockedCard({ item }) {
   );
 }
 
-export default function BestPlays({ onOpenPayoff, onSeeAll }) {
-  // Symbols deliberately null: the server falls back to the whole watchlist, which is
-  // the only thing that makes "best available" a true statement.
-  const { data, error, loading } = useAsync(() => api.scan(null, 200, { nearMiss: true }), []);
+export default function BestPlays({ onOpenPayoff, symbols = null }) {
+  // Null symbols means the server falls back to the whole watchlist, which is the only
+  // thing that makes "best available" a true statement. Passed a list, this becomes the
+  // ranked plays for one ticker, which is what the per-symbol tab wants and is why the
+  // separate Opportunities view is gone: it was the same question asked twice.
+  const { data, error, loading } = useAsync(
+    () => api.scan(symbols, 200, { nearMiss: true }),
+    [symbols],
+  );
 
   const { hero, runners, maturing, almost } = useMemo(() => {
     if (!data) return { hero: null, runners: [], maturing: [], almost: [] };
@@ -209,13 +214,12 @@ export default function BestPlays({ onOpenPayoff, onSeeAll }) {
       </Panel>
 
       {runners.length > 0 && (
+        /* The "see all" button pointed at the Opportunities view, which was the same
+           ranking rendered a second way. The count says how many there are; the list
+           below is the part worth looking at. */
         <Panel
           title="Next best"
-          right={
-            <button type="button" className="btn" onClick={onSeeAll}>
-              See all {count(data.opportunities.length)}
-            </button>
-          }
+          right={<span className="muted">{count(data.opportunities.length)} in all</span>}
         >
           <div className="card-grid">
             {runners.map((play) => (

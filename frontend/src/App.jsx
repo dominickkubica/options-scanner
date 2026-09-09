@@ -16,13 +16,14 @@ import Home from "./views/Home.jsx";
 import Chain from "./views/Chain.jsx";
 import Journal from "./views/Journal.jsx";
 import Levels from "./views/Levels.jsx";
-import Opportunities from "./views/Opportunities.jsx";
 import Payoff from "./views/Payoff.jsx";
 import Positions from "./views/Positions.jsx";
-import Signals from "./views/Signals.jsx";
 import Backtest from "./views/Backtest.jsx";
 import Ideas from "./views/Ideas.jsx";
 import Underlying from "./views/Underlying.jsx";
+import News from "./views/News.jsx";
+import Information from "./views/Information.jsx";
+import KeyLevels from "./views/KeyLevels.jsx";
 import { num } from "./format.js";
 
 // The shell: pick a symbol, pick a view.
@@ -32,21 +33,41 @@ import { num } from "./format.js";
 // a UI that does not say so continuously is one where somebody eventually reads a
 // three day old mark as the current market.
 
-const VIEWS = [
+// Two levels of navigation, because the old flat list mixed two different kinds of
+// thing. Half of those views answered a question about the whole account -- what should
+// I look at, does this rule work, what do I hold -- and half answered a question about
+// one ticker. Sitting in one column they read as thirteen equal choices, and picking a
+// symbol then hunting for the right tab was the normal way to use the app.
+//
+// The sidebar now holds only the account-level views. Everything about a single symbol
+// lives in a tab strip inside that symbol's page, which is where a broker puts it and
+// where somebody already looking at a ticker expects to find it.
+const MAIN_VIEWS = [
   { key: "home", label: "Home" },
-  { key: "best", label: "Best plays" },
   { key: "browse", label: "Browse" },
-  { key: "opportunities", label: "Opportunities" },
-  { key: "chain", label: "Chain" },
-  { key: "underlying", label: "Underlying" },
   { key: "ideas", label: "Trade ideas" },
-  { key: "signals", label: "Signals" },
   { key: "backtest", label: "Backtest" },
-  { key: "levels", label: "Levels" },
-  { key: "payoff", label: "Payoff" },
   { key: "positions", label: "Positions" },
   { key: "journal", label: "Journal" },
 ];
+
+//: The per-symbol tabs, in reading order: what it did, what you can trade on it, what
+//: is being said about it, what it is, what to watch, and what the screen likes.
+//:
+//: Payoff is here rather than in the sidebar because it is inherently about one
+//: symbol's contracts. It is reached by clicking a play rather than by browsing to it,
+//: so it sits last.
+const TICKER_TABS = [
+  { key: "chart", label: "Chart" },
+  { key: "chain", label: "Options chain" },
+  { key: "news", label: "News" },
+  { key: "info", label: "Information" },
+  { key: "levels", label: "Key levels" },
+  { key: "best", label: "Best plays" },
+  { key: "payoff", label: "Payoff" },
+];
+
+const TICKER_KEYS = new Set(TICKER_TABS.map((tab) => tab.key));
 
 // Views that are about the whole universe rather than the selected symbol, so the
 // topbar names the view instead of a ticker the panel below is not showing.
@@ -103,12 +124,15 @@ function readQuoteMode() {
   }
 }
 
+//: Account-level views name themselves in the header. A symbol page shows the ticker
+//: instead, because the tab strip underneath already says which of its pages is open.
 const TITLES = {
-  home: "optscan",
+  home: "Epicfin",
   browse: "Browse",
-  signals: "Signals",
   backtest: "Backtest",
   ideas: "Trade ideas",
+  positions: "Positions",
+  journal: "Journal",
 };
 
 export default function App() {
@@ -176,6 +200,9 @@ export default function App() {
 
   // /health is the cheapest endpoint there is, so its failure is the clearest evidence
   // that the server itself is gone rather than one request having gone wrong.
+  // Whether the main area is showing a symbol's page rather than an account-level one.
+  const onTicker = TICKER_KEYS.has(view);
+
   const apiDown = Boolean(health.error);
   const retryConnection = () => {
     health.reload();
@@ -189,6 +216,7 @@ export default function App() {
     setView("payoff");
   };
 
+
   return (
     <div className={`app ${navOpen ? "nav-open" : ""}`}>
       <button
@@ -200,10 +228,13 @@ export default function App() {
 
       <aside className="sidebar">
         <div className="brand">
-          optscan
+          Epicfin
+          {/* The app's own version, not the data provider's name. Which vendor is
+              serving is a per-panel fact and is already on every provenance badge; in
+              the brand it read like the product was called yfinance. */}
           <small className={health.error ? "bad" : undefined}>
             {health.data
-              ? `${health.data.provider} v${health.data.version}`
+              ? `v${health.data.version}`
               : health.error
                 ? "no connection"
                 : "connecting"}
@@ -216,7 +247,7 @@ export default function App() {
             groups={{}}
             onSelect={(entry) => {
               setSymbol(entry.symbol);
-              if (view === "home" || view === "browse") setView("underlying");
+              if (view === "home" || view === "browse") setView("chart");
             }}
             onChanged={() => watchlist.reload()}
           />
@@ -255,7 +286,7 @@ export default function App() {
                       // staying on the payoff diagram or the journal means the click
                       // appears to have done nothing, because the view showing is not
                       // the one that changed.
-                      setView("underlying");
+                      setView("chart");
                     }}
                     title={
                       captured ? `chains captured ${captured}` : "no chains captured"
@@ -296,7 +327,7 @@ export default function App() {
         <div>
           <div className="section-label">Views</div>
           <div className="nav-list">
-            {VIEWS.map((item) => (
+            {MAIN_VIEWS.map((item) => (
               <button
                 key={item.key}
                 type="button"
@@ -334,14 +365,44 @@ export default function App() {
             ☰
           </button>
           <h1>{TITLES[view] || symbol || "no symbol"}</h1>
-          {summary.data && <span className="spot">{num(summary.data.spot)}</span>}
-          {summary.data && <Provenance provenance={summary.data.provenance} />}
+          {/* The price and its provenance belong to a symbol, so they only appear on a
+              symbol's page. They used to render wherever `summary` had loaded, which
+              put a ticker and a capture time above the journal and the backtester --
+              two pages that have nothing to do with the sidebar selection, where it
+              read as a stale header nobody could dismiss. */}
+          {onTicker && summary.data && (
+            <span className="spot">{num(summary.data.spot)}</span>
+          )}
+          {onTicker && summary.data && (
+            <Provenance provenance={summary.data.provenance} />
+          )}
           <ConnectionBadge
             status={live.status || liveStatus.data}
             connection={wantsLive ? live.connection : CONNECTION.CLOSED}
             cycle={live.cycle}
           />
         </div>
+
+        {/* The per-symbol tabs. Rendered under the header rather than in the sidebar
+            so they read as belonging to the ticker above them, and only when a symbol
+            page is open: a strip of ticker tabs on the Backtest page would be six
+            controls that change nothing visible. */}
+        {onTicker && symbol && (
+          <div className="ticker-tabs" role="tablist" aria-label={`${symbol} views`}>
+            {TICKER_TABS.map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                role="tab"
+                aria-selected={view === tab.key}
+                className={`ticker-tab ${view === tab.key ? "active" : ""}`}
+                onClick={() => setView(tab.key)}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* One cause, one message. When the server is unreachable every panel below
             fails too, and three stacked copies of the same outage say less than one
@@ -370,7 +431,7 @@ export default function App() {
             <Home
               onSelect={(name) => {
                 setSymbol(name);
-                setView("underlying");
+                setView("chart");
               }}
               onGoto={(next, options) => {
                 if (options?.group) setBrowseGroup(options.group);
@@ -385,20 +446,15 @@ export default function App() {
               onSelectGroup={setBrowseGroup}
               onSelect={(name) => {
                 setSymbol(name);
-                setView("underlying");
+                setView("chart");
               }}
             />
           )}
 
-          {!apiDown && view === "best" && (
-            <BestPlays
-              onOpenPayoff={openPayoff}
-              onSeeAll={() => setView("opportunities")}
-            />
-          )}
-
-          {!apiDown && view === "opportunities" && (
-            <Opportunities symbols={symbol ? [symbol] : []} onOpenPayoff={openPayoff} />
+          {/* Scoped to the symbol whose page this is. Unscoped it ranks the whole
+              watchlist, which is what Trade ideas is for. */}
+          {!apiDown && view === "best" && symbol && (
+            <BestPlays onOpenPayoff={openPayoff} symbols={[symbol]} />
           )}
 
           {view === "chain" && summary.data && (
@@ -414,21 +470,20 @@ export default function App() {
           {/* Not gated on summary.data: a symbol with stored prices and no captured
               chain still has a chart worth drawing, and gating made every unpinned
               ticker a dead page. */}
-          {view === "underlying" && symbol && (
+          {view === "chart" && symbol && (
             <Underlying symbol={symbol} summary={summary.data} />
           )}
 
-          {view === "levels" && summary.data && <Levels summary={summary.data} />}
+          {!apiDown && view === "news" && symbol && <News symbol={symbol} />}
 
-          {/* Not gated on a symbol either: signals span every pinned symbol, and the
-              panel's whole job is to tell you which one to go and look at. */}
-          {!apiDown && view === "signals" && (
-            <Signals
-              onSelect={(name) => {
-                setSymbol(name);
-                setView("underlying");
-              }}
-            />
+          {view === "info" && symbol && (
+            <Information symbol={symbol} summary={summary.data} />
+          )}
+
+          {/* Levels and signals were separate views answering halves of one question:
+              where price has been defended, and what is true about it right now. */}
+          {!apiDown && view === "levels" && symbol && (
+            <KeyLevels symbol={symbol} summary={summary.data} />
           )}
 
           {/* Not gated on a symbol: the list is the answer to "which symbol should I be
@@ -437,7 +492,7 @@ export default function App() {
             <Ideas
               onSelect={(name) => {
                 setSymbol(name);
-                setView("underlying");
+                setView("chart");
               }}
             />
           )}
