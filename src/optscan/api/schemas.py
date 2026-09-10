@@ -803,6 +803,12 @@ class LegOut(ApiModel):
     strike: float
     expiry: date
     quantity: int
+    #: Both sides, so a card can be checked against what would actually fill. Every
+    #: credit here is quoted at mid, which is fair value by definition rather than a
+    #: price anyone gets, and without these there is no way to see how much of it the
+    #: spread would eat.
+    bid: float | None = None
+    ask: float | None = None
     mid: float | None = None
     iv: float | None = None
     delta: float | None = None
@@ -842,6 +848,9 @@ class OpportunityOut(ApiModel):
     #: the lean and says nothing about assignment risk.
     short_delta: float | None
     net_delta: float | None = None
+    #: Strike distance on a defined risk structure. Max loss is width minus credit, so
+    #: without it the stated max loss cannot be checked.
+    width: float | None = None
 
     iv: float | None
     iv_rank: float | None

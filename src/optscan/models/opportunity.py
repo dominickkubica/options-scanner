@@ -134,6 +134,9 @@ class Opportunity(Record):
     probability_of_touch: float | None = Field(default=None, ge=0.0, le=1.0)
     short_delta: float | None = None
     net_delta: float | None = None
+    #: Strike distance for a defined risk structure. Max loss is width minus credit, so
+    #: without it a card states a max loss the reader cannot verify.
+    width: float | None = None
 
     # Volatility context.
     iv: float | None = Field(default=None, gt=0.0)

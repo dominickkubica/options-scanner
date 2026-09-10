@@ -1,7 +1,10 @@
 # Screen configuration.
 #
-# Every value here is a default made explicit. Delete any key to fall back to the
-# default in src/optscan/screener/config.py; they are the same numbers.
+# Defaults made explicit: delete any key to fall back to the one in
+# src/optscan/screener/config.py. Exactly one key deliberately differs, and the test
+# `test_the_committed_screen_yaml_matches_the_documented_defaults` knows which -- the
+# broker commission, set to this account's actual broker rather than to the
+# conservative figure a fresh install should assume about an unknown one.
 #
 # A typo in a key is an error rather than a silent fallback, because believing a
 # threshold is in force when it is not is worse than a crash.
@@ -65,7 +68,16 @@ filters:
 # of dollars is an eighth of a narrow spread's maximum profit and noise against a cash
 # secured put's, so omitting them systematically promotes the narrow trades.
 costs:
-  per_contract: 0.65
+  # Robinhood, which is the broker this account actually trades through: no commission,
+  # only pass-through regulatory fees. Roughly 2c OCC clearing plus 1-3c ORF, with the
+  # SEC and TAF fees on sells rounding to well under a cent on these sizes.
+  #
+  # Was 0.65, a full-service commission this account has never paid. That is not a small
+  # detail: fees are fixed per contract, so they are an eighth of a narrow spread's max
+  # profit and noise against a wide one, and an overstated fee therefore penalises
+  # exactly the cheap, narrow, liquid trades this screen should prefer. A four leg
+  # condor was being charged $5.20 round trip against a real cost near 24 cents.
+  per_contract: 0.03
   per_trade: 0.0
   # Managing winners early is the mechanic this tool is built around, and closing a
   # position pays to get out. Set false to model holding to expiration, where most

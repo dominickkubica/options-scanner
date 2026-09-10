@@ -265,6 +265,12 @@ def leg_view(leg: Leg) -> LegOut:
         strike=leg.strike,
         expiry=leg.expiry,
         quantity=leg.quantity,
+        # The two sides, not only the midpoint. Every credit in this tool is quoted at
+        # mid, which is fair value by definition and not a fill: without the bid and
+        # the ask on the wire there is no way to see how much of a candidate's credit
+        # the spread would take, and a card cannot be checked against the real market.
+        bid=leg.bid,
+        ask=leg.ask,
         mid=leg.mid,
         iv=leg.iv,
         delta=leg.delta,
@@ -324,6 +330,7 @@ def opportunity_view(opportunity: Opportunity) -> OpportunityOut:
         probability_of_touch=opportunity.probability_of_touch,
         short_delta=opportunity.short_delta,
         net_delta=opportunity.net_delta,
+        width=opportunity.width,
         iv=opportunity.iv,
         iv_rank=opportunity.iv_rank,
         iv_confidence=opportunity.iv_confidence,
@@ -610,6 +617,7 @@ def _candidate_view(analysis, chosen, config) -> list[CandidateStrikeOut]:
                     probability_of_profit=opportunity.probability_of_profit,
                     short_delta=opportunity.short_delta,
                     net_delta=opportunity.net_delta,
+                    width=opportunity.width,
                     credit=opportunity.credit,
                     score=opportunity.score,
                 )

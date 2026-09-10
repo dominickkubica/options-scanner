@@ -274,10 +274,41 @@ class TestScanCommand:
         assert "vertical_mispricing_enabled" in out
 
 
+#: Keys the committed screen.yaml is allowed to differ from the code defaults on, and
+#: what it must say instead. An allowlist rather than a loosened comparison: the test
+#: below exists to catch drift, and "some values may differ" would catch nothing.
+DELIBERATE_OVERRIDES = {
+    # The default is a typical per-contract commission for an unknown broker. This
+    # account trades through Robinhood, which charges none, so the committed file
+    # carries pass-through regulatory fees instead. The default stays conservative
+    # because understating fees is the dangerous direction: they are fixed per
+    # contract, so a fee that is too low systematically flatters narrow trades.
+    "costs.per_contract": 0.03,
+}
+
+
 def test_the_committed_screen_yaml_matches_the_documented_defaults() -> None:
     """screen.yaml exists to show every knob. If it drifts from the defaults it is
-    documentation that lies."""
+    documentation that lies.
+
+    Deliberate differences are declared above and checked by value, so a real drift
+    still fails and an intentional override has to be written down to pass.
+    """
     from optscan.config import REPO_ROOT
 
     committed = ScreenConfig.load(REPO_ROOT / "screen.yaml")
-    assert committed == ScreenConfig()
+    defaults = ScreenConfig()
+
+    patched = {}
+    for path, expected in DELIBERATE_OVERRIDES.items():
+        section, key = path.split(".")
+        assert getattr(getattr(committed, section), key) == expected, (
+            f"{path} is declared as a deliberate override worth {expected}"
+        )
+        # Rebuild the section with the default put back, so everything else is still
+        # compared exactly. The models are frozen, hence a copy rather than a set.
+        patched[section] = getattr(committed, section).model_copy(
+            update={key: getattr(getattr(defaults, section), key)}
+        )
+
+    assert committed.model_copy(update=patched) == defaults
