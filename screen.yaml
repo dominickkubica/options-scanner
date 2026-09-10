@@ -82,12 +82,24 @@ weights:
   probability: 0.15
   event_risk: 0.10
 
-# The least defensible numbers in the project. They decide that 25 percent annualized
-# is full marks and 5 percent is zero, and nothing outside this file justifies that.
-# Phase 8 is where they get replaced by values that earned their place.
+# Annualized return is ramped on a LOG scale between floor and ceiling. Measured across
+# 350 passing candidates on 7 liquid symbols (2026-09-10):
+#
+#     p1   15%     p50   486%     p95  5,264%
+#     p10  24%     p75 1,157%     max 13,572%
+#
+# The previous linear 5% to 25% ramp put its ceiling at the 10th percentile, so 89% of
+# candidates scored exactly 1.000 and the component ranked nothing. Ordering fell to
+# probability and liquidity instead, both of which favour a single leg, which is why
+# every Best play was a cash secured put returning 32% while call spreads returning
+# 1,300% sat below them.
+#
+# The ceiling here is near the 88th percentile on a log scale, so the top is reachable
+# and the middle of the distribution actually separates. Still not validated against
+# outcomes: it ranks honestly, it does not rank correctly.
 normalization:
-  annualized_return_floor: 0.05
-  annualized_return_ceiling: 0.25
+  annualized_return_floor: 0.10
+  annualized_return_ceiling: 20.0
   probability_floor: 0.50
   probability_ceiling: 0.90
 

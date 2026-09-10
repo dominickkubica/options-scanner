@@ -387,28 +387,54 @@ class TestRankingIsStable:
     """
 
     def test_top_candidate_is_pinned(self, frozen_snapshot, wide_config) -> None:
+        """Re-pinned 2026-09-10 when the premium ramp went logarithmic.
+
+        The previous winner was the 751/756 five wide clearing $109.90; it is now the
+        751/752 one wide clearing $28.90. That is the ramp doing what it was changed to
+        do -- annualized return divides by capital, so a narrower spread annualizes
+        higher, and a scale that resolves the top of the range resolves that too.
+
+        Worth knowing rather than hiding: it means the change traded one bias for a
+        smaller one. Measured on the live watchlist at this ceiling the top candidate is
+        still a five wide clearing $97, and the degenerate one wide result only appears
+        under this fixture's deliberately relaxed annualized return floor. If it starts
+        showing up in production, the ceiling is the dial.
+        """
         result = scan_snapshot(frozen_snapshot, wide_config, rate=RATE)
         top = result.opportunities[0]
 
         assert top.symbol == "SPY"
         assert top.strategy is Strategy.CALL_CREDIT_SPREAD
         assert top.expiry == date(2026, 8, 7)
-        assert [leg.strike for leg in top.legs] == [751.0, 756.0]
-        assert top.score == pytest.approx(0.94570, abs=5e-5)
+        assert [leg.strike for leg in top.legs] == [751.0, 752.0]
+        assert top.score == pytest.approx(0.93966, abs=5e-5)
 
     def test_the_top_candidate_is_worth_the_ticket(self, frozen_snapshot, wide_config) -> None:
         """The min_max_profit floor exists because a one wide spread can annualize at
-        400 percent and clear 18 dollars. The top row must be a real trade."""
-        top = scan_snapshot(frozen_snapshot, wide_config, rate=RATE).opportunities[0]
-        assert top.max_profit == pytest.approx(109.9, abs=0.05)
-        assert top.capital == pytest.approx(387.5, abs=0.05)
+        400 percent and clear 18 dollars. The top row must be a real trade.
+
+        Asserted against the configured floor rather than a pinned dollar figure. The
+        old version pinned $109.90, which made it a second copy of the snapshot test
+        above and meant it failed for any ranking change rather than only for the one it
+        was written to catch. What it actually guards is that the winner clears the
+        floor the config sets, whatever the ranking happens to prefer.
+        """
+        result = scan_snapshot(frozen_snapshot, wide_config, rate=RATE)
+        top = result.opportunities[0]
+        floor = wide_config.filters.premium.min_max_profit
+
+        assert top.max_profit >= floor, f"top row clears only ${top.max_profit:.2f}"
+        assert top.capital > 0
         assert top.commission == pytest.approx(2.60, abs=0.01)
+        # Commissions are already netted out of max_profit, so a row that only clears
+        # the floor because the fee was ignored would be caught here.
+        assert top.max_profit + top.commission > floor
 
     def test_the_ordering_is_a_strict_ranking(self, frozen_snapshot, wide_config) -> None:
         """Second place is meaningfully behind first, so the ordering is not a
         coin flip between saturated scores."""
         result = scan_snapshot(frozen_snapshot, wide_config, rate=RATE)
-        assert result.opportunities[1].score == pytest.approx(0.94237, abs=5e-5)
+        assert result.opportunities[1].score == pytest.approx(0.93451, abs=5e-5)
         assert result.opportunities[0].score > result.opportunities[1].score
 
     def test_candidate_count_is_pinned(self, frozen_snapshot, wide_config) -> None:

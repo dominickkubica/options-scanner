@@ -26,6 +26,7 @@ like failures rather than like an unavailable input.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 
 from optscan.analytics.ivrank import Confidence
@@ -49,6 +50,34 @@ def ramp(value: float | None, floor: float, ceiling: float) -> float | None:
     return min(max((value - floor) / (ceiling - floor), 0.0), 1.0)
 
 
+def log_ramp(value: float | None, floor: float, ceiling: float) -> float | None:
+    """`ramp`, but across orders of magnitude.
+
+    A linear ramp assumes the interesting variation is evenly spread across the range.
+    For annualized return it is not: the population runs from 13% to 13,572%, so any
+    linear ceiling low enough to distinguish the bottom decile pins everything above it
+    at 1.0, and any ceiling high enough to reach the top squashes the entire middle into
+    the first few percent of the scale. Neither ranks.
+
+    On a log scale a tenfold difference is the same distance wherever it sits, which is
+    the right shape for a return: 20% versus 200% is the same kind of gap as 200% versus
+    2000%, and a linear scale says the second is ten times more important.
+
+    Values at or below zero return 0.0 rather than raising. A negative annualized return
+    is a real thing a candidate can have and it is simply the bottom of the scale.
+    """
+    if value is None:
+        return None
+    if ceiling <= floor:
+        raise ValueError("floor must be below ceiling")
+    if floor <= 0:
+        raise ValueError("a log ramp needs a positive floor")
+    if value <= 0:
+        return 0.0
+    span = math.log(ceiling) - math.log(floor)
+    return min(max((math.log(value) - math.log(floor)) / span, 0.0), 1.0)
+
+
 def score_premium(candidate: Candidate, config: ScreenConfig) -> float:
     """How well the position pays for the capital it uses, over the time it uses it.
 
@@ -60,12 +89,17 @@ def score_premium(candidate: Candidate, config: ScreenConfig) -> float:
     norm = config.normalization
     annualized = candidate.profile.annualized_return
     if annualized is not None:
-        return ramp(annualized, norm.annualized_return_floor, norm.annualized_return_ceiling) or 0.0
+        return (
+            log_ramp(annualized, norm.annualized_return_floor, norm.annualized_return_ceiling)
+            or 0.0
+        )
 
     strike = candidate.short_legs[0].strike if candidate.short_legs else None
     if strike:
         crude = (candidate.credit / strike) * (365 / max(candidate.profile.dte, 1))
-        scaled = ramp(crude, norm.annualized_return_floor, norm.annualized_return_ceiling) or 0.0
+        scaled = (
+            log_ramp(crude, norm.annualized_return_floor, norm.annualized_return_ceiling) or 0.0
+        )
         return scaled * 0.75  # discounted for having no honest capital denominator
     return 0.0
 

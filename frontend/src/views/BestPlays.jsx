@@ -24,7 +24,17 @@ import { count, money, num, pct, reasonLabel, strategyLabel } from "../format.js
 //      that let those two share a visual language would be actively dangerous, so
 //      blocked cards are outlined and muted and always carry their blocker.
 //
-//   3. The score gets a bar, not a colour band. A green-amber-red ramp would assert
+//   3. The runners are one per strategy, not the next six by score. Ranking the whole
+//      list and taking the top slice showed the same shape six times: for months every
+//      card here was a cash secured put, because the premium component was pinned at
+//      1.000 on 89% of rows and what actually ordered the list was probability and
+//      liquidity, both of which favour a single leg. Fixing that scale helped and did
+//      not solve this: whichever shape happens to score best still sweeps the row.
+//      A screen called "best plays" that only ever shows one structure is hiding the
+//      choice it exists to present, so each strategy gets exactly one slot and wins it
+//      against its own kind.
+//
+//   4. The score gets a bar, not a colour band. A green-amber-red ramp would assert
 //      that some threshold is good, and no threshold here has earned that: the
 //      validation study is still under its own cluster minimum. The bar shows the
 //      number relative to the others on screen and claims nothing else.
@@ -172,9 +182,20 @@ export default function BestPlays({ onOpenPayoff, symbols = null }) {
     if (!data) return { hero: null, runners: [], maturing: [], almost: [] };
     const plays = data.opportunities;
     const near = data.near_misses || [];
+
+    // One card per strategy: the best of each, in score order, minus whichever one is
+    // already the hero. `plays` arrives ranked, so the first time a strategy is seen is
+    // its best instance and no sorting is needed here.
+    const best = new Map();
+    for (const play of plays) {
+      if (!best.has(play.strategy)) best.set(play.strategy, play);
+    }
+    const champion = plays[0] || null;
+    const perStrategy = [...best.values()].filter((play) => play.id !== champion?.id);
+
     return {
-      hero: plays[0] || null,
-      runners: plays.slice(1, TOP_COUNT),
+      hero: champion,
+      runners: perStrategy.slice(0, TOP_COUNT),
       maturing: near
         .filter((item) => item.blocker === MATURES_ON_ITS_OWN)
         .sort((a, b) => a.enters_screen_in_days - b.enters_screen_in_days),
@@ -218,8 +239,12 @@ export default function BestPlays({ onOpenPayoff, symbols = null }) {
            ranking rendered a second way. The count says how many there are; the list
            below is the part worth looking at. */
         <Panel
-          title="Next best"
-          right={<span className="muted">{count(data.opportunities.length)} in all</span>}
+          title="Best of each structure"
+          right={
+            <span className="muted">
+              one per strategy &middot; {count(data.opportunities.length)} in all
+            </span>
+          }
         >
           <div className="card-grid">
             {runners.map((play) => (

@@ -288,10 +288,15 @@ class TestScoringBranches:
         from optscan.analytics.returns import ReturnProfile
         from tests.test_screener_config_filters import candidate
 
+        # 22 days, not 45. At 45 the fixture annualizes to 5.5%, which is under the
+        # premium ramp's floor, so both sides floored to 0.0 and the comparison stopped
+        # comparing anything. A fixture that cannot reach the scale it is testing proves
+        # nothing, in the same way a constant close cannot exercise a spread estimator.
         naked = candidate(
-            profile=ReturnProfile(credit=5.0, max_profit=500.0, max_loss=None, capital=None, dte=45)
+            profile=ReturnProfile(credit=5.0, max_profit=500.0, max_loss=None, capital=None, dte=22)
         )
-        defined = candidate(credit=5.0, dte=45)
+        defined = candidate(credit=5.0, dte=22)
+        assert score_premium(defined, ScreenConfig()) > 0.0, "fixture must reach the ramp"
         assert score_premium(naked, ScreenConfig()) < score_premium(defined, ScreenConfig())
 
     def test_a_thin_surface_warns_on_every_row(self, frozen_snapshot, wide_config) -> None:

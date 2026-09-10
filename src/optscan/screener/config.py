@@ -195,8 +195,23 @@ class ScoringNormalization(StrictModel):
     buried so that Phase 8 can replace them with values that earned their place.
     """
 
-    annualized_return_floor: float = Field(default=0.05, ge=0.0)
-    annualized_return_ceiling: float = Field(default=0.25, gt=0.0)
+    #: Annualized return is ramped on a **log** scale between these, because the linear
+    #: one did not rank anything. Measured across 350 passing candidates on 7 liquid
+    #: symbols, 2026-09-10:
+    #:
+    #:     p1    15%      p50    486%      p95   5,264%
+    #:     p10   24%      p75  1,157%      max  13,572%
+    #:
+    #: The old 25% ceiling sat at the 10th percentile, so 89% of candidates scored
+    #: exactly 1.000 and the component did no ordering at all. What ranked instead was
+    #: probability and liquidity, both of which favour a single leg, which is why a cash
+    #: secured put returning 32% outranked a call spread returning 1,300%.
+    #:
+    #: Three orders of magnitude cannot be ramped linearly. On a log scale the ceiling
+    #: below sits near the 88th percentile, so the top of the range is reachable and the
+    #: middle of the distribution actually spreads out.
+    annualized_return_floor: float = Field(default=0.10, gt=0.0)
+    annualized_return_ceiling: float = Field(default=20.0, gt=0.0)
     probability_floor: float = Field(default=0.50, ge=0.0, le=1.0)
     probability_ceiling: float = Field(default=0.90, ge=0.0, le=1.0)
 
