@@ -733,7 +733,18 @@ class CandidateStrikeOut(ApiModel):
     expiry: date
     dte: int
     probability_of_profit: float | None = None
-    short_delta: float | None = None
+    short_delta: float | None = Field(
+        default=None,
+        description=(
+            "Absolute delta of the short leg nearest to being tested. On a two sided "
+            "structure this is NOT the net position delta, which nets to near zero and "
+            "says nothing about assignment risk."
+        ),
+    )
+    net_delta: float | None = Field(
+        default=None,
+        description="Which way the whole position leans. Null for single sided structures.",
+    )
     credit: float | None = None
     score: float | None = None
 
@@ -826,7 +837,11 @@ class OpportunityOut(ApiModel):
 
     probability_of_profit: float | None
     probability_of_touch: float | None
+    #: Absolute delta of the short leg nearest to being tested. Deliberately NOT the net
+    #: position delta: on a condor the two shorts cancel to near zero, which describes
+    #: the lean and says nothing about assignment risk.
     short_delta: float | None
+    net_delta: float | None = None
 
     iv: float | None
     iv_rank: float | None

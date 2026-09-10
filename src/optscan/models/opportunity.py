@@ -133,6 +133,7 @@ class Opportunity(Record):
     probability_of_profit: float | None = Field(default=None, ge=0.0, le=1.0)
     probability_of_touch: float | None = Field(default=None, ge=0.0, le=1.0)
     short_delta: float | None = None
+    net_delta: float | None = None
 
     # Volatility context.
     iv: float | None = Field(default=None, gt=0.0)

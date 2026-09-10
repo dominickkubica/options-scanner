@@ -315,6 +315,7 @@ def opportunity_view(opportunity: Opportunity) -> OpportunityOut:
         probability_of_profit=opportunity.probability_of_profit,
         probability_of_touch=opportunity.probability_of_touch,
         short_delta=opportunity.short_delta,
+        net_delta=opportunity.net_delta,
         iv=opportunity.iv,
         iv_rank=opportunity.iv_rank,
         iv_confidence=opportunity.iv_confidence,
@@ -600,6 +601,7 @@ def _candidate_view(analysis, chosen, config) -> list[CandidateStrikeOut]:
                     dte=opportunity.dte,
                     probability_of_profit=opportunity.probability_of_profit,
                     short_delta=opportunity.short_delta,
+                    net_delta=opportunity.net_delta,
                     credit=opportunity.credit,
                     score=opportunity.score,
                 )

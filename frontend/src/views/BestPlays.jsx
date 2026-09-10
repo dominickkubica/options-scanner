@@ -98,7 +98,10 @@ function HeroPlay({ play, onOpenPayoff }) {
         <Metric label="capital" value={money(play.capital)} />
         <Metric label="annualized" value={pct(play.annualized_return, 0)} />
         <Metric label="prob of profit" value={pct(play.probability_of_profit, 0)} />
-        <Metric label="short delta" value={num(play.short_delta)} />
+        {/* "tested delta", not "short delta". On a condor the two shorts nearly cancel
+            and the old net figure read 0.01 beside a 69% probability of profit, which
+            described no position that exists. This is the nearer wing. */}
+        <Metric label="tested delta" value={num(play.short_delta)} />
         <Metric label="liquidity" value={num(play.liquidity_score)} />
       </div>
 

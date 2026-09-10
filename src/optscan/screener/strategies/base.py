@@ -41,12 +41,17 @@ class Candidate:
     legs: tuple[Leg, ...]
     credit: float
     profile: ReturnProfile
+    #: Delta of the short leg nearest to being tested, as an absolute value. On a two
+    #: sided structure this is deliberately not the net: see `_tested_delta`.
     short_delta: float | None
     short_iv: float | None
     probability_of_profit: float | None
     probability_of_touch: float | None
     liquidity_score: float | None
     width: float | None = None
+    #: Which way the whole position leans. None for single sided structures, where it
+    #: would only repeat `short_delta` with a sign.
+    net_delta: float | None = None
     notes: tuple[str, ...] = field(default_factory=tuple)
 
     @property

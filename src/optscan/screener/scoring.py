@@ -240,6 +240,7 @@ def score_candidate(
         probability_of_profit=candidate.probability_of_profit,
         probability_of_touch=candidate.probability_of_touch,
         short_delta=candidate.short_delta,
+        net_delta=candidate.net_delta,
         iv=candidate.short_iv,
         iv_rank=rank.rank if rank else None,
         iv_percentile=rank.percentile if rank else None,

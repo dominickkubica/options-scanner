@@ -164,7 +164,8 @@ class IronCondor(StrategyGenerator):
                             expiry.dte,
                             commissions_from(config),
                         ),
-                        short_delta=_net_delta(legs),
+                        short_delta=_tested_delta(legs),
+                        net_delta=_net_delta(legs),
                         short_iv=_average_short_iv(legs),
                         probability_of_profit=_two_sided_pop(legs, credit, analysis, expiry),
                         probability_of_touch=_worse_touch(legs, credit, analysis, expiry),
@@ -226,7 +227,8 @@ class ShortStrangle(StrategyGenerator):
                         dte=expiry.dte,
                         commission=commissions_from(config).cost(legs=2),
                     ),
-                    short_delta=_net_delta(legs),
+                    short_delta=_tested_delta(legs),
+                    net_delta=_net_delta(legs),
                     short_iv=_average_short_iv(legs),
                     probability_of_profit=_two_sided_pop(legs, credit, analysis, expiry),
                     probability_of_touch=_worse_touch(legs, credit, analysis, expiry),
@@ -279,6 +281,24 @@ def _net_delta(legs: tuple[Leg, ...]) -> float | None:
     if not deltas:
         return None
     return sum(-leg.delta if leg.is_short else leg.delta for leg in legs if leg.delta is not None)
+
+
+def _tested_delta(legs: tuple[Leg, ...]) -> float | None:
+    """The delta of the short leg nearest to being tested.
+
+    **Not** the net position delta, which is what this used to report and which is a
+    different quantity that happens to share a name. On a two sided structure the short
+    put and short call deltas very nearly cancel: an iron condor with both shorts at 20
+    delta nets out to about 0.01, and the card read "short delta 0.01" next to a 69%
+    probability of profit and a $0.60 credit -- three numbers that cannot describe the
+    same position, and the one that was wrong was this one.
+
+    Net delta is a real and useful number, it is just the answer to "which way does this
+    lean", not to "how close am I to being tested". The screen asks the second question,
+    so the largest short exposure wins: a condor is as safe as its nearer wing.
+    """
+    shorts = [abs(leg.delta) for leg in legs if leg.is_short and leg.delta is not None]
+    return max(shorts) if shorts else None
 
 
 def _average_short_iv(legs: tuple[Leg, ...]) -> float | None:
