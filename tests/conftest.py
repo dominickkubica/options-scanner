@@ -28,6 +28,23 @@ FROZEN_CHAIN = FIXTURE_DIR / "spy_chain_snapshot.json"
 
 
 @pytest.fixture(autouse=True)
+def _offline_quotes() -> Iterator[None]:
+    """No test fetches a live quote unless it deliberately installs a provider.
+
+    The suite is offline by construction, and it stopped being so the moment the daily
+    chart began appending today's bar: that path builds its own provider, so a real
+    Alpaca request appeared inside tests that had carefully overridden everything else.
+    Credentials leak in from .env for any fixture that does not use `clean_env`, so
+    "no credentials configured" was never the guarantee it looked like.
+    """
+    from optscan.api.deps import get_quote_provider, set_quote_provider
+
+    set_quote_provider(lambda _settings: None)
+    yield
+    set_quote_provider(get_quote_provider)
+
+
+@pytest.fixture(autouse=True)
 def _clear_settings_cache() -> Iterator[None]:
     """Keep the settings singleton from leaking between tests."""
     get_settings.cache_clear()

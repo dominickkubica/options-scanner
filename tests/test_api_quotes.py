@@ -99,7 +99,10 @@ def client(tmp_settings: Settings) -> TestClient:
 
 
 def use(monkeypatch: pytest.MonkeyPatch, provider) -> None:
-    monkeypatch.setattr("optscan.api.deps.get_quote_provider", lambda _settings: provider)
+    """Install a stub quote provider through the same seam production uses."""
+    from optscan.api.deps import set_quote_provider
+
+    set_quote_provider(lambda _settings: provider)
 
 
 # --------------------------------------------------------------------- the happy path

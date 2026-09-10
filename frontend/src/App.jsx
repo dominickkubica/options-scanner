@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "./api.js";
 import { useQuotes } from "./useQuotes.js";
 import {
@@ -7,6 +7,7 @@ import {
   ErrorBoundary,
   ErrorBox,
   Provenance,
+  QuoteAge,
   useAsync,
 } from "./components/common.jsx";
 import { CONNECTION, useLive } from "./live.js";
@@ -145,7 +146,18 @@ export default function App() {
   // carries a first set so the pills paint immediately rather than after a second
   // round trip, and these overwrite them as soon as the first poll lands.
   const pinned = watchlist.data?.symbols || [];
-  const livePrices = useQuotes(pinned);
+  const [symbol, setSymbol] = useState(null);
+  // The open symbol is quoted alongside the pins even when it is not pinned, because
+  // the header price is the most prominent number in the app and it was reading its
+  // value off the stored option chain -- a capture from 15:45 the previous session.
+  // On a day AAPL was up 3.19% the header showed yesterday's 315.91 while the sidebar
+  // pill beside it showed the live 325.40.
+  const pinnedKey = pinned.join(",");
+  const quoted = useMemo(
+    () => [...new Set([...pinnedKey.split(",").filter(Boolean), symbol].filter(Boolean))],
+    [pinnedKey, symbol],
+  );
+  const livePrices = useQuotes(quoted);
   const quotes = { ...(watchlist.data?.quotes || {}), ...livePrices.quotes };
 
   // What the pills are actually showing, in three words.
@@ -178,7 +190,6 @@ export default function App() {
         "consolidated quotes need an entitlement this account does not have."
       : "";
 
-  const [symbol, setSymbol] = useState(null);
   const [view, setView] = useState("home");
   const [expiry, setExpiry] = useState(null);
   const [handover, setHandover] = useState(null);
@@ -419,11 +430,20 @@ export default function App() {
               put a ticker and a capture time above the journal and the backtester --
               two pages that have nothing to do with the sidebar selection, where it
               read as a stale header nobody could dismiss. */}
-          {onTicker && summary.data && (
-            <span className="spot">{num(summary.data.spot)}</span>
+          {onTicker && (quotes[symbol] || summary.data) && (
+            <span className="spot">
+              {num(quotes[symbol]?.last ?? summary.data?.spot)}
+            </span>
+          )}
+          {/* Two different ages, so two different badges. The price above is a quote;
+              the capture below is the option chain, which really is from yesterday and
+              should keep saying so. Sharing one badge is what made a live price look
+              24 hours old. */}
+          {onTicker && quotes[symbol]?.as_of && (
+            <QuoteAge quote={quotes[symbol]} />
           )}
           {onTicker && summary.data && (
-            <Provenance provenance={summary.data.provenance} />
+            <Provenance provenance={summary.data.provenance} label="chain captured" />
           )}
           <ConnectionBadge
             status={live.status || liveStatus.data}

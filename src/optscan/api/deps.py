@@ -541,7 +541,7 @@ def price_history(
     now = datetime.now(UTC).timestamp()
     cached = _HISTORY.get(key, now)
     if isinstance(cached, tuple):
-        return cached
+        return _with_forming_bar(cached, symbol, interval, settings)
 
     if interval != DAILY_INTERVAL:
         result = _intraday_history(symbol, interval, days, settings, session)
@@ -549,7 +549,51 @@ def price_history(
         result = _daily_history(symbol, days, settings, provider_factory)
 
     _HISTORY.put(key, result, expires_at=now + HISTORY_TTL_SECONDS)
-    return result
+    return _with_forming_bar(result, symbol, interval, settings)
+
+
+def _with_forming_bar(
+    result: tuple[list[PriceBar], str | None],
+    symbol: str,
+    interval: str,
+    settings: Settings | None,
+) -> tuple[list[PriceBar], str | None]:
+    """Append today's in-progress bar, outside the history cache.
+
+    Deliberately not inside it. Stored daily bars change once a day, so caching them for
+    fifteen minutes costs nothing -- but the current session's bar changes every tick,
+    and caching that alongside them would have frozen the chart's last candle for
+    fifteen minutes while the header price beside it moved every ten seconds. The quote
+    underneath has its own short cache, so this stays cheap: a redraw shares one fetch
+    with the pills rather than making its own.
+    """
+    bars, note = result
+    if interval != DAILY_INTERVAL or settings is None or not bars:
+        return result
+
+    newest = bars[-1].ts.date()
+    forming = _forming_bar(settings, symbol, newest)
+    if forming is None:
+        return result
+    return [*bars, forming], note
+
+
+#: How the quote provider is obtained. A module level seam rather than a direct call,
+#: so a test that has carefully overridden the provider is not bypassed by a second code
+#: path reaching for the network on its own. That is exactly what happened: appending a
+#: live bar to the daily chart put a real Alpaca request inside the offline suite,
+#: because it called `get_quote_provider` instead of going through the injection the
+#: rest of the history path already used.
+#: A one entry dict rather than a bare module global, so swapping it is a mutation
+#: rather than a rebinding and no `global` statement is needed.
+_QUOTE_PROVIDER: dict[str, Callable[[Settings], MarketDataProvider | None]] = {
+    "factory": get_quote_provider
+}
+
+
+def set_quote_provider(factory: Callable[[Settings], MarketDataProvider | None]) -> None:
+    """Swap the quote provider. For tests, and for anything that must stay offline."""
+    _QUOTE_PROVIDER["factory"] = factory
 
 
 def live_quotes(
@@ -597,7 +641,7 @@ def live_quotes(
 def _fetch_live_quotes(
     settings: Settings, wanted: list[str]
 ) -> tuple[dict[str, LiveQuote], str | None]:
-    provider = get_quote_provider(settings)
+    provider = _QUOTE_PROVIDER["factory"](settings)
     if provider is None:
         return _stored_quotes(settings, wanted), (
             "No vendor here can serve a live price, so these are the last stored "
@@ -623,6 +667,37 @@ def _fetch_live_quotes(
     if missing:
         quotes = {**_stored_quotes(settings, missing), **quotes}
     return quotes, None
+
+
+def _forming_bar(settings: Settings, symbol: str, newest_stored: date) -> PriceBar | None:
+    """Today's in-progress daily bar, or None when storage is already current.
+
+    Built from the same live quote the watchlist pills use, so the chart's last candle
+    and the header price cannot disagree. Returns None outside a session, when the quote
+    is a stored fallback, or when the quote's session is not newer than what is already
+    held -- appending a bar for a session storage already has would double it.
+    """
+    quotes, _note = live_quotes(settings, [symbol])
+    quote = quotes.get(symbol)
+    if quote is None or quote.feed == "stored" or quote.last is None:
+        return None
+    session = quote.session_date
+    if session is None or session <= newest_stored:
+        return None
+
+    return PriceBar(
+        symbol=symbol,
+        ts=datetime.combine(session, time(), tzinfo=UTC),
+        # A session that has only just opened can be missing a high or a low; the last
+        # price is a floor for both and never invents a range the market did not print.
+        open=quote.day_open if quote.day_open is not None else quote.last,
+        high=max(quote.day_high or quote.last, quote.last),
+        low=min(quote.day_low or quote.last, quote.last),
+        close=quote.last,
+        volume=quote.volume or 0,
+        fetched_at=quote.as_of or datetime.now(UTC),
+        source=quote.feed or "live",
+    )
 
 
 def _stored_quotes(settings: Settings, symbols: Sequence[str]) -> dict[str, LiveQuote]:
@@ -665,12 +740,19 @@ def _daily_history(
     settings: Settings | None,
     provider_factory: ProviderFactory | None,
 ) -> tuple[list[PriceBar], str | None]:
-    """Stored bars if there are any, otherwise ask the provider."""
+    """Stored bars if there are any, otherwise ask the provider.
+
+    Today's bar is appended live. The price sync runs after the close, so storage does
+    not contain the current session until the evening: a chart drawn from storage alone
+    is a full day behind from the opening bell until then, and looks precisely like a
+    chart that is up to date. That is the same failure the live quotes were added to fix,
+    one panel over.
+    """
     if settings is not None:
         with db.session(settings.sqlite_path) as conn:
             stored, source = recent_daily_bars(conn, symbol, days)
         if stored:
-            return [
+            bars = [
                 PriceBar(
                     symbol=bar.symbol,
                     ts=datetime.combine(bar.session_date, time(), tzinfo=UTC),
@@ -679,11 +761,15 @@ def _daily_history(
                     low=bar.low,
                     close=bar.close,
                     volume=bar.volume,
-                    fetched_at=datetime.now(UTC),
+                    # The session this bar covers, not the moment it was read out of
+                    # sqlite. Stamping `now` here is what made a day old chart report
+                    # itself as fetched seconds ago.
+                    fetched_at=datetime.combine(bar.session_date, time(), tzinfo=UTC),
                     source=source or "stored",
                 )
                 for bar in stored
-            ], None
+            ]
+            return bars, None
 
     if provider_factory is None:
         return [], (

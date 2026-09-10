@@ -502,9 +502,15 @@ class AlpacaProvider(MarketDataProvider):
         # a thin after hours tick. It belongs beside it, exactly as the tape's does.
         if session_state(when) in (SessionState.PRE, SessionState.POST):
             return quote.model_copy(update={"extended": price, "extended_at": when})
+        # The real time print can be outside the delayed bar's range, because that bar
+        # is fifteen minutes behind it. Extending the high and low keeps the forming
+        # candle consistent with its own close instead of drawing a close outside its
+        # own wick.
         return quote.model_copy(
             update={
                 "last": price,
+                "day_high": max(price, quote.day_high) if quote.day_high else price,
+                "day_low": min(price, quote.day_low) if quote.day_low else price,
                 "as_of": when,
                 "realtime": True,
                 "feed": REALTIME_FEED,
@@ -540,6 +546,13 @@ class AlpacaProvider(MarketDataProvider):
             extended=extended,
             extended_at=traded_at if extended is not None else None,
             volume=whole(daily.get("v")),
+            day_open=positive(daily.get("o")),
+            day_high=positive(daily.get("h")),
+            day_low=positive(daily.get("l")),
+            # `dailyBar.t` is midnight ET: useless as a freshness stamp, which is why
+            # `as_of` never uses it, but exactly right as the label for which session
+            # this bar belongs to.
+            session_date=(stamp.date() if (stamp := _timestamp(daily.get("t"))) else None),
             as_of=as_of,
             session=str(state) if state else None,
             realtime=False,

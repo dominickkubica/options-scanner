@@ -79,6 +79,15 @@ class NoNetworkProvider:
 
 
 def offline_client(settings: Settings) -> TestClient:
+    """A client that cannot reach the network, and is checked to stay that way.
+
+    The provider override alone was not enough once the daily chart started appending
+    today's forming bar: that path fetched a quote through its own entry point and made
+    a real request from inside the offline suite. Both seams are closed here.
+    """
+    from optscan.api.deps import set_quote_provider
+
+    set_quote_provider(lambda _settings: None)
     app = create_app(settings=settings)
     app.dependency_overrides[provider_factory_dep] = lambda: NoNetworkProvider
     return TestClient(app)

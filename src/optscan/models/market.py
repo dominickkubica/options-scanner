@@ -84,6 +84,15 @@ class LiveQuote(Record):
     extended_at: UtcDatetime | None = None
     #: Regular session volume so far.
     volume: Size | None = None
+    #: Today's forming bar, so a daily chart can show the session in progress. Stored
+    #: daily bars do not include today until the price sync runs after the close, so a
+    #: chart drawn from storage alone is a day behind for the whole session -- and looks
+    #: exactly like a chart that is up to date, which is how it went unnoticed.
+    day_open: Price | None = None
+    day_high: Price | None = None
+    day_low: Price | None = None
+    #: The session `last`, `volume` and the day bar above belong to.
+    session_date: date | None = None
     #: When the freshest observation behind these numbers was stamped by the venue.
     #: Not when it was fetched: `fetched_at` on Record already says that, and the gap
     #: between the two is the whole question.

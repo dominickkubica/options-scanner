@@ -43,6 +43,29 @@ export function Provenance({ provenance, label = "captured" }) {
   );
 }
 
+// How old a *price* is, as distinct from how old a capture is.
+//
+// The header carries two numbers with two different ages: a live quote and the stored
+// option chain. Sharing one badge between them is what made a quote from thirty seconds
+// ago sit under a label reading "stale, captured 24h ago", so each gets its own.
+export function QuoteAge({ quote }) {
+  if (!quote?.as_of) return null;
+  const seconds = Math.max(0, (Date.now() - new Date(quote.as_of).getTime()) / 1000);
+  // A delayed feed is not stale, it is late by a published amount, and the two deserve
+  // different words. Stale means nobody is updating this; delayed means somebody is,
+  // fifteen minutes behind.
+  const late = quote.delay_minutes ? `${quote.delay_minutes}m delayed` : null;
+  const dead = seconds > 15 * 60 && !quote.realtime && !late;
+  return (
+    <span className="provenance">
+      <span className={`badge ${dead ? "stale" : "fresh"}`}>
+        {quote.realtime ? "live" : late || "quote"}
+      </span>{" "}
+      {age(seconds)} ago via {quote.feed}
+    </span>
+  );
+}
+
 // Where a live panel's numbers came from and how old they are.
 //
 // Deliberately a different component from Provenance rather than a flag on it. A
