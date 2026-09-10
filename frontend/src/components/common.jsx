@@ -5,7 +5,7 @@ import { CONNECTION, LIVE_STATES, cycleAge, cycleOverdue } from "../live.js";
 // One place for loading, error, and "the server said why". Every panel uses it, so
 // every panel fails the same way: with the API's own sentence, not a spinner that
 // never stops.
-export function useAsync(loader, deps, { enabled = true } = {}) {
+export function useAsync(loader, deps, { enabled = true, keepOnError = false } = {}) {
   const [state, setState] = useState({ data: null, error: null, loading: enabled });
   const [nonce, setNonce] = useState(0);
 
@@ -20,7 +20,20 @@ export function useAsync(loader, deps, { enabled = true } = {}) {
     setState((prev) => ({ ...prev, loading: true, error: null }));
     loader()
       .then((data) => live && setState({ data, error: null, loading: false }))
-      .catch((error) => live && setState({ data: null, error: error.message, loading: false }));
+      .catch(
+        (error) =>
+          live &&
+          // `keepOnError` matters for anything that reloads on a timer. Clearing the
+          // data is right for a panel you navigated to and wrong for one that refetches
+          // every fifteen seconds: a single transient failure would blank a chart that
+          // was drawing correctly a moment ago, and the next tick would redraw it. The
+          // error still surfaces; the last good picture stays until it is replaced.
+          setState((prev) => ({
+            data: keepOnError ? prev.data : null,
+            error: error.message,
+            loading: false,
+          })),
+      );
     return () => {
       live = false;
     };

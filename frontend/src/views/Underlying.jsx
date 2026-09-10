@@ -1,9 +1,14 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api.js";
 import PriceChart, { INDICATOR_WARMUP } from "../components/chart/PriceChart.jsx";
 import { IvRankGauge, SkewCurve, TermStructure } from "../components/charts.jsx";
 import { ErrorBox, Note, Panel, Provenance, Stat, useAsync } from "../components/common.jsx";
 import { count, num, pct, vol } from "../format.js";
+
+//: How often the chart re-asks the server while it is open. Matched to the server's own
+//: intraday cache: asking faster returns the identical payload and spends a request to
+//: learn nothing.
+const CHART_REFRESH_SECONDS = 15;
 
 // The volatility view of one underlying: where price has been, where implied vol sits
 // against its own history, how vol varies across expiries, and how it varies across
@@ -43,7 +48,28 @@ export default function Underlying({ symbol, summary }) {
   const history = useAsync(
     () => api.history(ticker, { days: days + INDICATOR_WARMUP, interval, session }),
     [ticker, days, interval, session],
+    { keepOnError: true },
   );
+
+  // Redraw the chart on a clock, not only when the symbol changes.
+  //
+  // Everything else on the page moved and the chart did not: the pills repriced every
+  // ten seconds while the candles sat exactly as first drawn, which on a two minute
+  // chart means the bar you are watching form never forms. The daily chart is included
+  // because its last candle is now today's session and moves for the same reason.
+  //
+  // Not while drilled into a past session: that day is finished and re-fetching it
+  // would spend a request to redraw an identical chart.
+  const reloadHistory = history.reload;
+  useEffect(() => {
+    if (!ticker || session) return undefined;
+    const timer = window.setInterval(() => {
+      // A hidden tab is not being looked at, and its requests come out of the same
+      // vendor budget as the capture jobs.
+      if (!document.hidden) reloadHistory();
+    }, CHART_REFRESH_SECONDS * 1000);
+    return () => window.clearInterval(timer);
+  }, [ticker, interval, days, session, reloadHistory]);
   const chain = useAsync(() => api.chain(ticker, skewExpiry), [ticker, skewExpiry], {
     enabled: Boolean(summary),
   });

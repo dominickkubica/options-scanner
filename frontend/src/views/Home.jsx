@@ -16,7 +16,7 @@ import { money, pct } from "../format.js";
 // only the second can be screened. "293 symbols" on its own would be a lie of
 // emphasis, so the tile says both and the smaller number is the one in the accent.
 
-export default function Home({ onSelect, onGoto }) {
+export default function Home({ onSelect, onGoto, quotes = {} }) {
   const home = useAsync(() => api.home(), []);
 
   if (home.error) return <ErrorBox error={home.error} onRetry={home.reload} />;
@@ -64,7 +64,15 @@ export default function Home({ onSelect, onGoto }) {
           </div>
         ) : (
           <div className="pinned-grid">
-            {pinned.map((entry) => (
+            {pinned.map((entry) => {
+              // The live quote when there is one, the stored close otherwise. These
+              // cards read only from /home, which serves stored closes, so the same
+              // symbol showed 315.34 here and 325.88 in the sidebar pill six inches to
+              // the left. Two numbers for one price is worse than either being wrong.
+              const quote = quotes[entry.symbol];
+              const price = quote?.last ?? entry.last_close;
+              const change = quote?.change_pct ?? entry.change_pct;
+              return (
               <button
                 key={entry.symbol}
                 type="button"
@@ -73,17 +81,17 @@ export default function Home({ onSelect, onGoto }) {
               >
                 <div className="pinned-head">
                   <span className="pinned-ticker">{entry.symbol}</span>
-                  {entry.change_pct !== null && entry.change_pct !== undefined && (
-                    <span className={entry.change_pct >= 0 ? "up" : "down"}>
-                      {pct(entry.change_pct, 2)}
-                    </span>
+                  {change !== null && change !== undefined && (
+                    <span className={change >= 0 ? "up" : "down"}>{pct(change, 2)}</span>
                   )}
                 </div>
-                <div className="pinned-price">{money(entry.last_close, 2)}</div>
+                <div className="pinned-price">{money(price, 2)}</div>
                 <div className="provenance">
-                  {/* Dated, always. This is the last stored close, not a live price,
-                      and the two are indistinguishable once the date is dropped. */}
-                  close {entry.price_last || "n/a"}
+                  {/* Labelled, always. A price with no provenance cannot be told apart
+                      from a stale one, whichever source it came from. */}
+                  {quote?.last != null
+                    ? `${quote.realtime ? "live" : "quote"} via ${quote.feed}`
+                    : `close ${entry.price_last || "n/a"}`}
                 </div>
                 <div className="pinned-tags">
                   {entry.has_iv_history && <span className="tag">IV history</span>}
@@ -94,7 +102,8 @@ export default function Home({ onSelect, onGoto }) {
                   )}
                 </div>
               </button>
-            ))}
+              );
+            })}
           </div>
         )}
       </Panel>

@@ -71,6 +71,15 @@ MAX_CACHED_SYMBOLS = 16
 #: does not refetch.
 HISTORY_TTL_SECONDS = 900.0
 
+#: Intraday candles get their own, far shorter, window. Fifteen minutes is right for a
+#: daily series that changes once a day and absurd for a one minute chart: the last
+#: candle would sit frozen for fifteen bars while the price beside it moved every ten
+#: seconds. The whole point of opening a minute chart is to watch it.
+#:
+#: Costs one vendor request per symbol per window, against a published 200 a minute, so
+#: even several charts open at once is a rounding error of the budget.
+INTRADAY_TTL_SECONDS = 15.0
+
 #: How long a live quote is reused. Short, because this is the number the whole
 #: feature exists to keep current, and a batch of the entire watchlist is one request:
 #: at this TTL a browser polling every 5 seconds costs 12 requests a minute against a
@@ -548,7 +557,8 @@ def price_history(
     else:
         result = _daily_history(symbol, days, settings, provider_factory)
 
-    _HISTORY.put(key, result, expires_at=now + HISTORY_TTL_SECONDS)
+    ttl = HISTORY_TTL_SECONDS if interval == DAILY_INTERVAL else INTRADAY_TTL_SECONDS
+    _HISTORY.put(key, result, expires_at=now + ttl)
     return _with_forming_bar(result, symbol, interval, settings)
 
 

@@ -239,7 +239,15 @@ def history_view(
     """
     provenance = None
     if bars:
-        newest = max(bar.fetched_at for bar in bars)
+        # Age is measured from the newest bar's own timestamp, not from when the request
+        # was served. Intraday bars come back stamped with the moment they were fetched,
+        # so this used to report "0 minutes old" over candles that were seventeen
+        # minutes behind -- the free plan serves the consolidated tape on a fifteen
+        # minute delay, and the badge was hiding exactly the thing it exists to show.
+        #
+        # For daily bars the two agree, because the loader stamps a stored bar with its
+        # own session rather than with `now` for the same reason.
+        newest = max(bar.ts if intraday else bar.fetched_at for bar in bars)
         provenance = make_provenance(bars[0].source, newest, now)
 
     return HistoryOut(
