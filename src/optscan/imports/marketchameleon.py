@@ -159,6 +159,59 @@ def _session_date(raw: str | None) -> date:
         ) from error
 
 
+#: How far outside its own high/low an open or close may sit and still be treated as a
+#: rounding artifact rather than a broken row, as a fraction of price.
+#:
+#: Real exports contain these. Measured over two twelve year files, 6,382 sessions:
+#:
+#:     AMZN 2019-03-18   open 85.6195 against a low of 85.6315   0.014%
+#:     SPY  2018-03-29   open 259.83  against a low of 259.8389  0.003%
+#:
+#: One row each. The vendor reports the open and the range from different aggregations
+#: and rounds them independently, so the open lands a hair below the low.
+#:
+#: Deliberately narrow. The failure this must not wave through is a split: an
+#: unadjusted open beside an adjusted range is off by the split ratio, which on AMZN's
+#: 20:1 would be 1,900% and nothing near this bound. A tenth of a percent separates
+#: "the vendor rounded twice" from "these two numbers describe different shares".
+RANGE_TOLERANCE = 0.001
+
+
+def _reconcile_range(
+    open_: float, high: float, low: float, close: float, session: date
+) -> tuple[float, float]:
+    """Widen high and low so the range contains the open and the close.
+
+    Rejecting the row would be the wrong response and so would trusting it blindly. An
+    opening print is a trade: if the stock printed 85.6195 at the open then the low was
+    at most 85.6195, whatever the low column says. Taking the min and the max is the
+    only reconstruction consistent with every number in the row.
+
+    Beyond the tolerance nothing is repaired, because at that point the two figures are
+    not disagreeing about rounding, they are describing different things, and quietly
+    stretching a range to cover a split would bury the error in the data rather than
+    surface it.
+    """
+    span = max(abs(high), abs(low), 1e-9)
+    breach = max(low - min(open_, close), max(open_, close) - high, 0.0)
+    if breach == 0.0:
+        return high, low
+    if breach / span > RANGE_TOLERANCE:
+        raise MarketChameleonParseError(
+            f"session {session} has an open/close {breach:.4f} outside its own "
+            f"{low}-{high} range, which is {breach / span:.2%} of price and far past "
+            f"the {RANGE_TOLERANCE:.1%} rounding tolerance. That is not a rounding "
+            "artifact; it usually means the row mixes adjusted and unadjusted prices."
+        )
+    log.warning(
+        "widened a session range to contain its own open and close",
+        session=str(session),
+        breach=round(breach, 6),
+        fraction=f"{breach / span:.4%}",
+    )
+    return max(high, open_, close), min(low, open_, close)
+
+
 def parse_rows(rows: Iterable[dict[str, str]], symbol: str) -> list[VendorDailyBar]:
     """Parse already-read rows. Sorted ascending by session date."""
     bars: list[VendorDailyBar] = []
@@ -176,15 +229,24 @@ def parse_rows(rows: Iterable[dict[str, str]], symbol: str) -> list[VendorDailyB
             seen[session] = number
 
             iv30 = _number(row.get("IV30"))
+            open_ = _required(row.get("Open"), "Open")
+            close_ = _required(row.get("Close"), "Close")
+            high, low = _reconcile_range(
+                open_,
+                _required(row.get("High"), "High"),
+                _required(row.get("Low"), "Low"),
+                close_,
+                session,
+            )
             bars.append(
                 VendorDailyBar(
                     source=SOURCE,
                     symbol=symbol,
                     session_date=session,
-                    open=_required(row.get("Open"), "Open"),
-                    high=_required(row.get("High"), "High"),
-                    low=_required(row.get("Low"), "Low"),
-                    close=_required(row.get("Close"), "Close"),
+                    open=open_,
+                    high=high,
+                    low=low,
+                    close=close_,
                     adj_close=_number(row.get("Adj Close")),
                     volume=_integer(row.get("Volume")),
                     vwap=_number(row.get("Day VWAP")),

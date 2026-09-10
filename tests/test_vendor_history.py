@@ -459,3 +459,58 @@ class TestHarmonizedRanking:
             "probability",
             "event_risk",
         }
+
+
+class TestRangeReconciliation:
+    """Real exports contain rows whose open sits a hair outside their own low.
+
+    Two twelve year files, 6,382 sessions, one such row in each:
+
+        AMZN 2019-03-18   open 85.6195 against a low of 85.6315   0.014%
+        SPY  2018-03-29   open 259.83  against a low of 259.8389  0.003%
+
+    Before this, one of those rows failed validation and took the entire twelve year
+    import down with it. The whole file being rejected over 0.012 of a dollar is the
+    wrong trade, and so is trusting the row blindly.
+    """
+
+    HEADER = (
+        "Date,Open,High,Low,Close,Adj Close,Change,Pct Change,Volume,Day VWAP,IV30,"
+        "IV30 Change,IV30 Pct Change,Call Option Volume,Put Option Volume,"
+        "Call Open Interest,Put Open Interest"
+    )
+
+    def write(self, tmp_path, open_, high, low, close):
+        path = tmp_path / "HistoricalPrices_TEST.csv"
+        path.write_text(
+            f"{self.HEADER}\n"
+            f"3/18/2019,{open_},{high},{low},{close},{close},0,0,1000,,25.0,0,0,1,1,1,1\n",
+            encoding="utf-8-sig",
+        )
+        return path
+
+    def test_a_rounding_sized_breach_widens_the_range(self, tmp_path) -> None:
+        """An opening print is a trade, so the low was at most the open."""
+        path = self.write(tmp_path, 85.6195, 87.5, 85.6315, 86.0)
+        bar = parse_file(path, "TEST")[0]
+
+        assert bar.open == pytest.approx(85.6195)
+        assert bar.low == pytest.approx(85.6195), "low should widen to contain the open"
+        assert bar.high == pytest.approx(87.5), "high is untouched when it is not breached"
+
+    def test_the_close_is_contained_too(self, tmp_path) -> None:
+        path = self.write(tmp_path, 86.0, 87.5, 85.0, 87.505)
+        bar = parse_file(path, "TEST")[0]
+        assert bar.high == pytest.approx(87.505)
+
+    def test_a_split_sized_breach_is_still_refused(self, tmp_path) -> None:
+        """The failure this must not wave through: an unadjusted open beside an
+        adjusted range is off by the split ratio, not by a rounding step."""
+        path = self.write(tmp_path, 1712.39, 87.5, 85.6315, 86.0)
+        with pytest.raises(MarketChameleonParseError, match="rounding tolerance"):
+            parse_file(path, "TEST")
+
+    def test_a_clean_row_is_left_exactly_alone(self, tmp_path) -> None:
+        path = self.write(tmp_path, 86.0, 87.5, 85.0, 86.5)
+        bar = parse_file(path, "TEST")[0]
+        assert (bar.open, bar.high, bar.low, bar.close) == (86.0, 87.5, 85.0, 86.5)
