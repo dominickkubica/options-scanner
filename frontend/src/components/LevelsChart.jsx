@@ -18,8 +18,21 @@ import { num, pct, vol } from "../format.js";
 //     centre line, because a centre line reads as an expected path and the model has
 //     nothing to say about direction.
 
-const PADDING = { top: 16, right: 128, bottom: 28, left: 8 };
+const PADDING = { top: 16, right: 168, bottom: 28, left: 8 };
 const HEIGHT = 380;
+
+//: Right gutter text. Was 9, which is below what most people can read comfortably at a
+//: glance and was the smaller half of the problem.
+const LABEL_SIZE = 11;
+
+//: Minimum vertical gap between two gutter labels. Slightly more than the font size, so
+//: adjacent rows have air rather than merely not overlapping.
+const LABEL_GAP = 13;
+
+//: How far a label may be pushed from its line before it earns a leader line. Below
+//: this the eye pairs them without help; above it, an unconnected number beside the
+//: wrong line is worse than no number.
+const LEADER_THRESHOLD = 3;
 
 // Fraction of the plot given to the projection. The cone is the point of the panel,
 // so it gets real room rather than a sliver at the right edge.
@@ -33,6 +46,43 @@ const KIND_STYLE = {
   volume_node: { colour: "#6b7a8f", label: "volume node" },
   round_number: { colour: "#4a4a52", label: "round number" },
 };
+
+// Spread a column of labels so none of them overlap.
+//
+// Every label in the right gutter used to be drawn at its own price, at 9px, by three
+// separate pieces of code that did not know about each other: the levels, the candidate
+// strikes, and spot. On a symbol with levels a few dollars apart -- which is most of
+// them, since that is what makes a level worth drawing -- the result was a stack of
+// numbers printed on top of one another and no way to tell which line any of them
+// belonged to.
+//
+// This is the standard two pass spread: walk down pushing overlaps apart, walk back up
+// undoing anything that ran off the bottom. Labels keep their price order, which is what
+// makes the column readable at all, and each one remembers `anchor` so a leader line can
+// be drawn back to the line it actually names.
+function layoutLabels(labels, top, bottom) {
+  const placed = labels
+    .map((label) => ({ ...label, anchor: label.y }))
+    .sort((a, b) => a.y - b.y);
+
+  for (let i = 1; i < placed.length; i += 1) {
+    const minimum = placed[i - 1].y + LABEL_GAP;
+    if (placed[i].y < minimum) placed[i].y = minimum;
+  }
+
+  // The downward pass can run the last few off the bottom edge. Push back up from there.
+  if (placed.length) {
+    const last = placed[placed.length - 1];
+    if (last.y > bottom) last.y = bottom;
+    for (let i = placed.length - 2; i >= 0; i -= 1) {
+      const maximum = placed[i + 1].y - LABEL_GAP;
+      if (placed[i].y > maximum) placed[i].y = maximum;
+    }
+    if (placed[0].y < top) placed[0].y = top;
+  }
+
+  return placed;
+}
 
 // Probability of profit to a colour. Deliberately not a red-to-green ramp: a high POP
 // is not "good", it is a high probability of a small credit, and colouring it as a
@@ -95,6 +145,35 @@ export default function LevelsChart({ data }) {
   const { bars, y, xHistory, xProjection, plotHeight, historyWidth } = geometry;
   const spotY = y(data.spot);
 
+  // Everything that wants a slot in the right gutter, gathered before anything is
+  // drawn so the three families can be spaced against each other instead of over each
+  // other. Spot is marked strong: on a price chart it is the one number you look for.
+  const gutter = layoutLabels(
+    [
+      ...data.levels.map((level, index) => ({
+        key: `level-${level.kind}-${index}`,
+        y: y(level.price),
+        text: num(level.price, 0),
+        colour: (KIND_STYLE[level.kind] || { colour: "var(--dim)" }).colour,
+      })),
+      ...data.candidates.map((item, index) => ({
+        key: `strike-${item.strike}-${item.right}-${index}`,
+        y: y(item.strike),
+        text: `${num(item.strike, 0)}${item.right} ${pct(item.probability_of_profit, 0)}`,
+        colour: popColour(item.probability_of_profit),
+      })),
+      {
+        key: "spot",
+        y: spotY,
+        text: `spot ${num(data.spot)}`,
+        colour: "var(--accent)",
+        strong: true,
+      },
+    ],
+    PADDING.top + 6,
+    PADDING.top + plotHeight - 2,
+  );
+
   const closeLine = bars
     .map((bar, index) => `${index === 0 ? "M" : "L"} ${xHistory(index)} ${y(bar.close)}`)
     .join(" ");
@@ -153,9 +232,6 @@ export default function LevelsChart({ data }) {
                 strokeDasharray={level.p_value === null ? "3 4" : undefined}
                 opacity={0.25 + 0.55 * confidence}
               />
-              <text x={width - PADDING.right + 4} y={y(level.price) + 3} fontSize="9">
-                {num(level.price, 0)}
-              </text>
             </g>
           );
         })}
@@ -201,15 +277,6 @@ export default function LevelsChart({ data }) {
               strokeWidth={hovered === item ? 3 : 2}
               opacity={0.9}
             />
-            <text
-              x={width - PADDING.right + 4}
-              y={y(item.strike) + 3}
-              fontSize="9"
-              fill={popColour(item.probability_of_profit)}
-            >
-              {num(item.strike, 0)}
-              {item.right} {pct(item.probability_of_profit, 0)}
-            </text>
           </g>
         ))}
 
@@ -222,9 +289,39 @@ export default function LevelsChart({ data }) {
           stroke="var(--accent)"
           strokeWidth="1"
         />
-        <text x={width - PADDING.right + 4} y={spotY - 4} fontSize="9" fill="var(--accent)">
-          spot {num(data.spot)}
-        </text>
+
+        {/* The right gutter, laid out as one column rather than by three independent
+            pieces of code. See layoutLabels: this is the fix for the stack of
+            overlapping numbers that made the panel unreadable. */}
+        {gutter.map((label) => (
+          <g key={label.key}>
+            {Math.abs(label.y - label.anchor) > LEADER_THRESHOLD && (
+              /* Displaced far enough that the pairing is no longer obvious, so say
+                 which line it belongs to rather than leaving it to be guessed. */
+              <polyline
+                points={[
+                  `${width - PADDING.right},${label.anchor}`,
+                  `${width - PADDING.right + 7},${label.anchor}`,
+                  `${width - PADDING.right + 13},${label.y - 4}`,
+                  `${width - PADDING.right + 17},${label.y - 4}`,
+                ].join(" ")}
+                fill="none"
+                stroke={label.colour}
+                strokeWidth="1"
+                opacity="0.5"
+              />
+            )}
+            <text
+              x={width - PADDING.right + 20}
+              y={label.y}
+              fontSize={LABEL_SIZE}
+              fill={label.colour}
+              fontWeight={label.strong ? 600 : 400}
+            >
+              {label.text}
+            </text>
+          </g>
+        ))}
       </svg>
 
       {hovered && (
