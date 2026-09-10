@@ -346,3 +346,88 @@ def test_an_unreasonable_freshness_window_is_refused(client) -> None:
     assert client.get("/api/ideas", params={"freshness": -1}).status_code == 422
     assert client.get("/api/ideas", params={"freshness": MAX_FRESHNESS_DAYS + 1}).status_code == 422
     assert client.get("/api/ideas", params={"freshness": 0}).status_code == 200
+
+
+# --------------------------------------------------------------------------------
+# The net edge gate
+# --------------------------------------------------------------------------------
+#
+# The bug this section exists to prevent: until 2026-09-10 every triggering symbol was
+# listed regardless of its own cost. The oversold rule is worth +71bp gross, and TROX
+# costs 151bp to round trip, so the list was asserting a positive expectation that the
+# strategy's own measured evidence denies. The cost was computed, printed in its own
+# column, and then not used to decide anything.
+
+
+def test_a_symbol_whose_spread_eats_the_edge_is_not_listed(seeded: Settings) -> None:
+    from optscan.jobs.ideas import MIN_NET_EDGE
+
+    ideas, _notes = find_ideas(seeded, ["TIGHT", "WIDE"], freshness=400)
+
+    for idea in ideas:
+        assert idea.net_edge >= MIN_NET_EDGE, f"{idea.symbol} listed at {idea.net_edge}"
+
+
+def falling(symbol: str, *, wobble: float, count: int = 400):
+    """A series that ends in a sustained decline, so RSI drops under 30 on the last bar.
+
+    The `seeded` fixture rises steadily and never triggers the only supported rule, so a
+    gate test built on it would pass while asserting nothing.
+    """
+    bars = []
+    for index in range(count):
+        # Flat for most of the history, then a clean slide into the last thirty sessions.
+        close = 100.0 if index < count - 30 else 100.0 - (index - (count - 31)) * 1.2
+        bars.append(
+            VendorDailyBar(
+                source="test",
+                symbol=symbol,
+                session_date=LAST - timedelta(days=count - 1 - index),
+                open=close,
+                high=close + wobble,
+                low=close - wobble,
+                close=close,
+                volume=1_000_000,
+            )
+        )
+    return bars
+
+
+def seed_falling(settings: Settings, symbol: str, wobble: float) -> None:
+    with db.session(settings.sqlite_path) as conn:
+        import_daily_bars(conn, falling(symbol, wobble=wobble))
+        conn.commit()
+
+
+def test_net_edge_is_gross_minus_this_symbols_own_cost(tmp_settings: Settings) -> None:
+    """The only number on the row that answers "is this worth taking *here*"."""
+    seed_falling(tmp_settings, "CHEAP", wobble=0.15)
+
+    ideas, _ = find_ideas(tmp_settings, ["CHEAP"], freshness=400)
+
+    assert ideas, "a falling series should trigger the oversold rule"
+    for idea in ideas:
+        assert idea.net_edge == pytest.approx(idea.gross_edge - idea.cost)
+        assert idea.gross_edge > 0
+
+
+def test_a_priced_out_symbol_is_named_rather_than_vanishing(tmp_settings: Settings) -> None:
+    """A symbol disappearing with no reason is how somebody stops trusting the list."""
+    # Same trigger, but a range so wide the round trip swallows any plausible edge.
+    seed_falling(tmp_settings, "THIN", wobble=8.0)
+
+    ideas, notes = find_ideas(tmp_settings, ["THIN"], freshness=400)
+
+    assert not any(idea.symbol == "THIN" for idea in ideas)
+    priced_out = [n for n in notes if "round trip cost" in n]
+    assert priced_out, f"expected an explanation, got {notes}"
+    assert "THIN" in priced_out[0]
+
+
+def test_the_report_carries_the_net_edge(seeded: Settings) -> None:
+    """The UI ranks on this, so it has to cross the wire."""
+    ideas, notes = find_ideas(seeded, ["TIGHT", "WIDE"], freshness=400)
+    report = as_report(ideas, notes)
+    for row in report["ideas"]:
+        assert "net_edge_bp" in row
+        assert row["net_edge_bp"] == pytest.approx(row["gross_edge_bp"] - row["cost_bp"])

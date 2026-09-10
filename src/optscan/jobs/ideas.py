@@ -55,6 +55,16 @@ DEFAULT_FRESHNESS_DAYS = 3
 #: years describes a symbol's past liquidity; a trade taken tomorrow pays this year's.
 LOOKBACK_SESSIONS = 300
 
+#: A symbol must keep at least this much of the edge after its own round trip cost to be
+#: listed. Not zero, for two reasons.
+#:
+#: The gross edge is an *estimate* with a confidence interval, and the cost estimate is
+#: a Corwin-Schultz approximation that understates on thin names rather than overstating.
+#: A row at exactly break-even is therefore more likely to be negative than positive.
+#: Ten basis points is roughly a fifth of the surviving rule's net return, which is a
+#: thin enough margin to keep the honest names and thick enough to drop the coin flips.
+MIN_NET_EDGE = 0.0010
+
 
 class Status(StrEnum):
     #: Survived a pre-specified out-of-sample test. The strongest word available here.
@@ -136,8 +146,25 @@ class Idea:
     #: This symbol's own estimated round trip cost, which is the number that decides
     #: whether the edge is worth anything on this particular name.
     cost: float
+    #: The strategy's measured gross edge per trade, before this symbol's costs. Carried
+    #: on the idea so `net_edge` is a fact about this row rather than a lookup the
+    #: caller has to remember to perform.
+    gross_edge: float
     horizon: int
     direction: str
+
+    @property
+    def net_edge(self) -> float:
+        """What this signal is worth **on this symbol**, after its own round trip cost.
+
+        The gross edge is a property of the rule and is the same everywhere. The cost is
+        a property of the symbol and varies by a factor of four across the universe. So
+        this is the only number on the row that answers "is this trade worth taking",
+        and until 2026-09-10 it was computed, printed, and then ignored: the list was
+        sorted by cost and every triggering symbol was shown regardless of whether its
+        own spread had already eaten the whole edge.
+        """
+        return self.gross_edge - self.cost
 
     @property
     def edge_after_cost_note(self) -> str:
@@ -152,6 +179,8 @@ class Idea:
             "price": self.price,
             "age": self.age,
             "cost_bp": self.cost * 10_000,
+            "gross_edge_bp": self.gross_edge * 10_000,
+            "net_edge_bp": self.net_edge * 10_000,
             "horizon": self.horizon,
             "direction": self.direction,
         }
@@ -332,15 +361,41 @@ def find_ideas(
                     price=bars[latest].close,
                     age=age,
                     cost=costs.get(symbol, item.strategy.cost),
+                    gross_edge=item.evidence.edge,
                     horizon=item.strategy.horizon,
                     direction=item.strategy.direction,
                 )
             )
 
-    # Cheapest to trade first. The edge is a fixed number and the cost is not, so on a
-    # thin name the same signal is worth materially less, and that ordering is the most
-    # useful thing this list can do.
-    ideas.sort(key=lambda idea: (idea.age, idea.cost))
+    # Drop the symbols whose own spread has already eaten the edge.
+    #
+    # This is not a liquidity preference, it is arithmetic. The oversold rule is worth
+    # +0.71% gross; TROX costs 1.51% to round trip. Listing it as a trade idea asserts a
+    # positive expectation that the strategy's own measured numbers deny. The evidence
+    # says so directly -- "on the thinnest names the 150 to 250 basis point spread eats
+    # it" -- and the rule was validated on liquid symbols in the first place, so a thin
+    # name is also outside the population the p-value was earned on.
+    #
+    # Named rather than silently filtered: a symbol vanishing with no explanation is how
+    # somebody concludes the scanner is broken and stops trusting the ones it does show.
+    priced_out = [idea for idea in ideas if idea.net_edge < MIN_NET_EDGE]
+    ideas = [idea for idea in ideas if idea.net_edge >= MIN_NET_EDGE]
+
+    # Best net edge first. Sorting by cost ranked the cheapest symbol top, which is the
+    # right direction and the wrong quantity: what the reader wants is what the trade is
+    # worth here, and that is gross minus this symbol's own cost.
+    ideas.sort(key=lambda idea: (idea.age, -idea.net_edge))
+
+    if priced_out:
+        worst = ", ".join(
+            f"{idea.symbol} ({idea.cost * 10_000:.0f}bp)"
+            for idea in sorted(priced_out, key=lambda i: -i.cost)[:5]
+        )
+        notes.append(
+            f"{len(priced_out)} triggering symbols are not listed because their own "
+            f"round trip cost leaves less than {MIN_NET_EDGE * 10_000:.0f}bp of the "
+            f"edge: {worst}. The signal fired on them; the trade is not worth taking."
+        )
 
     if stale:
         notes.append(f"{stale} symbol checks were skipped for stale price history.")
