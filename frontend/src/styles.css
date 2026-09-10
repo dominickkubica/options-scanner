@@ -2489,3 +2489,17 @@ tr.under-sampled td {
   color: var(--dim);
   font-size: 11px;
 }
+
+/* The pinned list's freshness label. Small and quiet: it is a caveat on numbers that
+   are already on screen, not a heading of its own, and it must not compete with the
+   prices. It sits inline with the section label rather than under the list because a
+   caveat below the thing it qualifies is read after the damage. */
+.quote-freshness {
+  margin-left: 0.5rem;
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--muted);
+  opacity: 0.75;
+}

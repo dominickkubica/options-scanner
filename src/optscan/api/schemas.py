@@ -324,11 +324,78 @@ class WatchlistChangeOut(ApiModel):
 
 
 class QuoteOut(ApiModel):
-    """The last stored close and the move into it, in both dollars and percent."""
+    """One symbol's headline price and the move into it.
+
+    `last` is the regular session price -- live while the market is open, the official
+    close after it. The extended hours print is a separate pair of fields rather than
+    being folded in, because they are two different facts measured from two different
+    baselines: the day move is against yesterday's close and the night move is against
+    today's.
+    """
 
     last: float
     change: float | None = None
     change_pct: float | None = None
+    extended: float | None = Field(
+        default=None,
+        description="Last print outside 09:30-16:00, when there is one. Never merged into `last`.",
+    )
+    extended_change: float | None = Field(
+        default=None,
+        description="Extended hours move, measured from today's close rather than yesterday's.",
+    )
+    volume: int | None = None
+    as_of: datetime | None = Field(
+        default=None,
+        description=(
+            "When the venue stamped the freshest observation behind this price. Not "
+            "when it was fetched. A price with no timestamp cannot be told apart from "
+            "a stale one, which is the failure this field exists to prevent."
+        ),
+    )
+    session: str | None = Field(
+        default=None,
+        description="Market session the timestamp falls in: pre, open, post or closed.",
+    )
+    realtime: bool = False
+    feed: str | None = Field(
+        default=None,
+        description="Which feed produced this: a vendor feed name, or 'stored' for a fallback.",
+    )
+    delay_minutes: int | None = Field(
+        default=None,
+        description=(
+            "This quote's own delay in minutes. On the quote rather than only on the "
+            "envelope, because quotes travel: /watchlist carries them for the first "
+            "paint, and a delayed price that arrives without its delay gets rendered "
+            "as live. Null is unknown, never zero."
+        ),
+    )
+
+
+class QuotesOut(ApiModel):
+    """Live quotes for a set of symbols, and what to say if they are not live."""
+
+    quotes: dict[str, QuoteOut] = Field(default_factory=dict)
+    note: str | None = Field(
+        default=None,
+        description=(
+            "Present when these are not live: no vendor configured, a vendor failure, "
+            "or too many symbols to quote. Null means the numbers are as fresh as the "
+            "entitlement allows."
+        ),
+    )
+    delay_minutes: int | None = Field(
+        default=None,
+        description=(
+            "The feed's documented delay. Null means unknown rather than zero: a "
+            "vendor that publishes no delay is not thereby real time."
+        ),
+    )
+    poll_seconds: float | None = Field(
+        default=None,
+        description="How often the client should re-ask, given the current session.",
+    )
 
 
 class WatchlistOut(ApiModel):

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "./api.js";
+import { useQuotes } from "./useQuotes.js";
 import {
   ApiDown,
   ConnectionBadge,
@@ -140,6 +141,43 @@ export default function App() {
   const watchlist = useAsync(() => api.watchlist(), []);
   const liveStatus = useAsync(() => api.liveStatus(), []);
 
+  // Prices poll on their own clock; the watchlist itself does not. `watchlist` still
+  // carries a first set so the pills paint immediately rather than after a second
+  // round trip, and these overwrite them as soon as the first poll lands.
+  const pinned = watchlist.data?.symbols || [];
+  const livePrices = useQuotes(pinned);
+  const quotes = { ...(watchlist.data?.quotes || {}), ...livePrices.quotes };
+
+  // What the pills are actually showing, in three words.
+  //
+  // Derived from the quotes themselves rather than from the poll's envelope, because
+  // the first paint comes from /watchlist and has no envelope. The first version read
+  // the delay off the poll state and therefore labelled a fifteen minute delayed price
+  // "live" for as long as it took the first poll to land -- and forever in a tab that
+  // never becomes visible. A quote now carries its own delay wherever it travels.
+  //
+  // The worst case wins: one stored close among six live quotes means the list as a
+  // whole is a stored close, because the caveat has to cover the oldest pill on screen.
+  const shown = Object.values(quotes);
+  const delays = shown.map((quote) => quote.delay_minutes).filter((value) => value != null);
+  const quoteFreshness = shown.some((quote) => quote.feed === "stored")
+    ? "stored close"
+    : delays.length
+      ? `${Math.max(...delays)}m delayed`
+      : shown.length === 0
+        ? ""
+        : shown.every((quote) => quote.realtime)
+          ? "live"
+          // A vendor that publishes no delay is not thereby real time, so this says
+          // what is actually known rather than guessing zero.
+          : "delay unknown";
+  const quoteFreshnessHint = livePrices.note
+    ? livePrices.note
+    : delays.length
+      ? `Consolidated tape, ${Math.max(...delays)} minutes behind. Real time ` +
+        "consolidated quotes need an entitlement this account does not have."
+      : "";
+
   const [symbol, setSymbol] = useState(null);
   const [view, setView] = useState("home");
   const [expiry, setExpiry] = useState(null);
@@ -254,11 +292,22 @@ export default function App() {
         </div>
 
         <div>
-          <div className="section-label">Pinned</div>
+          {/* The delay is stated, never absorbed. This account cannot buy a real
+              time consolidated price at any polling rate -- feed=sip returns 403 --
+              so the choice was fifteen minutes late and correct, or IEX real time at
+              two percent of the volume. A late price that says it is late is safe to
+              read; a wrong one that looks current is not. When the entitlement
+              changes this label changes with it, because it is read off the feed. */}
+          <div className="section-label">
+            Pinned
+            <span className="quote-freshness" title={quoteFreshnessHint}>
+              {quoteFreshness}
+            </span>
+          </div>
           <div className="symbol-list">
             {(watchlist.data?.symbols || []).map((name) => {
               const captured = watchlist.data.captured[name];
-              const quote = watchlist.data.quotes?.[name];
+              const quote = quotes[name];
               // The pill's colour always follows the day's direction, even in price
               // mode where the number itself carries no sign. That is what makes the
               // column scannable: the colour answers "which way" before the eye has

@@ -43,6 +43,89 @@ Price = Annotated[float, Field(ge=0.0)]
 Size = Annotated[int, Field(ge=0)]
 
 
+class LiveQuote(Record):
+    """One symbol's price right now, as a headline number rather than a tradeable one.
+
+    Separate from `Quote` on purpose. `Quote` feeds the greeks, so its `price` prefers
+    the midpoint of a two sided market; that is the right choice for pricing a contract
+    and the wrong one for a watchlist, where the number has to be the one every broker
+    and every chart is showing.
+
+    ## Which of the three prices is "the price"
+
+    A snapshot carries three, and they disagree by design:
+
+    - `dailyBar.c` is the **regular session** last, and after the bell it is the
+      official close. This is what a broker prints big.
+    - `latestTrade.p` is the most recent print of any kind, which outside 09:30-16:00
+      is an extended hours trade on thin volume.
+    - the quote midpoint, which after hours can be nonsense: TJX quoted 129.00/129.80
+      on the consolidated tape and 122.13/136.73 on IEX at the same moment.
+
+    So `last` is the session bar's close and the extended print is carried *beside* it
+    as `extended`, never merged into it. Webull shows TJX at 128.92 with "Night: 129.02"
+    underneath, and that is two numbers because they are two facts.
+
+    ## Why `as_of` is not optional
+
+    Every field here is permitted to be late, and how late depends on an entitlement
+    rather than on anything the reader can see. A price with no timestamp is the bug
+    that started this: a chart that draws Friday's close on a Tuesday looks exactly
+    like a chart that is working.
+    """
+
+    symbol: Symbol
+    #: Regular session last. During the session this moves; after it, it is the close.
+    last: Price | None = None
+    #: The prior session's close, which is the denominator of every percent on screen.
+    previous_close: Price | None = None
+    #: Most recent print outside the regular session, when there is one.
+    extended: Price | None = None
+    extended_at: UtcDatetime | None = None
+    #: Regular session volume so far.
+    volume: Size | None = None
+    #: When the freshest observation behind these numbers was stamped by the venue.
+    #: Not when it was fetched: `fetched_at` on Record already says that, and the gap
+    #: between the two is the whole question.
+    as_of: UtcDatetime | None = None
+    #: Which market session the venue timestamp falls in.
+    session: str | None = None
+    #: False when the vendor is serving on a delay. Never inferred from the age of the
+    #: data, because a quiet symbol and a delayed feed look identical.
+    realtime: bool = False
+    #: The feed name that produced this, for the screen to name its own source.
+    feed: str | None = None
+    #: The feed's documented delay. None means unknown rather than zero: a vendor that
+    #: publishes no delay is not thereby real time. Carried on the quote rather than
+    #: looked up by the caller, because a mixed batch -- some live, some fallen back to
+    #: a stored close -- has no single delay, and asking the vendor would give one.
+    delay_minutes: int | None = None
+
+    @property
+    def change(self) -> float | None:
+        if self.last is None or not self.previous_close:
+            return None
+        return self.last - self.previous_close
+
+    @property
+    def change_pct(self) -> float | None:
+        change = self.change
+        if change is None or not self.previous_close:
+            return None
+        return change / self.previous_close
+
+    @property
+    def extended_change(self) -> float | None:
+        """The extended hours move, measured from the close rather than from yesterday.
+
+        Two different baselines, and using the wrong one is how "up 0.08% overnight"
+        becomes "down 2.31%". The night move is against today's close.
+        """
+        if self.extended is None or not self.last:
+            return None
+        return self.extended - self.last
+
+
 class Quote(Record):
     """A snapshot of the underlying."""
 

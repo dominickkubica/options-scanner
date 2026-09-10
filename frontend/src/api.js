@@ -44,6 +44,9 @@ export const api = {
   liveStatus: () => request("/live/status"),
   positions: () => request("/positions"),
   watchlist: () => request("/watchlist"),
+  // Polled. Deliberately separate from /watchlist, which seeds a table and stats a
+  // directory per symbol -- none of which changes between two ticks of a price.
+  quotes: (symbols) => request(`/quotes${query({ symbols: symbols.join(",") })}`),
   home: () => request("/home"),
   catalogue: ({ q, group, onlyWatchlist, onlyScreenable, limit } = {}) =>
     request(

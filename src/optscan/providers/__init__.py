@@ -30,6 +30,7 @@ __all__ = [
     "get_intraday_provider",
     "get_news_provider",
     "get_provider",
+    "get_quote_provider",
     "provider_is_realtime",
 ]
 
@@ -72,6 +73,29 @@ def get_intraday_provider(settings: Settings) -> MarketDataProvider | None:
     minute candle carries none of that, so a chart should not be held hostage to it.
 
     Narrow on purpose. Prices only, never volatility, and nothing it returns is stored.
+    """
+    if settings.alpaca_credentials_set:
+        from optscan.providers.alpaca import AlpacaProvider
+
+        return AlpacaProvider(settings)
+    return None
+
+
+def get_quote_provider(settings: Settings) -> MarketDataProvider | None:
+    """A provider that can serve live headline prices, or None.
+
+    Third instance of the same narrow exception as `get_intraday_provider` and
+    `get_news_provider`, and for the same reason: `OPTSCAN_PROVIDER` decides whose
+    implied volatility becomes the stored IV history, and switching it restarts every
+    rank from zero. A last trade price carries none of that history.
+
+    That exception is what makes this feature affordable at all. The configured
+    provider here is yfinance, which publishes no rate limit and throttles silently, so
+    polling it every few seconds would risk the 15:45 capture -- the one job whose data
+    cannot be backfilled. Alpaca publishes 200 requests a minute and the whole
+    watchlist is one request, so the same poll costs a measured 3% of the budget.
+
+    Prices only, never volatility, and nothing returned here is ever stored.
     """
     if settings.alpaca_credentials_set:
         from optscan.providers.alpaca import AlpacaProvider

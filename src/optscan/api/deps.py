@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import threading
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time
 from functools import lru_cache
@@ -45,13 +45,14 @@ from optscan.jobs.load import latest_snapshot
 from optscan.jobs.scan import STALE_AFTER_HOURS, load_iv_history
 from optscan.live import LiveHub
 from optscan.logging import get_logger
-from optscan.models import ChainSnapshot, PriceBar, SymbolEvents
+from optscan.models import ChainSnapshot, LiveQuote, PriceBar, SymbolEvents
 from optscan.providers import (
     MarketDataProvider,
     NoDataAvailable,
     ProviderError,
     get_intraday_provider,
     get_provider,
+    get_quote_provider,
 )
 from optscan.screener.config import DEFAULT_CONFIG_FILENAME, ScreenConfig
 from optscan.screener.context import SymbolAnalysis, analyze_snapshot
@@ -69,6 +70,19 @@ MAX_CACHED_SYMBOLS = 16
 #: shown next to the chart stays small and long enough that clicking between panels
 #: does not refetch.
 HISTORY_TTL_SECONDS = 900.0
+
+#: How long a live quote is reused. Short, because this is the number the whole
+#: feature exists to keep current, and a batch of the entire watchlist is one request:
+#: at this TTL a browser polling every 5 seconds costs 12 requests a minute against a
+#: budget of 200. Not zero, because three panels on one screen asking at the same
+#: instant should share one fetch rather than race for three.
+QUOTE_TTL_SECONDS = 5.0
+
+#: Live quotes are never fetched for more symbols than this in one call. The watchlist
+#: is seven; the catalogue is hundreds, and it deliberately stays on stored closes.
+#: Without a ceiling, one Browse page would turn a 1 request poll into a 3 request one
+#: and put a vendor round trip in front of a screen that does not need it.
+MAX_LIVE_QUOTE_SYMBOLS = 50
 
 #: Default candle window for the underlying detail chart.
 DEFAULT_HISTORY_DAYS = 180
@@ -169,6 +183,9 @@ _SOLVED = _TimedCache(MAX_CACHED_SYMBOLS)
 _EVENTS = _TimedCache(MAX_CACHED_SYMBOLS)
 _HISTORY = _TimedCache(MAX_CACHED_SYMBOLS)
 
+#: Live quotes, keyed by the exact set asked for.
+_QUOTES = _TimedCache(32)
+
 #: One lock per symbol and capture, so concurrent requests for the same chain solve it
 #: once between them instead of once each.
 #:
@@ -211,6 +228,7 @@ def clear_caches() -> None:
     _SOLVED.clear()
     _EVENTS.clear()
     _HISTORY.clear()
+    _QUOTES.clear()
     with _SOLVE_LOCKS_GUARD:
         _SOLVE_LOCKS.clear()
     screen_config.cache_clear()
@@ -532,6 +550,113 @@ def price_history(
 
     _HISTORY.put(key, result, expires_at=now + HISTORY_TTL_SECONDS)
     return result
+
+
+def live_quotes(
+    settings: Settings, symbols: Sequence[str]
+) -> tuple[dict[str, LiveQuote], str | None]:
+    """Current headline prices, falling back to the last stored close.
+
+    Returns (quotes, note). The note is a sentence for the UI when the numbers are not
+    what was asked for -- no vendor configured, or the vendor failed -- and is None when
+    they are live.
+
+    ## Why a failure degrades rather than empties
+
+    The stored close is a worse answer than a live quote and a far better one than a
+    blank pill. A watchlist that loses its prices because a vendor timed out is a
+    watchlist that looks broken; one showing Friday's close, dated Friday, is merely
+    late, and the date is on screen either way. That is the same principle the chart
+    already follows: the price panel is the least load bearing thing here and must
+    never take the page down with it.
+
+    The fallback is deliberately *not* silent. It carries `as_of` from the session it
+    came from, so the age that the caller renders is the real age of the number, not
+    the moment this function ran.
+    """
+    wanted = [s.strip().upper() for s in symbols if s and s.strip()]
+    if not wanted:
+        return {}, None
+    if len(wanted) > MAX_LIVE_QUOTE_SYMBOLS:
+        return _stored_quotes(settings, wanted), (
+            f"{len(wanted)} symbols is more than live quoting covers, so these are "
+            "the last stored closes."
+        )
+
+    key = ("quotes", tuple(sorted(wanted)))
+    now = datetime.now(UTC).timestamp()
+    cached = _QUOTES.get(key, now)
+    if isinstance(cached, tuple):
+        return cached
+
+    result = _fetch_live_quotes(settings, wanted)
+    _QUOTES.put(key, result, expires_at=now + QUOTE_TTL_SECONDS)
+    return result
+
+
+def _fetch_live_quotes(
+    settings: Settings, wanted: list[str]
+) -> tuple[dict[str, LiveQuote], str | None]:
+    provider = get_quote_provider(settings)
+    if provider is None:
+        return _stored_quotes(settings, wanted), (
+            "No vendor here can serve a live price, so these are the last stored "
+            "closes. Set Alpaca credentials to quote them."
+        )
+
+    try:
+        try:
+            quotes = provider.get_live_quotes(wanted)
+        finally:
+            provider.close()
+    except (ProviderError, OSError) as error:
+        log.warning("live quotes unavailable", error=str(error))
+        return _stored_quotes(settings, wanted), (
+            f"Live quotes are unavailable ({type(error).__name__}), so these are the "
+            "last stored closes."
+        )
+
+    # A symbol the vendor did not return still needs a price. Delisted tickers and
+    # anything it simply does not carry fall back individually rather than taking the
+    # whole batch down with them.
+    missing = [symbol for symbol in wanted if symbol not in quotes]
+    if missing:
+        quotes = {**_stored_quotes(settings, missing), **quotes}
+    return quotes, None
+
+
+def _stored_quotes(settings: Settings, symbols: Sequence[str]) -> dict[str, LiveQuote]:
+    """The last stored close per symbol, shaped as a quote.
+
+    Built on `recent_daily_bars` rather than on a query of its own, because that helper
+    already picks a single source per symbol. Taking the two most recent rows across all
+    sources would compare AAPL's Alpaca close against its Market Chameleon close and
+    report the disagreement between two vendors as a daily move -- which is exactly the
+    bug `db_moves` was written to prevent, and it would be reintroduced here.
+
+    `as_of` is midnight UTC on the session the bar belongs to, not now. The caller
+    renders an age from it, and the honest age of a stored close is its session's.
+    """
+    out: dict[str, LiveQuote] = {}
+    now = datetime.now(UTC)
+    with db.session(settings.sqlite_path) as conn:
+        for symbol in symbols:
+            bars, source = recent_daily_bars(conn, symbol, 2)
+            if not bars:
+                continue
+            out[symbol] = LiveQuote(
+                symbol=symbol,
+                last=bars[-1].close,
+                previous_close=bars[-2].close if len(bars) > 1 else None,
+                volume=bars[-1].volume,
+                as_of=datetime.combine(bars[-1].session_date, time(), tzinfo=UTC),
+                realtime=False,
+                feed="stored",
+                delay_minutes=None,
+                fetched_at=now,
+                source=source or "stored",
+            )
+    return out
 
 
 def _daily_history(

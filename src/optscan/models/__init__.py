@@ -5,6 +5,7 @@ from optscan.models.enums import Right
 from optscan.models.events import SymbolEvents
 from optscan.models.market import (
     MAX_PLAUSIBLE_IV,
+    LiveQuote,
     NewsItem,
     OptionChain,
     OptionContract,
@@ -25,6 +26,7 @@ __all__ = [
     "Action",
     "ChainSnapshot",
     "Leg",
+    "LiveQuote",
     "NewsItem",
     "Opportunity",
     "OptionChain",

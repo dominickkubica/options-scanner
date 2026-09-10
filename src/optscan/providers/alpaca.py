@@ -61,7 +61,9 @@ import httpx
 
 from optscan.config import ALPACA_OPTIONS_START, Settings
 from optscan.logging import get_logger
+from optscan.market_calendar import SessionState, session_state
 from optscan.models import (
+    LiveQuote,
     NewsItem,
     OptionChain,
     OptionContract,
@@ -75,6 +77,7 @@ from optscan.providers.errors import (
     AuthenticationError,
     MalformedResponse,
     NoDataAvailable,
+    ProviderError,
     ProviderUnavailable,
     RateLimited,
     SymbolNotFound,
@@ -126,6 +129,47 @@ STOCK_BARS_FEED = "sip"
 #: age on every screen, so being late is visible while being 2 percent of the market
 #: is not.
 STOCK_SNAPSHOT_FEED = "delayed_sip"
+
+#: Symbols per snapshot request. The endpoint takes a comma separated list and the
+#: whole watchlist fits in one call, which is the point: a live pill for seven symbols
+#: costs one request, not seven, so polling every few seconds stays far inside the
+#: 200/minute budget.
+SNAPSHOT_BATCH = 100
+
+#: Real time consolidated quotes need an entitlement this account does not have.
+#: Measured 2026-09-08, both `/v2/stocks/snapshots` and `/v2/stocks/trades/latest`:
+#:
+#:     feed=sip          403 "subscription does not permit querying recent SIP data"
+#:     feed=iex          200, real time, but IEX only: 634k of QQQ's 28.7m shares,
+#:                       and after hours quotes of 122.13/136.73 on a stock that
+#:                       consolidated shows as 129.00/129.80
+#:     feed=delayed_sip  200, whole tape, fifteen minutes behind
+#:
+#: So there is no free path to a second by second *correct* price, and the two ways of
+#: pretending otherwise are both worse than being late: IEX's price is right only on
+#: the most liquid names and its size and volume are wrong everywhere. Fifteen minutes
+#: late and consolidated is the honest ceiling, and the delay is reported rather than
+#: hidden so nobody trades off it thinking it is now.
+SNAPSHOT_DELAY_MINUTES = 15
+
+#: The free real time feed. IEX is a single exchange rather than the consolidated tape,
+#: so it carries roughly two percent of the volume -- but its trades are *real*, printed
+#: with no delay, and on a liquid name mid session it prints constantly.
+#:
+#: Measured 2026-09-08 at 21:26 ET, last print per feed:
+#:
+#:     feed          TJX        QQQ        AAPL
+#:     delayed_sip   19:57:10   19:59:20   19:59:39
+#:     iex           15:59:56   16:28:41   16:00:34
+#:
+#: which looks damning and is not a delay at all: IEX barely trades after 16:00, so
+#: those are the last prints of its regular session. During the session the ordering
+#: reverses, and that is exactly why the two are raced on timestamp below rather than
+#: one being preferred outright. Whichever feed saw a trade more recently wins, per
+#: symbol, every cycle -- which picks IEX on a liquid name at midday and the delayed
+#: tape on a thin one at any hour, with no list of "liquid names" to maintain.
+STOCK_TRADE_PATH = "/v2/stocks/trades/latest"
+REALTIME_FEED = "iex"
 
 #: Alpaca's rate limit headers. Lowercase because httpx normalizes them.
 HEADER_LIMIT = "x-ratelimit-limit"
@@ -376,6 +420,132 @@ class AlpacaProvider(MarketDataProvider):
             previous_close=positive(previous.get("c")),
             volume=whole(daily.get("v")),
             fetched_at=self.now(),
+            source=self.name,
+        )
+
+    def get_live_quotes(self, symbols: Sequence[str]) -> dict[str, LiveQuote]:
+        """Headline prices for many symbols in as few requests as possible.
+
+        Batched because this is polled: the watchlist is one request per cycle rather
+        than one per symbol, which is the difference between 6 requests a minute and 42.
+
+        A symbol the vendor does not know is simply absent from the result. It is not an
+        error here -- the watchlist may hold a ticker that has since been delisted, and
+        one bad name must not blank the other six.
+        """
+        wanted = [s.strip().upper() for s in symbols if s and s.strip()]
+        if not wanted:
+            return {}
+
+        out: dict[str, LiveQuote] = {}
+        for start in range(0, len(wanted), SNAPSHOT_BATCH):
+            batch = wanted[start : start + SNAPSHOT_BATCH]
+            body = self._get(
+                f"{self.settings.alpaca_data_url}{STOCK_SNAPSHOT_PATH}",
+                {"symbols": ",".join(batch), "feed": STOCK_SNAPSHOT_FEED},
+            )
+            fetched = self.now()
+            realtime = self._latest_trades(batch)
+            for ticker in batch:
+                snapshot = body.get(ticker)
+                if isinstance(snapshot, dict) and snapshot:
+                    quote = self._live_quote(ticker, snapshot, fetched)
+                    out[ticker] = self._prefer_newer(quote, realtime.get(ticker))
+        return out
+
+    def _latest_trades(self, symbols: Sequence[str]) -> dict[str, tuple[float, datetime]]:
+        """Real time last trades from the free feed, as {symbol: (price, when)}.
+
+        Best effort on purpose. This is an *improvement* on a price that is already
+        correct, so a failure here must leave the delayed quote standing rather than
+        taking the whole batch down. Anything that goes wrong is logged and dropped.
+        """
+        try:
+            body = self._get(
+                f"{self.settings.alpaca_data_url}{STOCK_TRADE_PATH}",
+                {"symbols": ",".join(symbols), "feed": REALTIME_FEED},
+            )
+        except (ProviderError, OSError) as error:
+            log.warning("realtime trades unavailable", error=str(error))
+            return {}
+
+        out: dict[str, tuple[float, datetime]] = {}
+        for ticker, trade in (body.get("trades") or {}).items():
+            price = positive((trade or {}).get("p"))
+            when = _timestamp((trade or {}).get("t"))
+            if price is not None and when is not None:
+                out[ticker] = (price, when)
+        return out
+
+    @staticmethod
+    def _prefer_newer(quote: LiveQuote, realtime: tuple[float, datetime] | None) -> LiveQuote:
+        """Take the real time price only when it is genuinely more recent.
+
+        The comparison is the whole point. IEX is never *delayed*, but it is often
+        *older*, because a stock that has not traded on one exchange for ten minutes
+        has an IEX print from ten minutes ago while the consolidated tape has one from
+        fifteen minutes ago plus everything in between. Preferring IEX unconditionally
+        would make thin symbols worse and after hours much worse.
+
+        Only the price and its stamp move. The previous close, the day's volume and the
+        official close stay on the consolidated snapshot, because IEX's own volume is
+        two percent of the real number and would be a wrong answer rather than a late
+        one.
+        """
+        if realtime is None:
+            return quote
+        price, when = realtime
+        if quote.as_of is not None and when <= quote.as_of:
+            return quote
+        # Outside the regular session the real time print is an extended hours trade,
+        # and merging it into the session close would overwrite the official close with
+        # a thin after hours tick. It belongs beside it, exactly as the tape's does.
+        if session_state(when) in (SessionState.PRE, SessionState.POST):
+            return quote.model_copy(update={"extended": price, "extended_at": when})
+        return quote.model_copy(
+            update={
+                "last": price,
+                "as_of": when,
+                "realtime": True,
+                "feed": REALTIME_FEED,
+                "delay_minutes": None,
+            }
+        )
+
+    def _live_quote(self, ticker: str, snapshot: dict, fetched: datetime) -> LiveQuote:
+        daily = snapshot.get("dailyBar") or {}
+        previous = snapshot.get("prevDailyBar") or {}
+        trade = snapshot.get("latestTrade") or {}
+        minute = snapshot.get("minuteBar") or {}
+
+        session_last = positive(daily.get("c"))
+        traded_at = _timestamp(trade.get("t"))
+
+        # The extended print is only shown when it is genuinely a different fact from
+        # the session close. During the session the two are the same trade, and
+        # printing it twice would invent an "after hours move" of zero all day.
+        state = session_state(traded_at) if traded_at else None
+        outside = state in (SessionState.PRE, SessionState.POST)
+        extended = positive(trade.get("p")) if outside else None
+
+        # The freshest thing the venue stamped. `dailyBar.t` is midnight ET -- a label
+        # for which session the bar belongs to, not a time anything happened -- so it
+        # can never be used for this.
+        as_of = max(filter(None, (traded_at, _timestamp(minute.get("t")))), default=None)
+
+        return LiveQuote(
+            symbol=ticker,
+            last=session_last,
+            previous_close=positive(previous.get("c")),
+            extended=extended,
+            extended_at=traded_at if extended is not None else None,
+            volume=whole(daily.get("v")),
+            as_of=as_of,
+            session=str(state) if state else None,
+            realtime=False,
+            feed=STOCK_SNAPSHOT_FEED,
+            delay_minutes=SNAPSHOT_DELAY_MINUTES,
+            fetched_at=fetched,
             source=self.name,
         )
 
