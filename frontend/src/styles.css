@@ -26,6 +26,16 @@
   --bad: #ff3b69;
   --warn: #f0a63c;
   --mono: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", monospace;
+  /* Prices, quoted the way a broker quotes them.
+   *
+   * Inter rather than the monospace face. A true monospace widens every glyph to the
+   * same box, which is what makes code line up and what makes a price look like a
+   * serial number: the 1s float in space and the whole figure reads loose. Inter's
+   * tabular figures give the digits one shared width without touching the letters, so
+   * a column of prices still aligns while each number reads as a number. This is what
+   * Webull does, and it is why their watchlist looks tighter than a monospaced one. */
+  --numeric:
+    "Inter Variable", Inter, -apple-system, "Segoe UI", Roboto, sans-serif;
 
   /* One radius scale. Every corner in the app comes from here so nothing drifts. */
   --r-sm: 8px;
@@ -2269,11 +2279,11 @@ tr.under-sampled td {
 }
 
 .quote-sub {
-  font-family: var(--mono);
-  font-size: 11px;
+  font-family: var(--numeric);
+  font-size: 12px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .quote-sub.up {
@@ -2305,15 +2315,20 @@ tr.under-sampled td {
      column stops being scannable. */
   justify-content: flex-end;
   margin-left: auto;
-  min-width: 78px;
-  height: 26px;
-  padding: 0 10px;
-  border-radius: 7px;
-  font-family: var(--mono);
-  font-size: 13px;
-  font-weight: 700;
+  min-width: 82px;
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 8px;
+  font-family: var(--numeric);
+  font-size: 14px;
+  /* 600 rather than 700. Inter's bold is heavy enough on a saturated fill that the
+     counters inside 8 and 0 start to close up at this size, which is a large part of
+     what read as blurry rather than the resolution. */
+  font-weight: 600;
   line-height: 1;
-  letter-spacing: -0.01em;
+  /* Tabular figures need no negative tracking; they are already on a fixed advance, and
+     tightening them on top of that is what made the digits touch. */
+  letter-spacing: 0;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   /* White on both, as in the reference. Dark text on the green was legible but made

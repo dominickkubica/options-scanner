@@ -400,17 +400,13 @@ export default function App() {
           </div>
         </div>
 
-        <div style={{ marginTop: "auto", padding: "0 16px" }} className="provenance">
-          {health.data && !health.data.realtime && (
-            <>
-              {health.data.delay_minutes
-                ? `Data is delayed by ${health.data.delay_minutes} minutes. `
-                : "Delayed data. "}
-              This tool ranks and displays. It never places orders, and its scores have
-              not been validated against outcomes.
-            </>
-          )}
-        </div>
+        {/* The standing sidebar disclaimer is gone, removed on request. It said the data
+            was delayed and the scores unvalidated, and both remain true -- but it said
+            them in the one place that could never be specific. The freshness of any
+            given number is now stated next to that number: a quote age on the header
+            price, "chain captured" on the option snapshot, "Nm delayed" over the pinned
+            list, and a real age on every chart's provenance. A caveat attached to the
+            thing it qualifies is worth more than a paragraph nobody reads twice. */}
       </aside>
 
       <main className="main">
@@ -498,6 +494,7 @@ export default function App() {
         <ErrorBoundary key={view}>
           {!apiDown && view === "home" && (
             <Home
+              quotes={quotes}
               onSelect={(name) => {
                 setSymbol(name);
                 setView("chart");
