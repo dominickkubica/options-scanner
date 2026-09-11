@@ -50,6 +50,15 @@ export const api = {
   // Drops the server's short-lived caches. Fetches nothing itself: the panels the
   // browser has open do that, so a refresh costs what is on screen and no more.
   refresh: () => request("/refresh", { method: "POST" }),
+  // The statement goes up as plain text rather than a multipart upload, which keeps a
+  // parsing dependency out of the server for what is a CSV. Safe to repeat: the ledger
+  // keys rows on their own contents, so an overlapping export adds only what is new.
+  importStatement: (text) =>
+    request("/journal/import", {
+      method: "POST",
+      headers: { "content-type": "text/csv" },
+      body: text,
+    }),
   home: () => request("/home"),
   catalogue: ({ q, group, onlyWatchlist, onlyScreenable, limit } = {}) =>
     request(

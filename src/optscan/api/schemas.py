@@ -1048,6 +1048,22 @@ class BreakdownOut(ApiModel):
     )
 
 
+class ImportResultOut(ApiModel):
+    """What one statement upload did.
+
+    `duplicate` is as important as `inserted` and is shown rather than hidden: brokers
+    export date ranges, so every download after the first overlaps the last, and "457
+    rows, 25 new" is the only way to tell a working import from one that did nothing.
+    """
+
+    parsed: int
+    inserted: int
+    duplicate: int
+    first_date: str | None = None
+    last_date: str | None = None
+    detail: str
+
+
 class JournalOut(ApiModel):
     """Journal style reporting over settled candidates.
 

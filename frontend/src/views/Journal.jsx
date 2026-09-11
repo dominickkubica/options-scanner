@@ -340,12 +340,66 @@ function BreakdownTable({ title, rows }) {
   );
 }
 
+// Uploading a Robinhood statement.
+//
+// The ledger keys rows on a digest of their own contents, so re-uploading an
+// overlapping export adds only what is new. That makes this safe to press repeatedly,
+// which matters because the broker exports date ranges rather than deltas: every
+// download after the first overlaps the last, and the honest report is "457 rows, 25
+// new" rather than a silent success that could equally mean nothing happened.
+function ImportStatement({ onImported }) {
+  const [state, setState] = useState({ status: "idle" });
+
+  const choose = (event) => {
+    const file = event.target.files?.[0];
+    // Clear the input so choosing the same file twice fires change twice. Without this
+    // a failed import cannot be retried by picking the same file again.
+    event.target.value = "";
+    if (!file) return;
+
+    setState({ status: "working" });
+    file
+      .text()
+      .then((text) => api.importStatement(text))
+      .then((result) => {
+        setState({ status: "done", result });
+        onImported?.();
+      })
+      .catch((error) => setState({ status: "failed", error: error.message }));
+  };
+
+  return (
+    <div className="import-row">
+      <label className="import-btn">
+        <input type="file" accept=".csv,text/csv" onChange={choose} hidden />
+        {state.status === "working" ? "Reading..." : "Import Robinhood CSV"}
+      </label>
+      {state.status === "done" && (
+        <span className="import-note good">
+          {state.result.detail}
+          {state.result.first_date && (
+            <> {state.result.first_date} to {state.result.last_date}.</>
+          )}
+        </span>
+      )}
+      {state.status === "failed" && <span className="import-note bad">{state.error}</span>}
+      {state.status === "idle" && (
+        <span className="import-note">
+          Account &rarr; Statements &amp; History &rarr; Export. Safe to re-upload:
+          rows already held are skipped.
+        </span>
+      )}
+    </div>
+  );
+}
+
 export default function Journal() {
   const [symbol, setSymbol] = useState("");
   const [strategy, setStrategy] = useState("");
+  const [imported, setImported] = useState(0);
   const { data, error, loading } = useAsync(
     () => api.journal({ symbol, strategy }),
-    [symbol, strategy],
+    [symbol, strategy, imported],
   );
 
   if (loading)
@@ -359,6 +413,10 @@ export default function Journal() {
 
   return (
     <>
+      <Panel title="Import trades">
+        <ImportStatement onImported={() => setImported((value) => value + 1)} />
+      </Panel>
+
       {/* Above the numbers, deliberately. The banner now qualifies the sample rather
           than disowning the source: these are real fills from imported statements, so
           the caveat is about how much can be concluded, not about whether it happened. */}

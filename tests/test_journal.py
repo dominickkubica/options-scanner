@@ -219,3 +219,70 @@ class TestReport:
         assert report.expectancy is None
         assert report.days == []
         assert report.notes
+
+
+# --------------------------------------------------------------------------------
+# Uploading a statement from the browser
+# --------------------------------------------------------------------------------
+
+STATEMENT = (
+    '"Activity Date","Process Date","Settle Date","Instrument","Description",'
+    '"Trans Code","Quantity","Price","Amount"\n'
+    '"9/10/2026","9/10/2026","9/11/2026","AAPL","AAPL 9/18/2026 Put $300.00",'
+    '"STO","1","$1.50","$150.00"\n'
+)
+
+
+def _client(settings):
+    from fastapi.testclient import TestClient
+
+    from optscan.api.app import create_app
+    from optscan.api.deps import clear_caches
+
+    clear_caches()
+    return TestClient(create_app(settings))
+
+
+def test_a_statement_uploaded_twice_inserts_once(tmp_settings) -> None:
+    """The reason this endpoint is safe to press repeatedly.
+
+    Brokers export date ranges, not deltas, so every download after the first overlaps
+    the last. Rows are keyed by a digest of their own contents, so the second upload
+    must add nothing rather than doubling a position.
+    """
+    client = _client(tmp_settings)
+
+    first = client.post(
+        "/api/journal/import", content=STATEMENT, headers={"content-type": "text/csv"}
+    ).json()
+    second = client.post(
+        "/api/journal/import", content=STATEMENT, headers={"content-type": "text/csv"}
+    ).json()
+
+    assert first["inserted"] == 1
+    assert second["inserted"] == 0
+    assert second["duplicate"] == 1
+    # "0 new" is a correct outcome that looks like a failure without the count beside it.
+    assert "already held" in second["detail"]
+
+
+def test_a_file_that_is_not_a_statement_is_refused_with_a_reason(tmp_settings) -> None:
+    client = _client(tmp_settings)
+    response = client.post(
+        "/api/journal/import", content="a,b,c\n1,2,3\n", headers={"content-type": "text/csv"}
+    )
+    assert response.status_code == 422
+    assert "export" in response.json()["detail"].lower()
+
+
+def test_an_oversized_upload_is_refused(tmp_settings) -> None:
+    """A mistaken upload must not be able to occupy the process."""
+    from optscan.api.routers.journal import MAX_STATEMENT_BYTES
+
+    client = _client(tmp_settings)
+    response = client.post(
+        "/api/journal/import",
+        content="x" * (MAX_STATEMENT_BYTES + 1),
+        headers={"content-type": "text/csv"},
+    )
+    assert response.status_code == 413

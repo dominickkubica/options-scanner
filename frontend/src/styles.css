@@ -2556,3 +2556,44 @@ tr.under-sampled td {
   color: var(--bad);
   border-color: var(--bad);
 }
+
+/* Importing a broker statement. A label wrapping a hidden file input, because the
+   native control cannot be styled and reads as a form field in a page that has none. */
+.import-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.import-btn {
+  display: inline-block;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 16px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.import-btn:hover {
+  filter: brightness(1.1);
+}
+
+/* The count of what was inserted against what was already held. Shown rather than
+   collapsed into "done", because an overlapping export is the normal case and "0 new"
+   is a correct outcome that looks like a failure without the number beside it. */
+.import-note {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.import-note.good {
+  color: var(--good);
+}
+
+.import-note.bad {
+  color: var(--bad);
+}
