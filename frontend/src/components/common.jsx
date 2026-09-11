@@ -1,4 +1,5 @@
 import { Component, useCallback, useEffect, useState } from "react";
+import { api } from "../api.js";
 import { age, duration } from "../format.js";
 import { CONNECTION, LIVE_STATES, cycleAge, cycleOverdue } from "../live.js";
 
@@ -290,4 +291,39 @@ export function Stat({ label, value, hint }) {
 export function Cell({ value, formatted, className = "" }) {
   const missing = value === null || value === undefined;
   return <td className={`${className} ${missing ? "missing" : ""}`.trim()}>{formatted}</td>;
+}
+
+// Refresh now.
+//
+// Three states, because a button that does something invisible gets pressed again and
+// again: idle, in flight, and a brief confirmation. The confirmation is the point --
+// the work happens in the panels afterwards, so without it the click appears to have
+// done nothing at all.
+export function RefreshButton({ onDone }) {
+  const [state, setState] = useState("idle");
+
+  const click = () => {
+    if (state === "working") return;
+    setState("working");
+    api
+      .refresh()
+      .then(() => {
+        onDone?.();
+        setState("done");
+        window.setTimeout(() => setState("idle"), 1500);
+      })
+      .catch(() => setState("failed"));
+  };
+
+  return (
+    <button
+      type="button"
+      className={`refresh-btn ${state}`}
+      onClick={click}
+      disabled={state === "working"}
+      title="Drop cached quotes, chains and candles, then refetch what is on screen"
+    >
+      {state === "working" ? "..." : state === "done" ? "updated" : "refresh"}
+    </button>
+  );
 }

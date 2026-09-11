@@ -43,14 +43,16 @@ from optscan.api.schemas import Provenance
 from optscan.config import REPO_ROOT, Settings, get_settings
 from optscan.jobs.load import latest_snapshot
 from optscan.jobs.scan import STALE_AFTER_HOURS, load_iv_history
+from optscan.jobs.snapshot import capture_symbol
 from optscan.live import LiveHub
 from optscan.logging import get_logger
+from optscan.market_calendar import SessionState, session_state
 from optscan.models import ChainSnapshot, LiveQuote, PriceBar, SymbolEvents
 from optscan.providers import (
     MarketDataProvider,
     NoDataAvailable,
     ProviderError,
-    get_intraday_provider,
+    get_intraday_providers,
     get_provider,
     get_quote_providers,
 )
@@ -92,6 +94,20 @@ QUOTE_TTL_SECONDS = 5.0
 #: Without a ceiling, one Browse page would turn a 1 request poll into a 3 request one
 #: and put a vendor round trip in front of a screen that does not need it.
 MAX_LIVE_QUOTE_SYMBOLS = 50
+
+#: How long a live chain is reused before it is fetched again. The chain is the input
+#: to every judgement on the page -- greeks, probability, credit, DTE -- so this is the
+#: freshness that actually decides whether a card is about today. Short enough that a
+#: number on screen is never a minute old, long enough that clicking between the chain,
+#: the payoff and the best plays tabs is one fetch rather than three.
+LIVE_CHAIN_TTL_SECONDS = 20.0
+
+#: Expiries fetched for a live view, against the 40 the nightly capture takes. The
+#: capture is building a permanent history and a chain not captured today cannot be
+#: captured later; this is answering "what can I trade now", and the screen's own DTE
+#: band tops out at 45 days. Six expiries covers that with room, at roughly a third of
+#: the requests.
+LIVE_CHAIN_EXPIRIES = 6
 
 #: Default candle window for the underlying detail chart.
 DEFAULT_HISTORY_DAYS = 180
@@ -195,6 +211,10 @@ _HISTORY = _TimedCache(MAX_CACHED_SYMBOLS)
 #: Live quotes, keyed by the exact set asked for.
 _QUOTES = _TimedCache(32)
 
+#: Live chains, per symbol. Holds False for a symbol whose vendor just failed, so an
+#: outage costs one request per window rather than one per panel per render.
+_LIVE_CHAINS = _TimedCache(8)
+
 #: One lock per symbol and capture, so concurrent requests for the same chain solve it
 #: once between them instead of once each.
 #:
@@ -227,6 +247,22 @@ def _release_solve_lock(key: object) -> None:
         _SOLVE_LOCKS.pop(key, None)
 
 
+def clear_live_caches() -> None:
+    """Drop only the short-lived caches, so the next request refetches from the vendor.
+
+    Deliberately not `clear_caches`, which also tears down the live hub and the screen
+    config. This is what a refresh button needs: the quote, the chain and the candles
+    are the three things that age, and everything else on the page is derived from them.
+
+    The solved-symbol cache is keyed by the snapshot's own `fetched_at`, so a newly
+    fetched chain misses it naturally and re-solves. Clearing it here would only throw
+    away work that is still correct.
+    """
+    _QUOTES.clear()
+    _LIVE_CHAINS.clear()
+    _HISTORY.clear()
+
+
 def clear_caches() -> None:
     """Drop everything cached. Called between tests, and by the app on startup.
 
@@ -238,6 +274,7 @@ def clear_caches() -> None:
     _EVENTS.clear()
     _HISTORY.clear()
     _QUOTES.clear()
+    _LIVE_CHAINS.clear()
     with _SOLVE_LOCKS_GUARD:
         _SOLVE_LOCKS.clear()
     screen_config.cache_clear()
@@ -355,6 +392,72 @@ def frontend_dist() -> Path | None:
 # --------------------------------------------------------------------------------
 
 
+def live_chain(settings: Settings, symbol: str) -> ChainSnapshot | None:
+    """Today's chain, fetched on demand. Never stored.
+
+    ## Why this exists
+
+    Everything else on the page was made current and the analysis was not. Best plays,
+    the greeks, the probability and the credit were all computed from the 15:45 capture,
+    so mid-session they described yesterday. It showed most clearly in the DTE: a card
+    for a 2026-09-11 expiry read "2d" on 2026-09-10, because DTE is measured from the
+    capture date and the capture was the previous afternoon.
+
+    ## The rule that must not be broken
+
+    **Nothing fetched here is ever written to storage.** The IV history has exactly one
+    writer, the 15:45 snapshot job, and that single sampling time is what makes the
+    series comparable across days. Appending marks taken at whatever moment a browser
+    happened to be open would pool two different sampling regimes into one series and
+    move every rank without the market having moved. This returns a snapshot for
+    display and scoring; the stored capture remains the only history.
+
+    ## When it declines
+
+    Outside a session. A live fetch then is not fresher than the stored capture, it is
+    simply a different and worse sample: the 15:45 capture was taken deliberately at a
+    known time, while an after-hours chain is thin quotes and wide spreads. Returning
+    None hands the caller back to the stored snapshot, which is the better artifact.
+    """
+    state = session_state(datetime.now(UTC), settings.market_calendar, settings.market_timezone)
+    if state is not SessionState.OPEN:
+        return None
+
+    key = ("chain", symbol)
+    now = datetime.now(UTC).timestamp()
+    cached = _LIVE_CHAINS.get(key, now)
+    if isinstance(cached, ChainSnapshot):
+        return cached
+    if cached is not None:  # a cached failure, so the vendor is not retried per request
+        return None
+
+    providers = _QUOTE_PROVIDER["factory"](settings)
+    shallow = settings.model_copy(update={"snapshot_max_expiries": LIVE_CHAIN_EXPIRIES})
+    for provider in providers:
+        try:
+            try:
+                snapshot = capture_symbol(provider, symbol, shallow, date.today())
+            finally:
+                closer = getattr(provider, "close", None)
+                if callable(closer):
+                    closer()
+        except (ProviderError, OSError, NotImplementedError) as error:
+            log.warning(
+                "live chain unavailable",
+                symbol=symbol,
+                vendor=provider.name,
+                error=str(error),
+            )
+            continue
+        _LIVE_CHAINS.put(key, snapshot, expires_at=now + LIVE_CHAIN_TTL_SECONDS)
+        return snapshot
+
+    # Remember the failure for the same window. Without this every panel on the page
+    # retries a dead vendor on every request, which is how an outage becomes a stall.
+    _LIVE_CHAINS.put(key, False, expires_at=now + LIVE_CHAIN_TTL_SECONDS)
+    return None
+
+
 def solved_symbol(
     symbol: str,
     settings: Settings,
@@ -370,7 +473,12 @@ def solved_symbol(
     with a sentence about running the snapshot job.
     """
     normalized = symbol.strip().upper()
-    snapshot = latest_snapshot(settings.snapshot_path, normalized)
+    # A live chain when the market is open and a vendor answers, the stored capture
+    # otherwise. The stored one is never skipped on failure: a day old chain that says
+    # it is a day old beats an empty page.
+    snapshot = live_chain(settings, normalized) or latest_snapshot(
+        settings.snapshot_path, normalized
+    )
     if snapshot is None:
         return None
 
@@ -839,6 +947,40 @@ def _intraday_refusal(interval: str, settings: Settings | None) -> str | None:
     return None
 
 
+def _intraday_from_any(
+    providers: Sequence[MarketDataProvider],
+    symbol: str,
+    interval: str,
+    days: int,
+    session: date | None,
+) -> tuple[list[PriceBar], list[str]]:
+    """Try each vendor in turn, returning the first non-empty answer and any failures.
+
+    A single vendor's outage used to leave the chart blank while the market traded,
+    which is a worse failure than being fifteen minutes late. NoDataAvailable is left to
+    propagate: it means the market was shut, which every vendor will agree about and
+    which the caller turns into a sentence rather than an error.
+    """
+    errors: list[str] = []
+    for provider in providers:
+        try:
+            try:
+                bars = provider.get_intraday_bars(symbol, interval, days, session=session)
+            finally:
+                closer = getattr(provider, "close", None)
+                if callable(closer):
+                    closer()
+        except (ProviderError, OSError, NotImplementedError) as error:
+            log.warning(
+                "intraday vendor failed", symbol=symbol, vendor=provider.name, error=str(error)
+            )
+            errors.append(f"{provider.name} ({type(error).__name__})")
+            continue
+        if bars:
+            return bars, errors
+    return [], errors
+
+
 def _intraday_history(
     symbol: str,
     interval: str,
@@ -856,14 +998,14 @@ def _intraday_history(
     if refusal is not None:
         return [], refusal
 
+    providers = get_intraday_providers(settings)
+    if not providers:
+        return [], "No provider here can serve intraday candles."
+
     try:
-        provider = get_intraday_provider(settings)
-        if provider is None:
-            return [], "No provider here can serve intraday candles."
-        try:
-            bars = provider.get_intraday_bars(symbol, interval, days, session=session)
-        finally:
-            provider.close()
+        bars, errors = _intraday_from_any(providers, symbol, interval, days, session)
+        if not bars and errors:
+            return [], f"{interval} candles unavailable: {'; '.join(errors)}"
     except NoDataAvailable:
         # A shut market is not a failure and must not read like one. The vendor says
         # "no bars" for a holiday, a weekend and a broken request identically, so the
@@ -873,10 +1015,13 @@ def _intraday_history(
         log.warning("intraday history unavailable", symbol=symbol, error=str(error))
         return [], f"{interval} candles unavailable: {error}"
 
-    if not bars:
-        # Over a weekend a short window contains no sessions at all, which is not a
-        # failure and should not read as one.
-        if session is not None:
-            return [], f"No {interval} bars on {session}. The market was shut, or it is too recent."
-        return [], f"No {interval} bars in the last {days} days. Try a longer window."
-    return bars, None
+    if bars:
+        return bars, None
+    # Over a weekend a short window contains no sessions at all, which is not a failure
+    # and should not read as one.
+    empty = (
+        f"No {interval} bars on {session}. The market was shut, or it is too recent."
+        if session is not None
+        else f"No {interval} bars in the last {days} days. Try a longer window."
+    )
+    return [], empty

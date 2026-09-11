@@ -15,7 +15,7 @@ Known limits, stated rather than papered over:
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, ClassVar
 
 import pandas as pd
@@ -115,6 +115,77 @@ class YFinanceProvider(MarketDataProvider):
     #: symbol, and yfinance publishes no rate limit and throttles silently. The job that
     #: breaks when it does is the 15:45 capture, whose IV history cannot be backfilled.
     QUOTE_URL: ClassVar[str] = "https://query2.finance.yahoo.com/v7/finance/quote"
+
+    #: Alpaca's interval names to Yahoo's. Kept as an explicit table rather than
+    #: lowercasing and stripping, because a silently mistranslated interval draws a
+    #: chart at the wrong resolution and nothing about it looks wrong.
+    INTRADAY_INTERVALS: ClassVar[dict[str, str]] = {
+        "1Min": "1m",
+        "2Min": "2m",
+        "5Min": "5m",
+        "15Min": "15m",
+        "30Min": "30m",
+        "1Hour": "60m",
+    }
+
+    def get_intraday_bars(
+        self,
+        symbol: str,
+        interval: str,
+        days: int = 1,
+        *,
+        session: date | None = None,
+    ) -> list[PriceBar]:
+        """Intraday candles, as the fallback when the primary vendor is down.
+
+        Worth having for more than redundancy. Alpaca's free plan serves the
+        consolidated tape on a fifteen minute delay, and on 2026-09-11 it was serving
+        nothing at all -- 504 on every endpoint for hours, which left the intraday chart
+        blank while the market traded. Yahoo's intraday bars carried the current minute
+        through the same window.
+
+        Yahoo publishes no delay guarantee either way, so nothing here claims to be real
+        time; it claims to be a second source, which is what an outage needs.
+        """
+        mapped = self.INTRADAY_INTERVALS.get(interval)
+        if mapped is None:
+            raise NoDataAvailable(f"yahoo has no {interval} interval")
+
+        try:
+            ticker = self._ticker(symbol)
+            if session is not None:
+                frame = ticker.history(
+                    start=session, end=session + timedelta(days=1), interval=mapped
+                )
+            else:
+                frame = ticker.history(period=f"{max(days, 1)}d", interval=mapped)
+        except Exception as error:  # yfinance raises bare exceptions
+            raise _classify(error, symbol) from error
+
+        if frame is None or frame.empty:
+            raise NoDataAvailable(f"yahoo returned no {interval} bars for {symbol}")
+
+        fetched = datetime.now(UTC)
+        bars: list[PriceBar] = []
+        for stamp, row in frame.iterrows():
+            ts = _clean_timestamp(stamp)
+            close = non_negative(row.get("Close"))
+            if ts is None or close is None:
+                continue
+            bars.append(
+                PriceBar(
+                    symbol=symbol.upper(),
+                    ts=ts,
+                    open=non_negative(row.get("Open")) or close,
+                    high=max(non_negative(row.get("High")) or close, close),
+                    low=min(non_negative(row.get("Low")) or close, close),
+                    close=close,
+                    volume=_clean_int(row.get("Volume")) or 0,
+                    fetched_at=fetched,
+                    source=self.name,
+                )
+            )
+        return bars
 
     def get_live_quotes(self, symbols: Sequence[str]) -> dict[str, LiveQuote]:
         """Headline prices for many symbols in one request.

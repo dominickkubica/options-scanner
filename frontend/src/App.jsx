@@ -8,6 +8,7 @@ import {
   ErrorBox,
   Provenance,
   QuoteAge,
+  RefreshButton,
   useAsync,
 } from "./components/common.jsx";
 import { CONNECTION, useLive } from "./live.js";
@@ -191,6 +192,9 @@ export default function App() {
       : "";
 
   const [view, setView] = useState("home");
+  // Bumped by the refresh button. Panels that take it as a dependency refetch; those
+  // that do not are reading from stores that did not age.
+  const [refreshNonce, setRefreshNonce] = useState(0);
   const [expiry, setExpiry] = useState(null);
   const [handover, setHandover] = useState(null);
   const [browseGroup, setBrowseGroup] = useState(null);
@@ -226,7 +230,11 @@ export default function App() {
     setSymbol(withData || watchlist.data.symbols[0] || null);
   }, [watchlist.data, symbol]);
 
-  const summary = useAsync(() => api.symbol(symbol), [symbol], { enabled: Boolean(symbol) });
+  // `refreshNonce` is a dependency so the button refetches the summary, which is the
+  // panel carrying the chain's age and the spot the header shows.
+  const summary = useAsync(() => api.symbol(symbol), [symbol, refreshNonce], {
+    enabled: Boolean(symbol),
+  });
 
   // Null means "let the server choose". It picks the first expiry at or beyond the
   // screen's own minimum DTE, which is a config value the browser has no business
@@ -441,6 +449,15 @@ export default function App() {
           {onTicker && summary.data && (
             <Provenance provenance={summary.data.provenance} label="chain captured" />
           )}
+          {/* Every panel refreshes on its own clock, and those clocks are chosen to be
+              kind to a shared request budget. This is for the moment that is exactly
+              wrong for: something moved and the screen is a cycle behind. */}
+          <RefreshButton
+            onDone={() => {
+              watchlist.reload();
+              setRefreshNonce((value) => value + 1);
+            }}
+          />
           <ConnectionBadge
             status={live.status || liveStatus.data}
             connection={wantsLive ? live.connection : CONNECTION.CLOSED}
@@ -537,7 +554,7 @@ export default function App() {
               chain still has a chart worth drawing, and gating made every unpinned
               ticker a dead page. */}
           {view === "chart" && symbol && (
-            <Underlying symbol={symbol} summary={summary.data} />
+            <Underlying symbol={symbol} summary={summary.data} refresh={refreshNonce} />
           )}
 
           {!apiDown && view === "news" && symbol && <News symbol={symbol} />}

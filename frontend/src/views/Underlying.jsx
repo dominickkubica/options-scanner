@@ -26,7 +26,7 @@ const CHART_REFRESH_SECONDS = 15;
 //
 // So the price panel renders from `symbol` alone and every volatility panel below it
 // is conditional. The absence is stated once, at the top, with what to do about it.
-export default function Underlying({ symbol, summary }) {
+export default function Underlying({ symbol, summary, refresh = 0 }) {
   const ticker = summary?.symbol || symbol;
   // Sessions of history, not calendar days: the endpoint returns one bar per unit. 126
   // is six months of trading, and is the chart's default window.
@@ -47,7 +47,7 @@ export default function Underlying({ symbol, summary }) {
   // requested window and keeps the warmup off to the left, one scroll away.
   const history = useAsync(
     () => api.history(ticker, { days: days + INDICATOR_WARMUP, interval, session }),
-    [ticker, days, interval, session],
+    [ticker, days, interval, session, refresh],
     { keepOnError: true },
   );
 

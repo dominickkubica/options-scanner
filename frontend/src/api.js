@@ -47,6 +47,9 @@ export const api = {
   // Polled. Deliberately separate from /watchlist, which seeds a table and stats a
   // directory per symbol -- none of which changes between two ticks of a price.
   quotes: (symbols) => request(`/quotes${query({ symbols: symbols.join(",") })}`),
+  // Drops the server's short-lived caches. Fetches nothing itself: the panels the
+  // browser has open do that, so a refresh costs what is on screen and no more.
+  refresh: () => request("/refresh", { method: "POST" }),
   home: () => request("/home"),
   catalogue: ({ q, group, onlyWatchlist, onlyScreenable, limit } = {}) =>
     request(

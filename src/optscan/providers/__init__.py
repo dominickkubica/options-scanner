@@ -28,6 +28,7 @@ __all__ = [
     "RateLimited",
     "SymbolNotFound",
     "get_intraday_provider",
+    "get_intraday_providers",
     "get_news_provider",
     "get_provider",
     "get_quote_provider",
@@ -63,6 +64,26 @@ def get_provider(settings: Settings) -> MarketDataProvider:
         f"provider {settings.provider!r} is not implemented. Configured providers are "
         "yfinance and alpaca."
     )
+
+
+def get_intraday_providers(settings: Settings) -> list[MarketDataProvider]:
+    """Every vendor that can serve intraday candles, best first.
+
+    Alpaca first: its bars are the consolidated tape, fifteen minutes behind on the free
+    plan but complete. Yahoo second, and not merely as a spare -- on 2026-09-11 Alpaca's
+    data host returned 504 for hours and the intraday chart was simply blank while the
+    market traded, which is a worse failure than being fifteen minutes late.
+    """
+    providers: list[MarketDataProvider] = []
+    if settings.alpaca_credentials_set:
+        from optscan.providers.alpaca import AlpacaProvider
+
+        providers.append(AlpacaProvider(settings))
+
+    from optscan.providers.yfinance_provider import YFinanceProvider
+
+    providers.append(YFinanceProvider())
+    return providers
 
 
 def get_intraday_provider(settings: Settings) -> MarketDataProvider | None:

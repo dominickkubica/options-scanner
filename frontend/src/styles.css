@@ -2518,3 +2518,41 @@ tr.under-sampled td {
   color: var(--muted);
   opacity: 0.75;
 }
+
+/* Refresh now. Sits in the header beside the connection badge: a control, not a panel,
+   so it is quiet until hovered and never competes with the price next to it. */
+.refresh-btn {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition:
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+.refresh-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.refresh-btn:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* Held for a moment after a refresh lands. The work happens in the panels afterwards,
+   so without this the click looks like it did nothing. */
+.refresh-btn.done {
+  color: var(--good);
+  border-color: var(--good);
+}
+
+.refresh-btn.failed {
+  color: var(--bad);
+  border-color: var(--bad);
+}

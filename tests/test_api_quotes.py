@@ -321,3 +321,55 @@ def test_the_realtime_price_never_brings_its_own_volume(_clear: None) -> None:
     )
     assert result.volume == 5_000_000
     assert result.previous_close == pytest.approx(99.0)
+
+
+# --------------------------------------------------------------------------------
+# The live chain
+# --------------------------------------------------------------------------------
+
+
+def test_a_live_chain_is_never_written_to_storage(tmp_settings: Settings) -> None:
+    """The rule the feature stands on.
+
+    The IV history has exactly one writer, the 15:45 job, and that single sampling time
+    is what makes the series comparable across days. Marks taken whenever a browser
+    happened to be open would pool two sampling regimes into one series and move every
+    rank without the market having moved.
+    """
+    from optscan.api.deps import live_chain
+
+    before = sorted(tmp_settings.snapshot_path.rglob("*.parquet"))
+    live_chain(tmp_settings, "AAPL")
+    after = sorted(tmp_settings.snapshot_path.rglob("*.parquet"))
+
+    assert before == after, "a live chain fetch must not create a snapshot file"
+
+
+def test_a_live_chain_declines_outside_a_session(
+    tmp_settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A closed-market fetch is not fresher than the 15:45 capture, just worse: thin
+    quotes and wide spreads against a sample taken deliberately at a known time."""
+    from optscan.api import deps
+    from optscan.market_calendar import SessionState
+
+    monkeypatch.setattr(deps, "session_state", lambda *_a, **_k: SessionState.CLOSED)
+    called: list[str] = []
+    deps.set_quote_provider(lambda _s: called.append("asked") or [])
+
+    assert deps.live_chain(tmp_settings, "AAPL") is None
+    assert called == [], "no vendor should be contacted with the market shut"
+
+
+def test_refresh_drops_the_short_lived_caches_only(client: TestClient) -> None:
+    """The solved-symbol cache is keyed by the snapshot's own timestamp, so a new chain
+    misses it naturally. Clearing it would throw away work that is still correct."""
+    from optscan.api import deps
+
+    deps._QUOTES.put(("quotes", ("X",)), ({}, None), expires_at=None)
+    deps._SOLVED.put("keep-me", "solved", expires_at=None)
+
+    assert client.post("/api/refresh").status_code == 200
+
+    assert deps._QUOTES.get(("quotes", ("X",)), 0.0) is None
+    assert deps._SOLVED.get("keep-me", 0.0) == "solved"
