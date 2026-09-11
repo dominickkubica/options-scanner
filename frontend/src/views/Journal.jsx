@@ -467,17 +467,29 @@ export default function Journal() {
         }
       >
         <div className="tile-row">
+          {/* "closed trades", not "trading days". This tile showed the cluster count
+              under a label that means something else: the grain here is
+              (symbol, closing day), so 43 is forty-three symbol-days, while trading
+              actually happened on 26 sessions. The two were within a plausible
+              distance of each other, which is exactly what made the wrong label
+              survive -- 43 is also roughly the number of market sessions in the
+              imported range, so the number looked right for the label it had. */}
           <Tile
-            label="trading days"
+            label="closed trades"
             value={count(data.trades)}
-            sub={`${count(data.clusters)} clusters`}
+            sub={`${count(data.settlement_dates)} sessions traded`}
           />
           <Tile
             label="win rate"
             value={<IntervalText interval={data.win_rate} />}
           />
+          {/* Per trade, not per day. The figure is total profit over the cluster
+              count, so calling it "per day" overstated the denominator and therefore
+              understated the number: $139.26 over 43 clusters is $3.24 a trade, while
+              over the 26 sessions actually traded it would be $5.36 a day. Both are
+              true of different questions; the one computed here is per trade. */}
           <Tile
-            label="expectancy / day"
+            label="expectancy / trade"
             value={expectancy ? signedMoney(expectancy.value, 2) : "n/a"}
             tone={expectancy ? signClass(expectancy.value) : ""}
             sub={
