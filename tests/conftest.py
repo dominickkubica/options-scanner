@@ -37,11 +37,11 @@ def _offline_quotes() -> Iterator[None]:
     Credentials leak in from .env for any fixture that does not use `clean_env`, so
     "no credentials configured" was never the guarantee it looked like.
     """
-    from optscan.api.deps import get_quote_provider, set_quote_provider
+    from optscan.api.deps import get_quote_providers, set_quote_provider
 
-    set_quote_provider(lambda _settings: None)
+    set_quote_provider(lambda _settings: [])
     yield
-    set_quote_provider(get_quote_provider)
+    set_quote_provider(get_quote_providers)
 
 
 @pytest.fixture(autouse=True)

@@ -74,7 +74,7 @@ export function QuoteAge({ quote }) {
       <span className={`badge ${dead ? "stale" : "fresh"}`}>
         {quote.realtime ? "live" : late || "quote"}
       </span>{" "}
-      {age(seconds)} ago via {quote.feed}
+      {age(seconds)} via {quote.feed}
     </span>
   );
 }

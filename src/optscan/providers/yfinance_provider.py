@@ -14,6 +14,7 @@ Known limits, stated rather than papered over:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from typing import Any, ClassVar
 
@@ -21,7 +22,15 @@ import pandas as pd
 import yfinance as yf
 
 from optscan.logging import get_logger
-from optscan.models import OptionChain, OptionContract, PriceBar, Quote, Right, SymbolEvents
+from optscan.models import (
+    LiveQuote,
+    OptionChain,
+    OptionContract,
+    PriceBar,
+    Quote,
+    Right,
+    SymbolEvents,
+)
 from optscan.providers.base import MarketDataProvider
 from optscan.providers.errors import (
     MalformedResponse,
@@ -30,7 +39,7 @@ from optscan.providers.errors import (
     RateLimited,
     SymbolNotFound,
 )
-from optscan.providers.parsing import non_negative
+from optscan.providers.parsing import non_negative, whole
 
 log = get_logger("optscan.providers.yfinance")
 
@@ -100,6 +109,73 @@ class YFinanceProvider(MarketDataProvider):
 
     def _ticker(self, symbol: str) -> yf.Ticker:
         return yf.Ticker(symbol.strip().upper())
+
+    #: Yahoo's batch quote endpoint. One request for many symbols, which is the only
+    #: shape of yfinance access safe to poll: the per-Ticker path costs one request per
+    #: symbol, and yfinance publishes no rate limit and throttles silently. The job that
+    #: breaks when it does is the 15:45 capture, whose IV history cannot be backfilled.
+    QUOTE_URL: ClassVar[str] = "https://query2.finance.yahoo.com/v7/finance/quote"
+
+    def get_live_quotes(self, symbols: Sequence[str]) -> dict[str, LiveQuote]:
+        """Headline prices for many symbols in one request.
+
+        Exists as a second source, not a preference. Alpaca is the primary because it
+        publishes a rate limit; this is what keeps the screen alive when that vendor is
+        down, which it was on 2026-09-11 -- every data endpoint returning 504 for hours
+        while the market traded, and the whole app silently showing yesterday's closes
+        because nothing else could quote.
+
+        Yahoo publishes no delay and no guarantee, so `delay_minutes` stays None: unknown
+        is not zero, and a vendor that says nothing about its latency has not thereby
+        promised real time.
+        """
+        wanted = [s.strip().upper() for s in symbols if s and s.strip()]
+        if not wanted:
+            return {}
+
+        from yfinance.data import YfData  # noqa: PLC0415
+
+        try:
+            body = YfData().get_raw_json(self.QUOTE_URL, params={"symbols": ",".join(wanted)})
+        except Exception as error:
+            raise ProviderUnavailable(f"yahoo quote request failed: {error}") from error
+
+        fetched = datetime.now(UTC)
+        out: dict[str, LiveQuote] = {}
+        for row in (body.get("quoteResponse") or {}).get("result") or []:
+            ticker = (row.get("symbol") or "").upper()
+            last = non_negative(row.get("regularMarketPrice"))
+            if not ticker or last is None:
+                continue
+            # Yahoo's marketState tells us whether the post/pre price is a separate fact
+            # or the same trade as the session close. Merging them would invent an
+            # after-hours move of zero all day.
+            state = (row.get("marketState") or "").upper()
+            outside = state.startswith(("PRE", "POST", "CLOSED"))
+            extended = non_negative(
+                row.get("postMarketPrice")
+                if state.startswith(("POST", "CLOSED"))
+                else row.get("preMarketPrice")
+            )
+            stamp = row.get("regularMarketTime")
+            out[ticker] = LiveQuote(
+                symbol=ticker,
+                last=last,
+                previous_close=non_negative(row.get("regularMarketPreviousClose")),
+                extended=extended if outside else None,
+                volume=whole(row.get("regularMarketVolume")),
+                day_open=non_negative(row.get("regularMarketOpen")),
+                day_high=non_negative(row.get("regularMarketDayHigh")),
+                day_low=non_negative(row.get("regularMarketDayLow")),
+                session_date=(datetime.fromtimestamp(stamp, tz=UTC).date() if stamp else None),
+                as_of=datetime.fromtimestamp(stamp, tz=UTC) if stamp else fetched,
+                realtime=False,
+                feed="yahoo",
+                delay_minutes=None,
+                fetched_at=fetched,
+                source=self.name,
+            )
+        return out
 
     def get_quote(self, symbol: str) -> Quote:
         symbol = symbol.strip().upper()

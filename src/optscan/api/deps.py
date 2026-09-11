@@ -52,7 +52,7 @@ from optscan.providers import (
     ProviderError,
     get_intraday_provider,
     get_provider,
-    get_quote_provider,
+    get_quote_providers,
 )
 from optscan.screener.config import DEFAULT_CONFIG_FILENAME, ScreenConfig
 from optscan.screener.context import SymbolAnalysis, analyze_snapshot
@@ -596,13 +596,13 @@ def _with_forming_bar(
 #: rest of the history path already used.
 #: A one entry dict rather than a bare module global, so swapping it is a mutation
 #: rather than a rebinding and no `global` statement is needed.
-_QUOTE_PROVIDER: dict[str, Callable[[Settings], MarketDataProvider | None]] = {
-    "factory": get_quote_provider
+_QUOTE_PROVIDER: dict[str, Callable[[Settings], list[MarketDataProvider]]] = {
+    "factory": get_quote_providers
 }
 
 
-def set_quote_provider(factory: Callable[[Settings], MarketDataProvider | None]) -> None:
-    """Swap the quote provider. For tests, and for anything that must stay offline."""
+def set_quote_provider(factory: Callable[[Settings], list[MarketDataProvider]]) -> None:
+    """Swap the quote providers. For tests, and for anything that must stay offline."""
     _QUOTE_PROVIDER["factory"] = factory
 
 
@@ -651,32 +651,55 @@ def live_quotes(
 def _fetch_live_quotes(
     settings: Settings, wanted: list[str]
 ) -> tuple[dict[str, LiveQuote], str | None]:
-    provider = _QUOTE_PROVIDER["factory"](settings)
-    if provider is None:
+    providers = _QUOTE_PROVIDER["factory"](settings)
+    if not providers:
         return _stored_quotes(settings, wanted), (
             "No vendor here can serve a live price, so these are the last stored "
             "closes. Set Alpaca credentials to quote them."
         )
 
-    try:
+    # Each vendor in turn until one answers. A single vendor's outage used to take every
+    # price in the application down to the previous session's close at once.
+    quotes: dict[str, LiveQuote] = {}
+    failures: list[str] = []
+    for index, provider in enumerate(providers):
         try:
-            quotes = provider.get_live_quotes(wanted)
-        finally:
-            provider.close()
-    except (ProviderError, OSError) as error:
-        log.warning("live quotes unavailable", error=str(error))
+            try:
+                quotes = provider.get_live_quotes(wanted)
+            finally:
+                # Not every provider holds a connection. yfinance has no close(), and
+                # assuming one here is a mistake this project has already made once.
+                closer = getattr(provider, "close", None)
+                if callable(closer):
+                    closer()
+        except (ProviderError, OSError, NotImplementedError) as error:
+            log.warning("quote vendor failed", vendor=provider.name, error=str(error))
+            failures.append(f"{provider.name} ({type(error).__name__})")
+            continue
+        if quotes:
+            # A symbol the vendor did not return still needs a price. A delisted ticker
+            # falls back on its own rather than taking the rest of the batch with it.
+            missing = [symbol for symbol in wanted if symbol not in quotes]
+            if missing:
+                quotes = {**_stored_quotes(settings, missing), **quotes}
+            if index:
+                # Say which vendor answered when it was not the preferred one. A price
+                # from the second choice is still a price, and the reader deserves to
+                # know the first one is down rather than wondering why numbers moved.
+                return quotes, (
+                    f"{', '.join(failures)} unavailable, so these are quoted by {provider.name}."
+                )
+            return quotes, None
+
+    if failures:
         return _stored_quotes(settings, wanted), (
-            f"Live quotes are unavailable ({type(error).__name__}), so these are the "
+            f"Live quotes are unavailable ({'; '.join(failures)}), so these are the "
             "last stored closes."
         )
 
-    # A symbol the vendor did not return still needs a price. Delisted tickers and
-    # anything it simply does not carry fall back individually rather than taking the
-    # whole batch down with them.
-    missing = [symbol for symbol in wanted if symbol not in quotes]
-    if missing:
-        quotes = {**_stored_quotes(settings, missing), **quotes}
-    return quotes, None
+    return _stored_quotes(settings, wanted), (
+        "No vendor returned a quote, so these are the last stored closes."
+    )
 
 
 def _forming_bar(settings: Settings, symbol: str, newest_stored: date) -> PriceBar | None:

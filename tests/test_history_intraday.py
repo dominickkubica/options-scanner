@@ -87,7 +87,7 @@ def offline_client(settings: Settings) -> TestClient:
     """
     from optscan.api.deps import set_quote_provider
 
-    set_quote_provider(lambda _settings: None)
+    set_quote_provider(lambda _settings: [])
     app = create_app(settings=settings)
     app.dependency_overrides[provider_factory_dep] = lambda: NoNetworkProvider
     return TestClient(app)

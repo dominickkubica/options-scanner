@@ -31,6 +31,7 @@ __all__ = [
     "get_news_provider",
     "get_provider",
     "get_quote_provider",
+    "get_quote_providers",
     "provider_is_realtime",
 ]
 
@@ -79,6 +80,32 @@ def get_intraday_provider(settings: Settings) -> MarketDataProvider | None:
 
         return AlpacaProvider(settings)
     return None
+
+
+def get_quote_providers(settings: Settings) -> list[MarketDataProvider]:
+    """Every vendor that can serve a live price, best first.
+
+    A list rather than one vendor, because on 2026-09-11 Alpaca's data host returned 504
+    on every endpoint for hours while the market traded, and the whole application
+    quietly showed the previous session's closes: the pills, the chart's last candle and
+    the header price all fall back together, because they all read the same quote. The
+    fallback was honest -- everything said "stored" -- and honestly blind.
+
+    Alpaca stays first: it publishes a rate limit, batches the whole watchlist into one
+    request, and races a real time feed against the delayed tape. Yahoo is second and is
+    only reached when the first fails, which keeps its unpublished, silently throttled
+    budget for the 15:45 capture that cannot be backfilled.
+    """
+    providers: list[MarketDataProvider] = []
+    if settings.alpaca_credentials_set:
+        from optscan.providers.alpaca import AlpacaProvider
+
+        providers.append(AlpacaProvider(settings))
+
+    from optscan.providers.yfinance_provider import YFinanceProvider
+
+    providers.append(YFinanceProvider())
+    return providers
 
 
 def get_quote_provider(settings: Settings) -> MarketDataProvider | None:

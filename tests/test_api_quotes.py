@@ -77,6 +77,8 @@ def quote(symbol: str, **kwargs) -> LiveQuote:
 class StubProvider:
     """Stands in for the vendor. Raises whatever it was given, or answers from a dict."""
 
+    name = "stub"
+
     def __init__(self, quotes) -> None:
         self._quotes = quotes
         self.asked: list[str] = []
@@ -102,7 +104,7 @@ def use(monkeypatch: pytest.MonkeyPatch, provider) -> None:
     """Install a stub quote provider through the same seam production uses."""
     from optscan.api.deps import set_quote_provider
 
-    set_quote_provider(lambda _settings: provider)
+    set_quote_provider(lambda _settings: [provider] if provider else [])
 
 
 # --------------------------------------------------------------------- the happy path

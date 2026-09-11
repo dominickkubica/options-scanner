@@ -68,16 +68,23 @@ filters:
 # of dollars is an eighth of a narrow spread's maximum profit and noise against a cash
 # secured put's, so omitting them systematically promotes the narrow trades.
 costs:
-  # Robinhood, which is the broker this account actually trades through: no commission,
-  # only pass-through regulatory fees. Roughly 2c OCC clearing plus 1-3c ORF, with the
-  # SEC and TAF fees on sells rounding to well under a cent on these sizes.
+  # Robinhood: no commission, pass-through regulatory fees only. Was 0.65, a full
+  # service commission this account has never paid -- which mattered because fees are
+  # fixed per contract, so they are an eighth of a narrow spread's max profit and noise
+  # against a wide one. An overstated fee penalises exactly the cheap, narrow, liquid
+  # trades this screen should prefer.
   #
-  # Was 0.65, a full-service commission this account has never paid. That is not a small
-  # detail: fees are fixed per contract, so they are an eighth of a narrow spread's max
-  # profit and noise against a wide one, and an overstated fee therefore penalises
-  # exactly the cheap, narrow, liquid trades this screen should prefer. A four leg
-  # condor was being charged $5.20 round trip against a real cost near 24 cents.
-  per_contract: 0.03
+  # MEASURED, not taken from the published schedule. 404 option trades in the broker
+  # ledger, 544 contracts, $25.87 of fees:
+  #
+  #     buy    272 contracts   $10.88   $0.0400 / contract
+  #     sell   272 contracts   $14.99   $0.0551 / contract   (the SEC fee lands here)
+  #     all    544 contracts   $25.87   $0.0476 / contract
+  #
+  # The first estimate here was 0.03, reasoned from the fee schedule, and the account's
+  # own statements say it is 59% higher than that. Rounded up to 0.05 rather than down,
+  # because understating fees is the direction that flatters trades.
+  per_contract: 0.05
   per_trade: 0.0
   # Managing winners early is the mechanic this tool is built around, and closing a
   # position pays to get out. Set false to model holding to expiration, where most

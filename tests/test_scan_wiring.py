@@ -280,10 +280,11 @@ class TestScanCommand:
 DELIBERATE_OVERRIDES = {
     # The default is a typical per-contract commission for an unknown broker. This
     # account trades through Robinhood, which charges none, so the committed file
-    # carries pass-through regulatory fees instead. The default stays conservative
-    # because understating fees is the dangerous direction: they are fixed per
-    # contract, so a fee that is too low systematically flatters narrow trades.
-    "costs.per_contract": 0.03,
+    # carries pass-through regulatory fees instead -- measured at $0.0476 a contract
+    # across 544 contracts in the broker ledger, rounded up. The default stays
+    # conservative because understating fees is the dangerous direction: they are fixed
+    # per contract, so a fee that is too low systematically flatters narrow trades.
+    "costs.per_contract": 0.05,
 }
 
 
