@@ -176,9 +176,17 @@ export default function BestPlays({ onOpenPayoff, symbols = null }) {
   // thing that makes "best available" a true statement. Passed a list, this becomes the
   // ranked plays for one ticker, which is what the per-symbol tab wants and is why the
   // separate Opportunities view is gone: it was the same question asked twice.
+  // Keyed on the symbols' *contents*, not the array's identity.
+  //
+  // The caller passes `symbols={[symbol]}`, a fresh array on every render, and the
+  // parent re-renders every ten seconds when the quotes poll. So this refetched and
+  // re-ranked the whole watchlist on that same ten second clock, which is why the best
+  // play appeared to change by itself and why the panel blanked each time it did.
+  const key = (symbols || []).join(",");
   const { data, error, loading } = useAsync(
-    () => api.scan(symbols, 200, { nearMiss: true }),
-    [symbols],
+    () => api.scan(key ? key.split(",") : null, 200, { nearMiss: true }),
+    [key],
+    { keepOnError: true },
   );
 
   const { hero, runners, maturing, almost } = useMemo(() => {
@@ -218,7 +226,11 @@ export default function BestPlays({ onOpenPayoff, symbols = null }) {
         : "1 hour old"
       : null;
 
-  if (loading) return <div className="loading">Ranking the watchlist...</div>;
+  // Only while there is nothing to show. Replacing a rendered panel with a spinner on
+  // every refresh is what made an update look like a page reload; keeping the previous
+  // ranking on screen while the next one is fetched is both calmer and more honest,
+  // since the old ranking was true a moment ago and the new one is not yet drawn.
+  if (loading && !data) return <div className="loading">Ranking the watchlist...</div>;
   if (error) return <ErrorBox error={error} />;
   if (!data) return null;
 

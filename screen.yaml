@@ -44,7 +44,14 @@ filters:
     # Dollars of maximum profit, net of commissions. A percentage return says nothing
     # about whether a trade is worth the ticket: a one point wide spread can annualize
     # at 400 percent and clear 18 dollars.
-    min_max_profit: 25.0
+    #
+    # Raised from 25 on 2026-09-11. Once the premium component went logarithmic it
+    # started preferring narrow spreads -- annualized return divides by capital, so a
+    # narrower spread mechanically annualizes higher -- and the top play settled on
+    # 1-wides clearing exactly the old floor. Those are not bad trades on QQQ, where the
+    # legs are two cents wide, but slippage is roughly fixed while the profit is not:
+    # three cents of it is 11% of a $27 maximum and 5% of a $60 one.
+    min_max_profit: 50.0
     # Defined risk only. A third of the width is the usual bar for a vertical.
     min_credit_to_width: 0.20
     min_annualized_return: 0.10

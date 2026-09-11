@@ -285,6 +285,10 @@ DELIBERATE_OVERRIDES = {
     # conservative because understating fees is the dangerous direction: they are fixed
     # per contract, so a fee that is too low systematically flatters narrow trades.
     "costs.per_contract": 0.05,
+    # Raised from the default once the premium ramp went logarithmic and started
+    # preferring narrow spreads, which settled the top play on 1-wides clearing exactly
+    # the old floor. Slippage is roughly fixed while the profit is not.
+    "filters.premium.min_max_profit": 50.0,
 }
 
 
@@ -292,24 +296,24 @@ def test_the_committed_screen_yaml_matches_the_documented_defaults() -> None:
     """screen.yaml exists to show every knob. If it drifts from the defaults it is
     documentation that lies.
 
-    Deliberate differences are declared above and checked by value, so a real drift
-    still fails and an intentional override has to be written down to pass.
+    Deliberate differences are declared in DELIBERATE_OVERRIDES and checked by value, so
+    a real drift still fails and an intentional override has to be written down to pass.
+    Compared as plain dicts rather than by rebuilding frozen models, because the nesting
+    is only ever two deep and the dict version is obviously correct.
     """
     from optscan.config import REPO_ROOT
 
-    committed = ScreenConfig.load(REPO_ROOT / "screen.yaml")
-    defaults = ScreenConfig()
+    committed = ScreenConfig.load(REPO_ROOT / "screen.yaml").model_dump()
+    defaults = ScreenConfig().model_dump()
 
-    patched = {}
     for path, expected in DELIBERATE_OVERRIDES.items():
-        section, key = path.split(".")
-        assert getattr(getattr(committed, section), key) == expected, (
-            f"{path} is declared as a deliberate override worth {expected}"
+        node, base = committed, defaults
+        *sections, key = path.split(".")
+        for name in sections:
+            node, base = node[name], base[name]
+        assert node[key] == expected, (
+            f"{path} is declared as a deliberate override worth {expected}, got {node[key]}"
         )
-        # Rebuild the section with the default put back, so everything else is still
-        # compared exactly. The models are frozen, hence a copy rather than a set.
-        patched[section] = getattr(committed, section).model_copy(
-            update={key: getattr(getattr(defaults, section), key)}
-        )
+        node[key] = base[key]
 
-    assert committed.model_copy(update=patched) == defaults
+    assert committed == defaults
