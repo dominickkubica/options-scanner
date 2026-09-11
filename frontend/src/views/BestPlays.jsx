@@ -206,12 +206,39 @@ export default function BestPlays({ onOpenPayoff, symbols = null }) {
     };
   }, [data]);
 
+  // Older than this and the chain is not from the session being traded. A live chain
+  // refreshes every twenty seconds, so anything past an hour means the fetch is falling
+  // back to a stored capture.
+  const STALE_AFTER_SECONDS = 3600;
+  const oldest = Math.max(0, ...Object.values(data?.stale || {}));
+  const staleHours =
+    oldest > STALE_AFTER_SECONDS
+      ? oldest > 7200
+        ? `${Math.round(oldest / 3600)} hour old`
+        : "1 hour old"
+      : null;
+
   if (loading) return <div className="loading">Ranking the watchlist...</div>;
   if (error) return <ErrorBox error={error} />;
   if (!data) return null;
 
   return (
     <>
+      {/* The chain's age, on the panel rather than only in the header badge.
+          `stale` has always been sent and this view never rendered it, so a card
+          scored on a 22 hour old chain looked exactly like one scored on a live one:
+          the numbers were presented with total confidence and the only contradiction
+          was a small badge at the top of the page saying the chain was from yesterday.
+          Everything on a card is derived from that chain -- the credit, the greeks,
+          the probability, the DTE -- so its age is a property of every number here. */}
+      {staleHours !== null && (
+        <div className="sample-banner">
+          <strong>Scored on a {staleHours} chain.</strong> Every number below comes from
+          that capture, including the credit and the days to expiry. Press refresh in
+          the header, or check the fills against your broker before trading them.
+        </div>
+      )}
+
       <Notes items={data.notes} />
 
       <Panel
