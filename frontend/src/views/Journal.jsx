@@ -730,6 +730,23 @@ function streakText(streak) {
   return streak.current > 0 ? `${n} ${n === 1 ? "win" : "wins"}` : `${n} ${n === 1 ? "loss" : "losses"}`;
 }
 
+// Plain-English findings under a panel, written by the server from the numbers above
+// them. Each one is generated with its sample size in mind: a comparison needs enough
+// trades on both sides, and a small one says so in the sentence.
+function Findings({ items }) {
+  if (!items || items.length === 0) return null;
+  return (
+    <div className="findings">
+      <div className="findings-label">What this says</div>
+      <ul>
+        {items.map((text) => (
+          <li key={text}>{text}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function BookTiles({ book }) {
   const r = book.r_expectancy;
   const stops = book.stops;
@@ -1068,10 +1085,12 @@ export default function Journal() {
         </div>
         <div style={{ height: 10 }} />
         <BookTiles book={book} />
+        <Findings items={book.insights?.performance} />
       </Panel>
 
       <Panel title="Cumulative profit by closing date">
         <EquityCurve days={data.days} />
+        <Findings items={book.insights?.curve} />
       </Panel>
 
       <Panel title="Calendar" right={<span className="muted">click a day to list its trades</span>}>
@@ -1097,6 +1116,7 @@ export default function Journal() {
           book={book}
           onSaved={reload}
         />
+        <Findings items={book.insights?.trades} />
       </Panel>
 
       <Panel title="Breakdowns">
@@ -1112,6 +1132,7 @@ export default function Journal() {
           Rows are dimmed where the group has too few independent (symbol, closing day)
           clusters to support a reading. Day opened splits 0DTE from everything longer.
         </div>
+        <Findings items={book.insights?.breakdowns} />
       </Panel>
 
       <Panel title="Time of day">
@@ -1132,6 +1153,7 @@ export default function Journal() {
             <BreakdownTable title="exit" rows={book.by_exit_time} />
           </div>
         )}
+        <Findings items={book.insights?.time} />
       </Panel>
 
       <Panel title="Market regime" right={hasVix ? null : <RegimeButton onFetched={reload} />}>
@@ -1140,10 +1162,12 @@ export default function Journal() {
           <BreakdownTable title="SPY 20-session trend" rows={book.by_trend} />
         </div>
         {!hasVix && <div className="caveat">VIX needs one fetch; SPY trend is read from stored prices.</div>}
+        <Findings items={book.insights?.regime} />
       </Panel>
 
       <Panel title="Position sizing">
         <SizingPanel sizing={book.sizing} onSaved={reload} />
+        <Findings items={book.insights?.sizing} />
       </Panel>
 
       <Notes items={[...book.notes, ...data.notes]} />

@@ -118,7 +118,7 @@ button {
    started at. The version beneath it keeps its own small size, set explicitly, because
    <small> is relative and would otherwise grow with the name. */
 .brand {
-  padding: 4px 10px 0;
+  padding: 4px 10px 20px;
   font-weight: 700;
   font-size: 36px;
   line-height: 1.1;
@@ -127,7 +127,7 @@ button {
 
 .brand small {
   display: block;
-  margin-top: 4px;
+  margin-top: 10px;
   color: var(--dim);
   font-size: 12px;
   font-weight: 400;
@@ -2822,6 +2822,36 @@ button.chip {
 .balance-row input {
   width: 100%;
   min-width: 0;
+}
+
+/* Plain-English findings under a journal panel. Quiet on purpose: they explain the
+   numbers above them and should not compete with them for attention. */
+.findings {
+  margin-top: 16px;
+  padding: 10px 14px;
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r-sm);
+  background: rgba(59, 130, 246, 0.06);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.findings-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+  margin-bottom: 4px;
+}
+
+.findings ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.findings li + li {
+  margin-top: 3px;
 }
 
 /* Risk per trade. Bars past twice the median are sizing that crept. */

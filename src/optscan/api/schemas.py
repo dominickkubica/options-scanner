@@ -1196,6 +1196,8 @@ class BookOut(ApiModel):
     #: set, so choosing one filter does not empty the others.
     filters: dict[str, list[str]] = Field(default_factory=dict)
     notes: list[str] = Field(default_factory=list)
+    #: Plain-English findings, keyed by the panel they sit under. See analytics/insights.
+    insights: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class AnnotationIn(ApiModel):

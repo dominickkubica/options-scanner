@@ -696,6 +696,9 @@ class Book:
     sizing: Sizing
     timed: int
     notes: list[str]
+    #: Plain-English findings per panel. Filled by `analytics.insights`, which needs the
+    #: headline report as well as the book, so it is set after the book is built.
+    insights: dict[str, list[str]] = field(default_factory=dict)
 
 
 def _stat(position: Position) -> StatRow:

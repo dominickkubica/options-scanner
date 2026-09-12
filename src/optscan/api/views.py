@@ -820,6 +820,7 @@ def book_view(book, *, filters: dict[str, list[str]], stop_multiple: float, tags
         mistake_tags=list(tags),
         filters=filters,
         notes=list(book.notes),
+        insights={panel: list(items) for panel, items in book.insights.items()},
     )
 
 

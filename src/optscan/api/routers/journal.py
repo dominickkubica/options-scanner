@@ -40,6 +40,7 @@ from typing import Annotated
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
 
+from optscan.analytics.insights import insights
 from optscan.analytics.journal import build_report
 from optscan.analytics.ledger import build_trades, journal_entries
 from optscan.analytics.positions import (
@@ -215,6 +216,7 @@ def journal(
         starting_balance=balance,
         day_profits=[point.profit for point in report.days],
     )
+    book.insights = insights(report, book)
     return journal_view(
         report,
         book_view(
