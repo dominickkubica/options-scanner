@@ -42,6 +42,7 @@ from optscan.analytics.backtest import (
     DEFAULT_NULL_DRAWS,
     MIN_BLOCKS_FOR_A_CLAIM,
     TENOR_BAND,
+    TRADING_DAYS,
     BacktestResult,
     Direction,
     MissingImpliedVol,
@@ -53,6 +54,7 @@ from optscan.analytics.backtest import (
     option_forward_return_table,
     option_trades_as_trades,
     require_implied_vol,
+    session_positions,
     shift_null,
     short_option_trades,
     simulate,
@@ -369,6 +371,7 @@ def run(settings: Settings, strategy: Strategy) -> BacktestResult:
     result.edge = measure_edge(
         result.stats.mean_return,
         _null(settings, strategy, series, fired, direction=direction, costs=costs),
+        blocks=result.stats.effective_sample,
     )
 
     result.notes.extend(_interpretation(strategy, result))
@@ -415,7 +418,17 @@ def run_sweep(
             symbol: [t.entry_index - 1 for t in base.trades if t.symbol == symbol]
             for symbol in series
         }
-        nulls = _null(settings, strategy, series, fired, Direction(strategy.direction))
+        # `direction` is keyword-only, and passing it positionally raised a TypeError
+        # the first time any sweep had a null to build. The costs are the cells' costs,
+        # so the null pays what the cells pay.
+        nulls = _null(
+            settings,
+            strategy,
+            series,
+            fired,
+            direction=Direction(strategy.direction),
+            costs=symbol_costs(strategy, series),
+        )
 
     cells = []
     for value in typed:
@@ -477,7 +490,15 @@ def _null(
         for symbol, indices in fired.items()
         if indices
     }
-    return shift_null(tables, fired, draws=strategy.draws, seed=strategy.seed)
+    positions, span = session_positions(series)
+    return shift_null(
+        tables,
+        fired,
+        draws=strategy.draws,
+        seed=strategy.seed,
+        positions=positions,
+        span=span,
+    )
 
 
 def _interpretation(strategy: Strategy, result: BacktestResult) -> list[str]:
@@ -525,6 +546,36 @@ def _interpretation(strategy: Strategy, result: BacktestResult) -> list[str]:
                 f"The rule beat random entry on the same symbols by {edge.edge:.2%} "
                 f"(p={edge.p_value:.3f}). That is one test of one rule chosen after "
                 "seeing this data, which is not the same as an edge that will persist."
+            )
+
+    if stats is not None and stats.ci_low is not None and stats.ci_high is not None:
+        straddles = stats.ci_low <= 0 <= stats.ci_high
+        notes.append(
+            f"Net return per trade {stats.mean_return:+.2%}, with a 95% interval of "
+            f"{stats.ci_low:+.2%} to {stats.ci_high:+.2%} from resampling "
+            f"{stats.effective_sample} calendar blocks."
+            + (
+                " It includes zero, so this sample cannot say whether the strategy kept "
+                "anything after costs."
+                if straddles
+                else ""
+            )
+        )
+
+    if edge is not None and edge.blocks_needed is not None and stats is not None:
+        years = edge.blocks_needed * strategy.block_bars / TRADING_DAYS
+        if edge.blocks_needed > stats.effective_sample:
+            notes.append(
+                f"An edge of {edge.edge:.2%} needs about {edge.blocks_needed} independent "
+                f"blocks, roughly {years:.0f} years of episodes, before a test like this "
+                f"finds it four times in five. This run has {stats.effective_sample}, so "
+                "a miss is weak evidence against it and a hit is partly luck."
+            )
+        else:
+            notes.append(
+                f"An edge of {edge.edge:.2%} needs about {edge.blocks_needed} independent "
+                f"blocks to be found reliably, and this run has {stats.effective_sample}. "
+                "The sample is large enough for the size of effect it reports."
             )
 
     if strategy.mode != "underlying":

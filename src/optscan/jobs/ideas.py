@@ -238,6 +238,12 @@ REGISTRY: tuple[ValidatedStrategy, ...] = (
                 "The universe is today's index membership, so the sample excludes the "
                 "companies that did not survive to 2026.",
                 "One market, one decade. Nothing here has been traded with money.",
+                "Re-measured 2026-09-11 after the null was put on a shared calendar: "
+                "+0.68% over the null at p=0.006 on 121 blocks across the 196 symbols "
+                "outside the tech group, so the timing result stands. The net return per "
+                "trade, +0.40%, has a 95% block bootstrap interval of -0.89% to +1.58%. "
+                "That the timing works is established; that it keeps money after costs "
+                "is not yet.",
             ),
         ),
         status=Status.SUPPORTED,

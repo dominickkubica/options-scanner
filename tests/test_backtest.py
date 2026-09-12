@@ -25,6 +25,8 @@ from optscan.analytics.backtest import (
     ExitReason,
     MissingImpliedVol,
     Trade,
+    block_bootstrap_interval,
+    blocks_to_detect,
     effective_sample,
     equity_curve,
     every_bar,
@@ -193,6 +195,21 @@ def test_effective_sample_counts_blocks_not_rows() -> None:
     assert effective_sample(trades, DEFAULT_BLOCK_BARS) == 1
 
 
+def dated(symbol: str, day: date, *, index: int = 3, value: float = 0.01) -> Trade:
+    return Trade(
+        symbol=symbol,
+        entry_date=day,
+        exit_date=day + timedelta(days=30),
+        entry_price=100.0,
+        exit_price=101.0,
+        direction=Direction.LONG,
+        reason=ExitReason.HORIZON,
+        entry_index=index,
+        bars_held=21,
+        net_return=value,
+    )
+
+
 def test_effective_sample_pools_symbols_inside_one_block() -> None:
     """Ninety-eight tech names oversold in the same week are one observation.
 
@@ -200,27 +217,74 @@ def test_effective_sample_pools_symbols_inside_one_block() -> None:
     suppressed, consecutive trades on a symbol are already a horizon apart, so keying on
     (symbol, block) returns the trade count and measures nothing.
     """
-
-    def make(symbol: str, index: int) -> Trade:
-        return Trade(
-            symbol=symbol,
-            entry_date=date(2024, 1, 2),
-            exit_date=date(2024, 2, 2),
-            entry_price=100.0,
-            exit_price=101.0,
-            direction=Direction.LONG,
-            reason=ExitReason.HORIZON,
-            entry_index=index,
-            bars_held=21,
-            net_return=0.01,
-        )
-
-    same_week = [make(symbol, 3) for symbol in ("SPY", "QQQ", "IWM", "DIA")]
+    same_week = [dated(symbol, date(2024, 1, 2)) for symbol in ("SPY", "QQQ", "IWM", "DIA")]
     assert effective_sample(same_week) == 1
 
     # Different months are separate episodes whatever the symbol.
-    spread = [make("SPY", 3), make("QQQ", 3 + DEFAULT_BLOCK_BARS * 5)]
+    spread = [dated("SPY", date(2024, 1, 2)), dated("QQQ", date(2024, 6, 3))]
     assert effective_sample(spread) == 2
+
+
+def test_blocks_follow_the_calendar_not_the_bar_index() -> None:
+    """The same day is the same episode for every symbol, however long each has traded.
+
+    Bar 2000 of SPY and bar 12 of a stock that listed last month can be the same session,
+    and bar 500 of each is years apart. Keying blocks on the index pooled the second pair
+    and split the first, and 46 of the 294 stored symbols listed after 2016.
+    """
+    same_day = [
+        dated("SPY", date(2025, 3, 3), index=2000),
+        dated("ARM", date(2025, 3, 3), index=12),
+    ]
+    assert effective_sample(same_day) == 1
+
+    same_index = [
+        dated("SPY", date(2018, 9, 4), index=500),
+        dated("ARM", date(2025, 9, 2), index=500),
+    ]
+    assert effective_sample(same_index) == 2
+
+
+def test_the_interval_is_as_wide_as_the_episodes_not_the_rows() -> None:
+    """Two hundred trades in ten weeks are ten observations, and the interval says so.
+
+    Resampling rows would give a clustered sample the confidence of two hundred
+    independent draws. The same returns spread one per week are genuinely independent,
+    so their interval must come out much narrower.
+    """
+    rng = __import__("random").Random(3)
+    week_values = [rng.gauss(0.0, 0.02) for _ in range(10)]
+    start = date(2020, 1, 6)
+
+    clustered = [
+        dated(f"S{n}", start + timedelta(weeks=5 * week), value=value)
+        for week, value in enumerate(week_values)
+        for n in range(20)
+    ]
+    spread = [
+        dated("S", start + timedelta(weeks=5 * i), value=week_values[i % 10]) for i in range(200)
+    ]
+
+    wide = block_bootstrap_interval(clustered)
+    narrow = block_bootstrap_interval(spread)
+    assert wide is not None and narrow is not None
+    assert (wide[1] - wide[0]) > 3 * (narrow[1] - narrow[0])
+
+
+def test_an_interval_needs_at_least_two_blocks() -> None:
+    assert block_bootstrap_interval([dated("SPY", date(2024, 1, 2))]) is None
+    stats = summarize([dated("SPY", date(2024, 1, 2))])
+    assert stats is not None and stats.ci_low is None
+
+
+def test_blocks_to_detect_scales_with_the_inverse_square_of_the_edge() -> None:
+    """Half the edge takes four times the episodes. That is the whole sample size story."""
+    base = blocks_to_detect(0.01, 0.01, 100)
+    assert base == 619  # 100 * (1.645 + 0.842) ** 2, rounded up
+    half = blocks_to_detect(0.005, 0.01, 100)
+    assert half is not None and 4 * base - 4 <= half <= 4 * base + 4
+    assert blocks_to_detect(0.0, 0.01, 100) is None
+    assert blocks_to_detect(-0.01, 0.01, 100) is None
 
 
 def test_stats_refuse_to_claim_below_the_block_floor() -> None:
@@ -320,6 +384,87 @@ def test_a_strategy_that_cheats_does_beat_the_null(spy_bars: list[PriceBar]) -> 
     assert edge is not None
     assert edge.p_value < 0.01
     assert edge.edge > 0
+
+
+def staggered_universe(seed: int = 7) -> dict[str, list[PriceBar]]:
+    """Twelve symbols on one market factor, listed at three different dates.
+
+    The market has volatility regimes, because the null only matters when entries
+    cluster in time and *which* time they cluster in changes the outcome. A third of the
+    symbols trade from the start, a third from session 500, a third from session 1000,
+    which is the shape of the real universe: 46 of 294 listed after 2016.
+    """
+    import math
+    import random
+
+    rng = random.Random(seed)
+    sessions = 1500
+    market = [rng.gauss(0.0004, 0.03 if (t // 150) % 3 == 0 else 0.008) for t in range(sessions)]
+    universe: dict[str, list[PriceBar]] = {}
+    for n, start in enumerate([0] * 4 + [500] * 4 + [1000] * 4):
+        price = 100.0
+        bars = []
+        for t in range(start, sessions):
+            price *= math.exp(market[t] + rng.gauss(0.0, 0.006))
+            bars.append(
+                PriceBar(
+                    symbol=f"S{n}",
+                    ts=BASE + timedelta(days=t),
+                    open=price,
+                    high=price,
+                    low=price,
+                    close=price,
+                    volume=1_000_000,
+                    fetched_at=BASE,
+                    source="test",
+                )
+            )
+        universe[f"S{n}"] = bars
+    return universe
+
+
+def test_the_null_is_calibrated_on_a_universe_that_listed_at_different_times() -> None:
+    """A placebo check on the whole null: rules with no skill should look like no skill.
+
+    Each placebo picks a handful of random days and enters every symbol listed on each,
+    which is how real rules fire: in market-wide clusters. None of them can know anything,
+    so their p-values should be uniform, and about one in ten should land in the outer
+    five percent at either end. A null that is too narrow puts far more there.
+
+    The old null shifted bar indices, wrapping each symbol at its own length, so symbols
+    that listed at different times drifted into different years and the co-movement the
+    shift exists to preserve was scattered. Measured on this universe it put 21 of 120
+    placebos in the tails where about 12 belong; the calendar shift puts 13. This is its
+    regression test, and the bound sits between the two.
+    """
+    import random
+
+    universe = staggered_universe()
+    starts = {symbol: 1500 - len(bars) for symbol, bars in universe.items()}
+    trials = 120
+    tails = 0
+
+    for trial in range(trials):
+        pick = random.Random(1000 + trial)
+        events = pick.sample(range(0, 1480), 8)
+        fired: dict[str, list[int]] = {}
+        trades: list[Trade] = []
+        for symbol, bars in universe.items():
+            local = sorted(t - starts[symbol] for t in events if t >= starts[symbol])
+            found = simulate(symbol, bars, local, horizon=5, cost=0.0)
+            if found:
+                trades.extend(found)
+                fired[symbol] = signal_indices(found)
+        stats = summarize(trades, interval=False)
+        assert stats is not None
+        nulls = null_distribution(universe, fired, horizon=5, cost=0.0, draws=200)
+        edge = measure_edge(stats.mean_return, nulls)
+        assert edge is not None
+        if edge.p_value <= 0.05 or edge.p_value >= 0.95:
+            tails += 1
+
+    # Twelve expected. Twenty is about three standard deviations of a binomial above it.
+    assert tails <= 20, f"{tails} of {trials} placebos landed in the tails; expected ~12"
 
 
 def test_the_p_value_is_never_exactly_zero() -> None:
@@ -525,8 +670,10 @@ def test_a_sweep_over_noise_says_it_found_noise() -> None:
         trades = [
             Trade(
                 symbol="A",
-                entry_date=date(2024, 1, 1),
-                exit_date=date(2024, 2, 1),
+                # Five weeks apart, so each trade is its own calendar block. Blocks
+                # follow the date, not the index.
+                entry_date=date(2018, 1, 1) + timedelta(weeks=5 * step),
+                exit_date=date(2018, 2, 1) + timedelta(weeks=5 * step),
                 entry_price=100.0,
                 exit_price=100.0,
                 direction=Direction.LONG,

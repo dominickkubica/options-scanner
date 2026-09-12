@@ -253,6 +253,142 @@ def test_a_search_with_no_usable_candidate_says_so(seeded: Settings) -> None:
     assert any("nothing worth carrying" in note for note in result.notes)
 
 
+# --------------------------------------------------------------------------------
+# Nothing about the holdout reaches the ranking
+# --------------------------------------------------------------------------------
+
+
+def test_costs_are_measured_on_one_side_of_the_boundary_at_a_time(
+    seeded: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ranking used to be charged spreads estimated over the whole history.
+
+    That let the holdout's liquidity into the training ranking. Every cost estimate must
+    now read bars from one side of the boundary only: training bars for the ranking,
+    test bars for the out-of-sample evaluation.
+    """
+    import optscan.jobs.search as search_module
+
+    seen: list[tuple[date, date]] = []
+    original = search_module.symbol_costs
+
+    def spy(template, series):
+        days = [bar.ts.date() for bars in series.values() for bar in bars]
+        seen.append((min(days), max(days)))
+        return original(template, series)
+
+    monkeypatch.setattr(search_module, "symbol_costs", spy)
+    result = run_search(
+        seeded,
+        Strategy(symbols=["AAA", "BBB", "CCC"], cost_model="estimated"),
+        grid=SMALL_GRID,
+        horizons=(5,),
+        directions=(Direction.LONG,),
+        finalists=1,
+        draws=20,
+        search_draws=20,
+        min_blocks=1,
+        record=False,
+    )
+    assert result.train_end is not None and seen
+    for first, last in seen:
+        assert last < result.train_end or first >= result.train_end, (
+            f"a cost estimate read {first} to {last}, across the boundary {result.train_end}"
+        )
+
+
+# --------------------------------------------------------------------------------
+# The ledger
+# --------------------------------------------------------------------------------
+
+
+def _small(settings: Settings, symbols: list[str], **kwargs) -> object:
+    return run_search(
+        settings,
+        Strategy(symbols=symbols),
+        grid=SMALL_GRID,
+        horizons=(5,),
+        directions=(Direction.LONG,),
+        finalists=2,
+        draws=20,
+        search_draws=20,
+        min_blocks=1,
+        **kwargs,
+    )
+
+
+def test_a_second_look_at_the_same_holdout_raises_the_bar(seeded: Settings) -> None:
+    """A holdout is held out once. The second search on it is told about the first."""
+    first = _small(seeded, ["AAA", "BBB"])
+    assert first.finalists
+    assert first.prior_uses == 0
+
+    second = _small(seeded, ["AAA", "BBB"])
+    assert second.prior_uses == 1
+    assert second.prior_finalists == len(first.finalists)
+    assert second.threshold < first.threshold
+    assert any("evaluated 1 time(s) before" in note for note in second.notes)
+
+
+def test_overlap_is_by_data_not_by_label(seeded: Settings) -> None:
+    """A search sharing even one symbol with an earlier one shares its holdout count;
+    a search on entirely different symbols does not."""
+    _small(seeded, ["AAA"])
+    disjoint = _small(seeded, ["BBB"])
+    assert disjoint.prior_uses == 0
+    overlapping = _small(seeded, ["AAA", "CCC"])
+    assert overlapping.prior_uses == 1
+
+
+def test_an_unrecorded_search_leaves_no_trace(seeded: Settings) -> None:
+    _small(seeded, ["AAA"], record=False)
+    assert _small(seeded, ["AAA"]).prior_uses == 0
+
+
+# --------------------------------------------------------------------------------
+# Walk-forward
+# --------------------------------------------------------------------------------
+
+
+def test_walk_forward_tests_each_window_once_in_order(seeded: Settings) -> None:
+    """Every fold trains strictly before its window and the windows tile the future."""
+    from optscan.jobs.search import run_walk_forward
+
+    result = run_walk_forward(
+        seeded,
+        Strategy(symbols=["AAA", "BBB", "CCC"]),
+        grid=SMALL_GRID,
+        horizons=(5,),
+        directions=(Direction.LONG,),
+        folds=3,
+        first_train_share=0.4,
+        draws=20,
+        search_draws=20,
+        min_blocks=1,
+    )
+    assert len(result.folds) == 3
+    for current, following in zip(result.folds, result.folds[1:], strict=False):
+        assert current.test_end == following.train_end
+        assert current.train_end < current.test_end
+    assert result.folds[-1].test_end is None
+    assert any("no fold's choice saw it" in note for note in result.notes)
+
+    payload = result.as_dict()
+    assert len(payload["folds"]) == 3
+
+    # Each fold with a winner is a recorded look at its window.
+    looked = sum(1 for fold in result.folds if fold.winner is not None)
+    again = _small(seeded, ["AAA", "BBB", "CCC"])
+    assert again.prior_uses >= min(1, looked)
+
+
+def test_walk_forward_refuses_a_single_fold(seeded: Settings) -> None:
+    from optscan.jobs.search import run_walk_forward
+
+    with pytest.raises(ValueError, match="at least two folds"):
+        run_walk_forward(seeded, Strategy(symbols=["AAA"]), folds=1)
+
+
 def test_a_search_round_trips_to_plain_data(seeded: Settings) -> None:
     result = run_search(
         seeded,

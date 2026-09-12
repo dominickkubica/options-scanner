@@ -316,6 +316,15 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--horizons", nargs="*", type=int, default=[5, 21, 63])
     search.add_argument("--draws", type=int, default=500, help="Null draws for the finalists.")
     search.add_argument("--cost", type=float, default=DEFAULT_COST)
+    search.add_argument(
+        "--folds",
+        type=int,
+        default=0,
+        help=(
+            "Walk forward over this many test windows instead of one holdout. Each "
+            "window's winner is chosen only from the data before it."
+        ),
+    )
     search.add_argument("--top", type=int, default=12, help="Candidates to print.")
     search.add_argument("--json", action="store_true")
 
@@ -1064,16 +1073,70 @@ def _cmd_ideas(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def _walk_forward(settings: Settings, args: argparse.Namespace, template, console) -> int:
+    """`optscan search --folds N`: each window's winner chosen only from what came before."""
+    import json as json_module
+
+    from optscan.analytics.backtest import Direction
+    from optscan.jobs.search import run_walk_forward
+
+    try:
+        walk = run_walk_forward(
+            settings,
+            template,
+            horizons=tuple(args.horizons),
+            directions=(Direction.LONG, Direction.SHORT),
+            folds=args.folds,
+            draws=args.draws,
+        )
+    except (ValueError, OSError) as error:
+        print(console.bad(str(error)))
+        return 1
+    if args.json:
+        print(json_module.dumps(walk.as_dict(), indent=2))
+        return 0
+
+    print(
+        f"  walk-forward: {len(walk.folds)} folds, {walk.tried} combinations each, {walk.seconds}s"
+    )
+    print(
+        f"  {'tested':<24} {'winner, chosen before the window':<38} "
+        f"{'in z':>6} {'out':>8} {'edge':>8} {'blocks':>7} {'p':>6}"
+    )
+    for fold in walk.folds:
+        window = f"{fold.train_end}..{fold.test_end or 'end'}"
+        winner = fold.winner
+        if winner is None:
+            print(f"  {window:<24} nothing cleared the block floor in training")
+            continue
+        out = f"{winner.out_sample_mean:+.2%}" if winner.out_sample_mean is not None else "none"
+        edge = f"{winner.out_sample_edge:+.2%}" if winner.out_sample_edge is not None else "-"
+        probability = f"{winner.out_sample_p:.3f}" if winner.out_sample_p is not None else "-"
+        print(
+            f"  {window:<24} {winner.candidate.label:<38} "
+            f"{winner.candidate.z_score:>6.2f} {out:>8} {edge:>8} "
+            f"{winner.out_sample_blocks:>7} {probability:>6}"
+        )
+    print()
+    for note in walk.notes:
+        print(console.warn(note))
+    return 0
+
+
 def _cmd_search(settings: Settings, args: argparse.Namespace) -> int:
     import json as json_module
 
     from optscan.analytics.backtest import Direction
     from optscan.console import Console
     from optscan.jobs.backtest import Strategy
-    from optscan.jobs.search import run_search
+    from optscan.jobs.search import MIN_FOLDS, run_search
 
     console = Console.for_stream(settings.color_mode)
     template = Strategy(symbols=[s.upper() for s in args.symbols], group=args.group, cost=args.cost)
+
+    if args.folds >= MIN_FOLDS:
+        return _walk_forward(settings, args, template, console)
+
     try:
         result = run_search(
             settings,

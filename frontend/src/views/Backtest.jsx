@@ -333,6 +333,16 @@ export default function Backtest() {
                   {stats.effective_sample}
                 </div>
               </div>
+              {stats.ci_low != null && stats.ci_high != null && (
+                <div className="stat">
+                  <div className="label">95% interval</div>
+                  <div
+                    className={`value ${stats.ci_low <= 0 && stats.ci_high >= 0 ? "neg" : ""}`}
+                  >
+                    {pct(stats.ci_low)} to {pct(stats.ci_high)}
+                  </div>
+                </div>
+              )}
               <div className="stat">
                 <div className="label">best / worst</div>
                 <div className="value">
@@ -370,6 +380,19 @@ export default function Backtest() {
                     <div className="label">p</div>
                     <div className={`value ${edge.p_value <= 0.05 ? "pos" : "neg"}`}>
                       {edge.p_value.toFixed(3)}
+                    </div>
+                  </div>
+                  <div className="stat">
+                    <div className="label">blocks to detect</div>
+                    <div
+                      className={`value ${
+                        edge.blocks_needed != null &&
+                        edge.blocks_needed <= stats.effective_sample
+                          ? "pos"
+                          : "neg"
+                      }`}
+                    >
+                      {edge.blocks_needed ?? "n/a"}
                     </div>
                   </div>
                 </div>

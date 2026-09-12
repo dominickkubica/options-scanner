@@ -384,6 +384,28 @@ MIGRATIONS: tuple[str, ...] = (
     -- The dashboard's question is "what fired lately", across symbols, newest first.
     CREATE INDEX idx_signal_recent ON signal_sent (session_date DESC, severity DESC);
     """,
+    # 10: every time a held-out period was looked at.
+    #
+    # A holdout is held out once. A second search on the same period, run after reading
+    # the first one's answer, chooses its grid knowing what the period rewards, and none
+    # of its own statistics can see that. So each out-of-sample evaluation is recorded,
+    # and a later one on overlapping data is told how many finalists came before it.
+    # Symbols are stored as a JSON list because overlap is by data, not by label: a tech
+    # search and a whole-universe search share ninety-eight symbols of holdout.
+    """
+    CREATE TABLE holdout_use (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        used_at         TEXT NOT NULL,
+        kind            TEXT NOT NULL,
+        test_start      TEXT NOT NULL,
+        test_end        TEXT NOT NULL,
+        symbols         TEXT NOT NULL,
+        tried           INTEGER NOT NULL,
+        finalists       TEXT NOT NULL
+    );
+
+    CREATE INDEX idx_holdout_window ON holdout_use (test_start, test_end);
+    """,
 )
 
 

@@ -194,6 +194,9 @@ class BacktestStatsOut(ApiModel):
     stdev: float = 0.0
     mean_bars_held: float = 0.0
     enough_to_claim: bool = False
+    #: 95 percent block bootstrap interval on the mean, resampling calendar blocks.
+    ci_low: float | None = None
+    ci_high: float | None = None
 
 
 class BacktestEdgeOut(ApiModel):
@@ -204,6 +207,10 @@ class BacktestEdgeOut(ApiModel):
     null_low: float = 0.0
     null_high: float = 0.0
     draws: int = 0
+    null_spread: float = 0.0
+    #: Blocks an edge this size needs to be found four times in five. None when the edge
+    #: is not positive.
+    blocks_needed: int | None = None
 
 
 class BacktestYearOut(ApiModel):

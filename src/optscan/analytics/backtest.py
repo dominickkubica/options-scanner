@@ -19,8 +19,11 @@ and you have two hundred rows covering maybe fifteen genuinely separate market e
 A t-statistic on the rows is roughly the square root of the overlap too large, which is
 more than enough to manufacture a finding. This is the ninth instance of this repo's
 recurring trap, recorded in `calibration.py`, and the answer is the same: the unit of
-independence is a **non-overlapping block**, `effective_sample` counts those, and the
-bootstrap resamples blocks rather than trades.
+independence is a **non-overlapping calendar block**, `effective_sample` counts those,
+and the interval on the mean comes from a bootstrap that resamples blocks rather than
+trades. Blocks are keyed on the entry *date*, never the bar index: 46 of the 294 stored
+symbols listed after 2016, and bar 500 of a 2023 listing is not the same week as bar
+500 of SPY.
 
 **It is the best of many tries.** Sweeping a parameter and reporting the winner is not a
 result, it is the maximum of a sample of noise, and with twenty cells the best one looks
@@ -104,6 +107,25 @@ TRADING_DAYS = 252
 #: A series shorter than this cannot be circularly shifted onto anything but itself.
 MIN_SHIFTABLE_BARS = 2
 
+#: Resamples behind a mean's confidence interval.
+BOOTSTRAP_DRAWS = 1000
+
+#: One block resampled is that block every time: an interval of zero width.
+MIN_BOOTSTRAP_BLOCKS = 2
+
+#: Two sided coverage of that interval.
+CONFIDENCE = 0.95
+
+#: One sided z at p = 0.05 plus the z for 80 percent power: how far an edge has to sit
+#: above the null's noise before a test like this one usually finds it.
+DETECTION_Z = 1.645 + 0.842
+
+#: A normal's 5th to 95th percentile spans this many standard deviations. The null's
+#: spread is read from its percentiles rather than its moments because the null is often
+#: skewed: one shift that lands an oversold rule on the March 2020 rebound drags the
+#: mean and inflates the standard deviation of the whole distribution.
+NORMAL_90_WIDTH = 3.29
+
 
 class Direction(StrEnum):
     LONG = "long"
@@ -160,6 +182,10 @@ class Stats:
     worst: float
     stdev: float
     mean_bars_held: float
+    #: 95 percent block bootstrap interval on the mean. None below two blocks, or when
+    #: the caller skipped it. See `block_bootstrap_interval`.
+    ci_low: float | None = None
+    ci_high: float | None = None
 
     @property
     def enough_to_claim(self) -> bool:
@@ -178,6 +204,8 @@ class Stats:
             "stdev": self.stdev,
             "mean_bars_held": self.mean_bars_held,
             "enough_to_claim": self.enough_to_claim,
+            "ci_low": self.ci_low,
+            "ci_high": self.ci_high,
         }
 
 
@@ -197,6 +225,11 @@ class Edge:
     null_low: float
     null_high: float
     draws: int
+    #: The null's spread in standard deviation units, from its percentiles.
+    null_spread: float = 0.0
+    #: Independent blocks an edge this size needs before a test like this usually finds
+    #: it. None when the edge is not positive: no sample finds what is not there.
+    blocks_needed: int | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -207,6 +240,8 @@ class Edge:
             "null_low": self.null_low,
             "null_high": self.null_high,
             "draws": self.draws,
+            "null_spread": self.null_spread,
+            "blocks_needed": self.blocks_needed,
         }
 
 
@@ -386,8 +421,23 @@ def _walk_forward(
 # --------------------------------------------------------------------------------
 
 
-def block_of(entry_index: int, block_bars: int = DEFAULT_BLOCK_BARS) -> int:
-    return entry_index // block_bars
+def weekday_ordinal(day: date) -> int:
+    """Weekdays since 0001-01-01, which was a Monday. One clock every symbol shares."""
+    days = day.toordinal() - 1
+    return (days // 7) * 5 + min(days % 7, 5)
+
+
+def session_block(day: date, block_bars: int = DEFAULT_BLOCK_BARS) -> int:
+    """The calendar block a date falls in, which is the same block for every symbol.
+
+    This used to be the bar index divided by the block width, and the index is only a
+    calendar when every series starts on the same day. Measured 2026-09-11, 46 of 294
+    stored symbols listed after 2016, by up to seven years: bar 500 of a 2023 listing is
+    2025 and bar 500 of SPY is 2018, so an index key pooled those into one "episode"
+    while splitting genuinely simultaneous trades across different ones. Holidays make
+    21 weekdays about 20 sessions, which does not matter. Agreeing across symbols does.
+    """
+    return weekday_ordinal(day) // block_bars
 
 
 def effective_sample(trades: Sequence[Trade], block_bars: int = DEFAULT_BLOCK_BARS) -> int:
@@ -408,12 +458,59 @@ def effective_sample(trades: Sequence[Trade], block_bars: int = DEFAULT_BLOCK_BA
     the truth sits between this and the per-symbol count. Given the choice, this module
     takes the number that makes it harder to claim a finding.
     """
-    return len({block_of(t.entry_index, block_bars) for t in trades})
+    return len({session_block(t.entry_date, block_bars) for t in trades})
 
 
-def summarize(trades: Sequence[Trade], block_bars: int = DEFAULT_BLOCK_BARS) -> Stats | None:
+def block_bootstrap_interval(
+    trades: Sequence[Trade],
+    block_bars: int = DEFAULT_BLOCK_BARS,
+    *,
+    draws: int = BOOTSTRAP_DRAWS,
+    confidence: float = CONFIDENCE,
+    seed: int = 0,
+) -> tuple[float, float] | None:
+    """Confidence interval on the mean return, resampling whole calendar blocks.
+
+    Resampling trades would treat ninety-eight names oversold in one week as ninety-eight
+    draws and return an interval roughly ten times too narrow. Each block goes back in
+    whole, carrying all of its trades, so the interval is as wide as the number of
+    independent episodes says it should be.
+
+    This is the interval on what the strategy *returned*, drift and costs included: the
+    answer to "would I have kept anything". Whether the timing did anything is the null's
+    question, and `measure_edge` answers it.
+    """
+    groups: dict[int, list[float]] = {}
+    for trade in trades:
+        groups.setdefault(session_block(trade.entry_date, block_bars), []).append(trade.net_return)
+    if len(groups) < MIN_BOOTSTRAP_BLOCKS:
+        return None
+
+    blocks = [(sum(values), len(values)) for values in groups.values()]
+    rng = random.Random(seed)
+    means = []
+    for _ in range(draws):
+        picked = rng.choices(blocks, k=len(blocks))
+        means.append(sum(total for total, _ in picked) / sum(count for _, count in picked))
+    means.sort()
+    tail = (1.0 - confidence) / 2.0
+    return means[int(tail * draws)], means[min(draws - 1, int((1.0 - tail) * draws))]
+
+
+def summarize(
+    trades: Sequence[Trade],
+    block_bars: int = DEFAULT_BLOCK_BARS,
+    *,
+    interval: bool = True,
+) -> Stats | None:
+    """What a set of trades did, with a block bootstrap interval on the mean.
+
+    `interval=False` skips the bootstrap. The search scores a few hundred cells only to
+    order them, and a thousand resamples per cell is time spent on numbers nobody reads.
+    """
     if not trades:
         return None
+    bounds = block_bootstrap_interval(trades, block_bars) if interval else None
     returns = [t.net_return for t in trades]
     mean = sum(returns) / len(returns)
     ordered = sorted(returns)
@@ -436,6 +533,8 @@ def summarize(trades: Sequence[Trade], block_bars: int = DEFAULT_BLOCK_BARS) -> 
         worst=min(returns),
         stdev=math.sqrt(variance),
         mean_bars_held=sum(t.bars_held for t in trades) / len(trades),
+        ci_low=bounds[0] if bounds else None,
+        ci_high=bounds[1] if bounds else None,
     )
 
 
@@ -571,7 +670,26 @@ def null_distribution(
     if not values or span < MIN_SHIFTABLE_BARS:
         return []
 
-    return shift_null(values, entries, draws=draws, rng=rng)
+    positions, calendar = session_positions(series)
+    return shift_null(values, entries, draws=draws, rng=rng, positions=positions, span=calendar)
+
+
+def session_positions(
+    series: dict[str, Sequence[PriceBar]],
+) -> tuple[dict[str, list[int]], int]:
+    """Each bar's position on the one calendar the whole universe shares, and its length.
+
+    The shift null moves every symbol by the same number of sessions, and that is the
+    same *moment* for every symbol only once their series sit on one calendar. Shifting
+    bar indices instead wrapped a 2023 listing at bar 751 and SPY at bar 2515, so the two
+    landed in different years and the co-movement the shift exists to keep was scattered.
+    Measured 2026-09-11 on the oversold rule, that left the null's spread 15 to 20
+    percent too narrow: the too-generous null again, by a quieter route.
+    """
+    days = sorted({bar.ts.date() for bars in series.values() for bar in bars})
+    where = {day: index for index, day in enumerate(days)}
+    positions = {symbol: [where[bar.ts.date()] for bar in bars] for symbol, bars in series.items()}
+    return positions, len(days)
 
 
 def shift_null(
@@ -581,6 +699,8 @@ def shift_null(
     draws: int = DEFAULT_NULL_DRAWS,
     seed: int = 0,
     rng: random.Random | None = None,
+    positions: dict[str, Sequence[int]] | None = None,
+    span: int | None = None,
 ) -> list[float]:
     """The shifting core, over any precomputed table of per-bar returns.
 
@@ -588,28 +708,63 @@ def shift_null(
     built from modelled credits rather than underlying moves, and that is exactly why the
     comparison still works: **the same model prices both the strategy and the null**, so
     whatever the model gets wrong cancels, and what is left is the timing.
+
+    The shift happens on the shared calendar in `positions` (see `session_positions`).
+    An entry shifted to a day its symbol did not trade -- before it listed, after it
+    delisted -- is dropped rather than wrapped into its own history, because wrapping is
+    what broke the alignment. Dropping would then tilt each draw towards the long-lived
+    symbols, so every symbol present in a draw is weighted by its share of the strategy's
+    entries, which keeps the null's mix the strategy's mix.
+
+    Without `positions` every table is taken to start on the same session. That is exact
+    for one symbol and for a universe that listed together, and wrong for anything else.
     """
     generator = rng or random.Random(seed)
-    span = max((len(table) for table in tables.values()), default=0)
+    if positions is None:
+        positions = {symbol: range(len(table)) for symbol, table in tables.items()}
+        span = max((len(table) for table in tables.values()), default=0)
+    elif span is None:
+        span = 1 + max((where[-1] for where in positions.values() if len(where)), default=-1)
     if not tables or span < MIN_SHIFTABLE_BARS:
         return []
+
+    # Calendar position of every entry, and the way back from a calendar position to a
+    # bar. Built once: inside the draw loop it would be a million redundant lookups.
+    placed: dict[str, list[int]] = {}
+    back: dict[str, dict[int, int]] = {}
+    for symbol, table in tables.items():
+        where = positions.get(symbol)
+        wanted = entries.get(symbol, ())
+        if where is None or not wanted or len(table) == 0:
+            continue
+        placed[symbol] = [where[index] for index in wanted if 0 <= index < len(where)]
+        back[symbol] = {session: index for index, session in enumerate(where)}
 
     means: list[float] = []
     for _ in range(draws):
         # One shift for the whole portfolio. See null_distribution: shifting each symbol
         # separately would break the co-movement the strategy actually has.
         shift = generator.randrange(1, span)
-        returns: list[float] = []
-        for symbol, table in tables.items():
-            width = len(table)
-            if width == 0:
-                continue
-            for index in entries.get(symbol, ()):
-                value = table[(index + shift) % width]
+        weighted = 0.0
+        weight = 0
+        for symbol, sessions in placed.items():
+            table = tables[symbol]
+            lookup = back[symbol]
+            total = 0.0
+            count = 0
+            for session in sessions:
+                index = lookup.get((session + shift) % span)
+                if index is None:
+                    continue
+                value = table[index]
                 if value is not None:
-                    returns.append(value)
-        if returns:
-            means.append(sum(returns) / len(returns))
+                    total += value
+                    count += 1
+            if count:
+                weighted += len(sessions) * (total / count)
+                weight += len(sessions)
+        if weight:
+            means.append(weighted / weight)
 
     return means
 
@@ -636,8 +791,30 @@ def option_forward_return_table(
     return out
 
 
-def measure_edge(observed_mean: float, null_means: Sequence[float]) -> Edge | None:
-    """Where the strategy sits in the null, as a one sided p-value."""
+def blocks_to_detect(edge: float, spread: float, blocks: int) -> int | None:
+    """Independent blocks an edge this size needs before a test like this one usually
+    finds it: p below 0.05, four times in five.
+
+    The null's spread is the noise in a mean over `blocks` episodes and shrinks with the
+    square root of their count, so the blocks needed scale as (DETECTION_Z * spread /
+    edge) squared. This is the honest form of "you need thousands of trades": it says
+    how many *independent episodes*, at the edge this run actually measured.
+
+    A non-positive edge returns None rather than a number that would read as a target.
+    """
+    if edge <= 0 or spread <= 0 or blocks <= 0:
+        return None
+    return math.ceil(blocks * (DETECTION_Z * spread / edge) ** 2)
+
+
+def measure_edge(
+    observed_mean: float, null_means: Sequence[float], *, blocks: int | None = None
+) -> Edge | None:
+    """Where the strategy sits in the null, as a one sided p-value.
+
+    `blocks` is the strategy's effective sample. Given it, the edge also reports how many
+    blocks a real edge of this size would need to be found reliably.
+    """
     if not null_means:
         return None
     ordered = sorted(null_means)
@@ -648,16 +825,21 @@ def measure_edge(observed_mean: float, null_means: Sequence[float]) -> Edge | No
         position = min(len(ordered) - 1, max(0, int(share * len(ordered))))
         return ordered[position]
 
+    low, high = percentile(0.05), percentile(0.95)
+    spread = (high - low) / NORMAL_90_WIDTH
+    edge = observed_mean - null_mean
     return Edge(
         strategy_mean=observed_mean,
         null_mean=null_mean,
-        edge=observed_mean - null_mean,
+        edge=edge,
         # (beat + 1) / (draws + 1): the unbiased small sample form, and it cannot report
         # a p-value of exactly zero, which no finite resample is entitled to claim.
         p_value=(beat + 1) / (len(null_means) + 1),
-        null_low=percentile(0.05),
-        null_high=percentile(0.95),
+        null_low=low,
+        null_high=high,
         draws=len(null_means),
+        null_spread=spread,
+        blocks_needed=blocks_to_detect(edge, spread, blocks) if blocks else None,
     )
 
 

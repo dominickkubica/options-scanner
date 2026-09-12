@@ -55,6 +55,42 @@ def points(bars: list[PriceBar]) -> list[int]:
     return [index for index in CHECKPOINTS if index < len(bars)]
 
 
+#: Rules allowed to know the next session's *date*. The exchange publishes its calendar
+#: a year ahead, so "tomorrow starts a new month" is known today; in stored bars the only
+#: way to read it is the next bar's timestamp, so the last bar of a truncated series is
+#: the one place such a rule may differ. Nothing may read the next bar's prices.
+CALENDAR_RULES = frozenset({"turn_of_month"})
+
+#: Where to cut the series. Spread out, and past the level rules' first rebuild.
+TRUNCATIONS = (300, 600, 900)
+
+
+@pytest.mark.parametrize("name", sorted(rules.REGISTRY))
+def test_no_rule_reads_the_future(spy_bars: list[PriceBar], name: str) -> None:
+    """A signal on bar i may depend only on bars up to i.
+
+    Checked the direct way: cut the series short and the signals before the cut must not
+    change. The strategy search computes each rule once on the full history and slices it
+    into training and test, which is only sound if this holds. A rule that peeked would
+    let the holdout leak into training through the entries themselves, and every number
+    downstream would look better than it is.
+    """
+    rule = rules.resolve(name)
+    full = rule(spy_bars)
+    for cut in TRUNCATIONS:
+        if cut >= len(spy_bars):
+            continue
+        truncated = rule(spy_bars[:cut])
+        expected = [index for index in full if index < cut]
+        if name in CALENDAR_RULES:
+            truncated = [index for index in truncated if index < cut - 1]
+            expected = [index for index in expected if index < cut - 1]
+        assert truncated == expected, (
+            f"{name} fires differently on bars before {cut} once later bars exist, so it "
+            "is reading the future"
+        )
+
+
 # --------------------------------------------------------------------------------
 # The rolling forms must equal the scalar forms
 # --------------------------------------------------------------------------------
