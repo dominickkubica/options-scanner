@@ -406,6 +406,71 @@ MIGRATIONS: tuple[str, ...] = (
 
     CREATE INDEX idx_holdout_window ON holdout_use (test_start, test_end);
     """,
+    # 11: what the trader adds to the journal, kept apart from the broker's ledger.
+    #
+    # The ledger is append only and exactly what the broker wrote. Tags, notes,
+    # screenshots and typed times are the trader's, so they live in their own tables
+    # and are keyed on the position ("SYMBOL|EXPIRY|OPENED"), which is derived from
+    # the ledger the same way on every import and so survives a new statement.
+    #
+    # Fill times are keyed on the ledger row's own identity, because they come from
+    # Robinhood's order history per fill and a position is only a grouping of fills.
+    # VIX is its own table rather than a vendor_daily symbol: everything that reads
+    # vendor_daily treats its symbols as the tradeable universe, and ^VIX is not one.
+    """
+    CREATE TABLE journal_annotation (
+        position_key    TEXT PRIMARY KEY,
+        strategy        TEXT,
+        notes           TEXT,
+        tags            TEXT NOT NULL DEFAULT '[]',
+        planned_exit    REAL,
+        entry_time      TEXT,
+        exit_time       TEXT,
+        updated_at      TEXT NOT NULL
+    );
+
+    CREATE TABLE journal_screenshot (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        position_key    TEXT NOT NULL,
+        file_name       TEXT,
+        content_type    TEXT NOT NULL,
+        path            TEXT NOT NULL,
+        stored_at       TEXT NOT NULL
+    );
+    CREATE INDEX idx_journal_screenshot_key ON journal_screenshot (position_key);
+
+    CREATE TABLE fill_time (
+        source          TEXT NOT NULL,
+        digest          TEXT NOT NULL,
+        dup_index       INTEGER NOT NULL DEFAULT 0,
+        executed_at     TEXT NOT NULL,
+        origin          TEXT NOT NULL,
+        recorded_at     TEXT NOT NULL,
+        PRIMARY KEY (source, digest, dup_index)
+    );
+
+    CREATE TABLE market_regime (
+        session_date    TEXT PRIMARY KEY,
+        vix_close       REAL NOT NULL,
+        fetched_at      TEXT NOT NULL
+    );
+    """,
+    # 12: Cboe volatility indices, as a free and always current IV history for the ETFs
+    # they are computed on (VIX for SPY, VXN for QQQ, RVX for IWM, GVZ for GLD).
+    #
+    # Their own table, keyed on the index, and deliberately NOT vendor_daily. Every
+    # reader of vendor_daily treats a row as that symbol's price: a VIX close stored as
+    # a "SPY" row would let `preferred_source` choose it and draw the S&P's volatility
+    # as the S&P's price. Closes are stored in vol points, as published.
+    """
+    CREATE TABLE vol_index (
+        index_symbol    TEXT NOT NULL,
+        session_date    TEXT NOT NULL,
+        close           REAL NOT NULL,
+        fetched_at      TEXT NOT NULL,
+        PRIMARY KEY (index_symbol, session_date)
+    );
+    """,
 )
 
 

@@ -15,6 +15,8 @@ proven edge.
 
 from __future__ import annotations
 
+import csv
+import io
 from dataclasses import dataclass
 from datetime import date
 
@@ -273,6 +275,124 @@ def test_a_file_that_is_not_a_statement_is_refused_with_a_reason(tmp_settings) -
     )
     assert response.status_code == 422
     assert "export" in response.json()["detail"].lower()
+
+
+def _loaded(settings):
+    """A client with the positions test statement already imported."""
+    from tests.test_journal_positions import STATEMENT as BOOK
+
+    client = _client(settings)
+    client.post("/api/journal/import", content=BOOK, headers={"content-type": "text/csv"})
+    return client
+
+
+CONDOR = "QQQ|2026-09-10|2026-09-10"
+
+
+def test_the_journal_carries_one_row_per_position(tmp_settings) -> None:
+    book = _loaded(tmp_settings).get("/api/journal").json()["book"]
+    keys = {p["key"] for p in book["positions"]}
+    assert CONDOR in keys
+    condor = next(p for p in book["positions"] if p["key"] == CONDOR)
+    assert condor["strategy"] == "iron condor"
+    assert len(condor["legs"]) == 4
+    assert book["stop_multiple"] == 2.0
+    assert "held past stop" in book["mistake_tags"]
+
+
+def test_a_tag_and_a_strategy_override_are_saved_and_filterable(tmp_settings) -> None:
+    client = _loaded(tmp_settings)
+    saved = client.put(
+        "/api/journal/annotation",
+        json={
+            "key": CONDOR,
+            "strategy": "0DTE condor",
+            "tags": ["Chased Entry", "chased entry"],
+            "notes": "  faded the open  ",
+            "entry_time": "9:45",
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.json()["tags"] == ["chased entry"]
+    assert saved.json()["entry_time"] == "09:45"
+
+    data = client.get("/api/journal", params={"tag": "chased entry"}).json()
+    assert [p["key"] for p in data["book"]["positions"]] == [CONDOR]
+    assert data["book"]["positions"][0]["strategy"] == "0DTE condor"
+    assert data["book"]["positions"][0]["entry_time"] == "09:45"
+    # The headline is rebuilt from the filtered positions, so the two agree.
+    assert data["total_profit"] == data["book"]["positions"][0]["realized"]
+
+
+def test_an_annotation_is_validated(tmp_settings) -> None:
+    client = _loaded(tmp_settings)
+    unknown = client.put("/api/journal/annotation", json={"key": "NOPE|-|2026-01-01"})
+    assert unknown.status_code == 404
+    bad = client.put("/api/journal/annotation", json={"key": CONDOR, "entry_time": "25:00"})
+    assert bad.status_code == 422
+
+
+def test_a_screenshot_round_trips_and_only_images_are_taken(tmp_settings) -> None:
+    client = _loaded(tmp_settings)
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 32
+    stored = client.post(
+        "/api/journal/screenshot",
+        params={"key": CONDOR},
+        content=png,
+        headers={"content-type": "image/png"},
+    )
+    assert stored.status_code == 200
+    shot = stored.json()["id"]
+    assert client.get(f"/api/journal/screenshot/{shot}").content == png
+    position = next(
+        p for p in client.get("/api/journal").json()["book"]["positions"] if p["key"] == CONDOR
+    )
+    assert position["screenshots"] == [shot]
+
+    refused = client.post(
+        "/api/journal/screenshot",
+        params={"key": CONDOR},
+        content=b"MZ",
+        headers={"content-type": "application/octet-stream"},
+    )
+    assert refused.status_code == 415
+    assert client.delete(f"/api/journal/screenshot/{shot}").status_code == 200
+    assert client.get(f"/api/journal/screenshot/{shot}").status_code == 404
+
+
+def test_the_starting_balance_feeds_sizing(tmp_settings) -> None:
+    client = _loaded(tmp_settings)
+    client.put("/api/journal/balance", json={"starting_balance": 4000})
+    sizing = client.get("/api/journal").json()["book"]["sizing"]
+    assert sizing["starting_balance"] == 4000
+    assert sizing["net_deposits"] == 1000
+
+
+def test_vix_is_fetched_through_a_seam_and_tagged_per_day(tmp_settings, monkeypatch) -> None:
+    import optscan.api.routers.journal as journal_router
+
+    monkeypatch.setattr(
+        journal_router,
+        "_vix_history",
+        lambda days: [(date(2026, 9, 10), 16.5), (date(2026, 9, 11), 22.0)],
+    )
+    client = _loaded(tmp_settings)
+    assert client.post("/api/journal/regime").json()["stored"] == 2
+    positions = client.get("/api/journal").json()["book"]["positions"]
+    condor = next(p for p in positions if p["key"] == CONDOR)
+    assert condor["vix"] == 16.5
+
+
+def test_both_exports_are_csv_files(tmp_settings) -> None:
+    client = _loaded(tmp_settings)
+    positions = client.get("/api/journal/export.csv", params={"kind": "positions"})
+    assert positions.headers["content-type"].startswith("text/csv")
+    assert "attachment" in positions.headers["content-disposition"]
+    rows = list(csv.DictReader(io.StringIO(positions.text)))
+    assert any(r["key"] == CONDOR for r in rows)
+    fills = client.get("/api/journal/export.csv", params={"kind": "fills"}).text
+    assert "trans_code" in fills.splitlines()[0]
+    assert CONDOR in fills
 
 
 def test_an_oversized_upload_is_refused(tmp_settings) -> None:

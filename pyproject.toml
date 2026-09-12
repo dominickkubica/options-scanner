@@ -50,6 +50,12 @@ dev = [
     # Exercises the API without a running server.
     "httpx>=0.27",
 ]
+# Fill times from Robinhood's order history (`optscan import-fill-times`). Optional: an
+# unofficial client, only needed by someone who imports times, and only ever run by the
+# trader in their own terminal because it prompts for their login.
+robinhood = [
+    "robin_stocks>=3.0",
+]
 
 [project.scripts]
 optscan = "optscan.cli:main"
@@ -122,6 +128,7 @@ ignore = [
 # a router or a job would have to import. Same rule as yfinance, one layer down.
 "httpx".msg = "Vendor HTTP calls are only made inside optscan.providers."
 "optscan.providers.alpaca".msg = "Build providers through get_provider, not by importing the adapter."
+"robin_stocks".msg = "Robinhood is only reached inside optscan.providers.robinhood_orders."
 
 [tool.ruff.format]
 quote-style = "double"

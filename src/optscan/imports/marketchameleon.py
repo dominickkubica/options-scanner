@@ -176,46 +176,68 @@ def _session_date(raw: str | None) -> date:
 #: "the vendor rounded twice" from "these two numbers describe different shares".
 RANGE_TOLERANCE = 0.001
 
+#: How far one isolated session may sit outside its own range and still be repaired.
+#:
+#: Measured 2026-09-12 on GLD, 3,192 sessions: 2021-05-05 opens at 166.63 against a low
+#: of 166.87, 0.14% of price, with clean sessions either side. That is one mistyped row,
+#: and refusing the whole file for it threw away twelve years of IV30 over a number no
+#: calculation here reads.
+#:
+#: What the narrow tolerance protects against is still refused, by a second test that
+#: fits it better. A split or an adjustment mix-up is never one row: it breaks every
+#: session on one side of the event, so it arrives as hundreds of breaches, each off by
+#: the split ratio, which is far past this bound. See MAX_ISOLATED_REPAIRS.
+ISOLATED_TOLERANCE = 0.01
+
+#: Sessions per file allowed past RANGE_TOLERANCE before the file is refused as
+#: systematically wrong rather than occasionally mistyped.
+MAX_ISOLATED_REPAIRS = 3
+
 
 def _reconcile_range(
     open_: float, high: float, low: float, close: float, session: date
-) -> tuple[float, float]:
+) -> tuple[float, float, float]:
     """Widen high and low so the range contains the open and the close.
+
+    Returns the repaired high and low and how far outside the range the row was, as a
+    fraction of price, so the caller can count how many rows needed more than rounding.
 
     Rejecting the row would be the wrong response and so would trusting it blindly. An
     opening print is a trade: if the stock printed 85.6195 at the open then the low was
     at most 85.6195, whatever the low column says. Taking the min and the max is the
     only reconstruction consistent with every number in the row.
 
-    Beyond the tolerance nothing is repaired, because at that point the two figures are
-    not disagreeing about rounding, they are describing different things, and quietly
-    stretching a range to cover a split would bury the error in the data rather than
-    surface it.
+    Past ISOLATED_TOLERANCE nothing is repaired, because at that point the two figures
+    are not a typo, they are describing different things, and stretching a range to
+    cover a split would bury the error in the data rather than surface it.
     """
     span = max(abs(high), abs(low), 1e-9)
     breach = max(low - min(open_, close), max(open_, close) - high, 0.0)
     if breach == 0.0:
-        return high, low
-    if breach / span > RANGE_TOLERANCE:
+        return high, low, 0.0
+    fraction = breach / span
+    if fraction > ISOLATED_TOLERANCE:
         raise MarketChameleonParseError(
             f"session {session} has an open/close {breach:.4f} outside its own "
-            f"{low}-{high} range, which is {breach / span:.2%} of price and far past "
-            f"the {RANGE_TOLERANCE:.1%} rounding tolerance. That is not a rounding "
-            "artifact; it usually means the row mixes adjusted and unadjusted prices."
+            f"{low}-{high} range, which is {fraction:.2%} of price and past the "
+            f"{ISOLATED_TOLERANCE:.0%} a single mistyped row can be. That is not a typo; "
+            "it usually means the row mixes adjusted and unadjusted prices."
         )
     log.warning(
         "widened a session range to contain its own open and close",
         session=str(session),
         breach=round(breach, 6),
-        fraction=f"{breach / span:.4%}",
+        fraction=f"{fraction:.4%}",
     )
-    return max(high, open_, close), min(low, open_, close)
+    return max(high, open_, close), min(low, open_, close), fraction
 
 
 def parse_rows(rows: Iterable[dict[str, str]], symbol: str) -> list[VendorDailyBar]:
     """Parse already-read rows. Sorted ascending by session date."""
     bars: list[VendorDailyBar] = []
     seen: dict[date, int] = {}
+    #: Rows that needed more than a rounding repair: (line, session, fraction).
+    repaired: list[tuple[int, date, float]] = []
 
     for number, row in enumerate(rows, start=2):  # line 1 is the header
         try:
@@ -231,13 +253,15 @@ def parse_rows(rows: Iterable[dict[str, str]], symbol: str) -> list[VendorDailyB
             iv30 = _number(row.get("IV30"))
             open_ = _required(row.get("Open"), "Open")
             close_ = _required(row.get("Close"), "Close")
-            high, low = _reconcile_range(
+            high, low, fraction = _reconcile_range(
                 open_,
                 _required(row.get("High"), "High"),
                 _required(row.get("Low"), "Low"),
                 close_,
                 session,
             )
+            if fraction > RANGE_TOLERANCE:
+                repaired.append((number, session, fraction))
             bars.append(
                 VendorDailyBar(
                     source=SOURCE,
@@ -259,6 +283,15 @@ def parse_rows(rows: Iterable[dict[str, str]], symbol: str) -> list[VendorDailyB
             )
         except MarketChameleonParseError as error:
             raise MarketChameleonParseError(f"line {number}: {error}") from error
+
+    if len(repaired) > MAX_ISOLATED_REPAIRS:
+        listed = ", ".join(f"line {n} ({s}, {f:.2%})" for n, s, f in repaired[:5])
+        raise MarketChameleonParseError(
+            f"{len(repaired)} sessions sit outside their own high-low range by more than "
+            f"rounding: {listed}. One or two is a mistyped row; this many is the file "
+            "describing two different price series, usually adjusted and unadjusted "
+            "mixed. Refusing rather than stretching every one of those ranges to fit."
+        )
 
     bars.sort(key=lambda bar: bar.session_date)
     return bars

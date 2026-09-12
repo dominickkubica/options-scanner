@@ -2597,3 +2597,221 @@ tr.under-sampled td {
 .import-note.bad {
   color: var(--bad);
 }
+
+.import-btn.secondary {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--line);
+  text-decoration: none;
+}
+
+/* Journal trades and the position editor. One row per position as it was placed;
+   clicking a row opens everything the trader can add to it, inline. */
+.trade-table {
+  width: 100%;
+}
+
+.trade-table th,
+.trade-table td {
+  white-space: nowrap;
+}
+
+.trade-table td.mono {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.trade-table tr.clickable {
+  cursor: pointer;
+}
+
+.trade-table tr.clickable:hover td,
+.trade-table tr.selected td,
+.trade-table tr.editor-row td {
+  background: var(--panel-2);
+}
+
+.trade-table tr.editor-row td {
+  white-space: normal;
+}
+
+/* Held at the left of the scroll area at its visible width, so the editor stays in
+   view when the table itself is wider than the panel. */
+.editor-sticky {
+  position: sticky;
+  left: 0;
+}
+
+/* A guessed strategy reads as a guess until the trader tags it. */
+.guess {
+  color: var(--dim);
+  font-style: italic;
+}
+
+.chip {
+  display: inline-block;
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 1px 8px;
+  margin: 0 4px 2px 0;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--dim);
+  background: transparent;
+  font-family: inherit;
+}
+
+button.chip {
+  cursor: pointer;
+}
+
+.chip.tag {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.chip.on {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Raised by the journal itself, as opposed to a tag the trader chose. */
+.chip.flag {
+  color: var(--warn);
+  border-color: rgba(240, 166, 60, 0.55);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+}
+
+.chip-input {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 11px;
+  width: 120px;
+}
+
+.editor {
+  display: grid;
+  gap: 14px;
+  padding: 10px 6px 14px;
+  /* The row it sits in is a table cell, and table cells here are right aligned. */
+  text-align: left;
+}
+
+.editor-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.editor-facts .bad {
+  color: var(--bad);
+}
+
+.legs-table {
+  width: auto;
+  min-width: 360px;
+}
+
+.editor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+}
+
+.editor label,
+.notes-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--dim);
+}
+
+.editor input:not(.chip-input),
+.editor textarea,
+.balance-row input {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: var(--r-sm);
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.editor textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.thumb {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+.thumb img {
+  width: 140px;
+  height: 90px;
+  object-fit: cover;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  display: block;
+}
+
+.calendar-cell.clickable {
+  cursor: pointer;
+}
+
+.calendar-cell.selected {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.balance-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.balance-row input {
+  width: 100%;
+  min-width: 0;
+}
+
+/* Risk per trade. Bars past twice the median are sizing that crept. */
+.sizing-bars rect {
+  fill: var(--accent);
+  opacity: 0.7;
+}
+
+.sizing-bars rect.flagged {
+  fill: var(--warn);
+  opacity: 1;
+}

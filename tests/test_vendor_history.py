@@ -507,7 +507,8 @@ class TestRangeReconciliation:
         """The failure this must not wave through: an unadjusted open beside an
         adjusted range is off by the split ratio, not by a rounding step."""
         path = self.write(tmp_path, 1712.39, 87.5, 85.6315, 86.0)
-        with pytest.raises(MarketChameleonParseError, match="rounding tolerance"):
+        # Past what one mistyped row can be, never mind rounding. See ISOLATED_TOLERANCE.
+        with pytest.raises(MarketChameleonParseError, match="not a typo"):
             parse_file(path, "TEST")
 
     def test_a_clean_row_is_left_exactly_alone(self, tmp_path) -> None:

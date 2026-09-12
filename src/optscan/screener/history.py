@@ -20,7 +20,7 @@ is counted and reported rather than dropped quietly.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 
 import pandas as pd
@@ -35,6 +35,15 @@ log = get_logger("optscan.screener.history")
 #: point: near enough to be the vol people trade, far enough not to be dominated by
 #: the gamma of the current week.
 TARGET_DTE = 30
+
+#: About a year of sessions. A series this long supports a full one year rank, so
+#: between two of them the choice can turn on which is current rather than which is
+#: longer. Below it, length still decides. See `choose_iv_history`.
+SUFFICIENT_OBSERVATIONS = 250
+
+#: A downloaded series' latest reading older than this, in calendar days, is stale and
+#: the rank's note says so.
+FRESH_DAYS = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +69,12 @@ class IvHistory:
     #: it came from, and a rank sourced from a vendor download while the chain
     #: beside it comes from somewhere else is exactly the case that needs saying.
     downloaded: bool = False
+    #: The session `current` was read on. None for a locally solved series, whose
+    #: current value is read off today's chain.
+    current_date: date | None = None
+    #: Calendar days between `current_date` and the capture being scored, when the
+    #: series was chosen for one. Set by `choose_iv_history`.
+    stale_days: int | None = None
 
     def __len__(self) -> int:
         return len(self.points)
@@ -82,12 +97,21 @@ class IvHistory:
         insufficient needs to know it is the switch and not a broken job.
         """
         if self.downloaded:
-            return (
-                f"Ranked against {len(self.points)} sessions of imported {self.source} "
-                "history, including today's reading from the same source. The chain "
-                "shown elsewhere on this page is a different vendor's, so it is not "
-                "mixed in: two vendors' implied vols are not one series."
+            text = (
+                f"Ranked against {len(self.points)} sessions of downloaded {self.source} "
+                f"history, using {self.source}'s own latest reading"
+                + (f" ({self.current_date})" if self.current_date else "")
+                + " as today's. The chain shown elsewhere on this page is a different "
+                "vendor's, so it is not mixed in: two vendors' implied vols are not one "
+                "series."
             )
+            if self.stale_days is not None and self.stale_days > FRESH_DAYS:
+                text += (
+                    f" That reading is {self.stale_days} days older than this capture, so "
+                    f"the rank describes {self.current_date}, not today. A newer export "
+                    "brings it up to date."
+                )
+            return text
         if not self.excluded:
             return None
         others = ", ".join(f"{count} from {name}" for name, count in sorted(self.excluded.items()))
@@ -253,12 +277,28 @@ def vendor_iv_history(points: list[tuple[date, float]], source: str) -> IvHistor
     ordered = sorted(points)
     if not ordered:
         return IvHistory(source=source)
-    current = ordered[-1][1]
-    return IvHistory(points=ordered[:-1], source=source, current=current, downloaded=True)
+    current_date, current = ordered[-1]
+    return IvHistory(
+        points=ordered[:-1],
+        source=source,
+        current=current,
+        downloaded=True,
+        current_date=current_date,
+    )
 
 
-def choose_iv_history(own: IvHistory, vendor: IvHistory) -> IvHistory:
-    """Pick one of two vendors' series. Never merge them.
+def _freshness(history: IvHistory, asof: date | None) -> date:
+    """When a series' current reading is from. A locally solved series reads today's
+    chain, so it is as fresh as the capture itself."""
+    if history.current_date is not None:
+        return history.current_date
+    return asof or date.max
+
+
+def choose_iv_history(
+    own: IvHistory, vendor: IvHistory, *others: IvHistory, asof: date | None = None
+) -> IvHistory:
+    """Pick one series. Never merge them.
 
     ## Why this is a choice and not a combination
 
@@ -280,9 +320,26 @@ def choose_iv_history(own: IvHistory, vendor: IvHistory) -> IvHistory:
 
     The loser is discarded rather than kept as a fallback for missing days, for the
     same reason it is not merged.
+
+    ## When two are long enough, the current one wins
+
+    Length stops mattering once a series covers the year a rank reads, and staleness
+    starts to. A vendor export's latest reading is frozen on its download day, and on
+    2026-09-12 QQQ's was eight days old while Cboe's VXN was yesterday's. So among
+    series of at least `SUFFICIENT_OBSERVATIONS`, the one with the most recent reading
+    wins, and length breaks a tie. Below that bar length decides as before: a stale
+    rank from a year of data beats no rank from two weeks of fresh data, and the note
+    says how stale it is.
     """
-    if not vendor:
+    candidates = [history for history in (vendor, *others, own) if history]
+    if not candidates:
         return own
-    if not own:
-        return vendor
-    return vendor if len(vendor) >= len(own) else own
+    sufficient = [h for h in candidates if len(h) >= SUFFICIENT_OBSERVATIONS]
+    if sufficient:
+        chosen = max(sufficient, key=lambda h: (_freshness(h, asof), len(h)))
+    else:
+        # Ties go to the first listed, which is the vendor: the historic rule.
+        chosen = max(candidates, key=len)
+    if asof is not None and chosen.current_date is not None:
+        chosen = replace(chosen, stale_days=(asof - chosen.current_date).days)
+    return chosen

@@ -601,6 +601,20 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    fill_times = sub.add_parser(
+        "import-fill-times",
+        help="Put times on imported fills from Robinhood's order history. You log in.",
+        description=(
+            "The Robinhood CSV has dates only. This logs in to Robinhood in this terminal "
+            "(you type the username, password and verification), reads the order "
+            "history, and matches each execution to its ledger row. Only the times are "
+            "kept; no session or credential is stored."
+        ),
+    )
+    fill_times.add_argument(
+        "--dry-run", action="store_true", help="Match and report without saving anything."
+    )
+
     trades = sub.add_parser(
         "trades",
         help="Realized results from the imported broker ledger.",
@@ -1944,6 +1958,13 @@ def _cmd_prices(settings: Settings, args: argparse.Namespace) -> int:
     warning = report.warning()
     if warning:
         print(f"\n! {warning}")
+
+    # The Cboe volatility indices ride along with the daily price sync, which is what
+    # keeps the IV rank for SPY, QQQ, IWM and GLD current. Their failures are reported
+    # and never fail this job: the price history above is what it exists for.
+    from optscan.jobs.vol_indices import sync_vol_indices
+
+    print(sync_vol_indices(settings).summary())
     print("\nRun `optscan history` to see coverage.")
     return 1 if report.failed else 0
 
@@ -1991,6 +2012,56 @@ def _cmd_history(settings: Settings, args: argparse.Namespace) -> int:
         )
         print("  ".join(cells))
 
+    return 0
+
+
+def _cmd_import_fill_times(settings: Settings, args: argparse.Namespace) -> int:
+    """Match Robinhood's order history to the ledger. Interactive: the trader logs in."""
+    from optscan.console import Console
+    from optscan.imports.fill_times import ORIGIN, match_fills
+    from optscan.providers.robinhood_orders import RobinhoodUnavailable, fetch_fills
+    from optscan.storage import db, journal_book
+    from optscan.storage.ledger import all_transactions
+
+    console = Console.for_stream(settings.color_mode)
+    with db.session(settings.sqlite_path) as conn:
+        txns = all_transactions(conn)
+    if not txns:
+        print("The broker ledger is empty. Import a statement first, then its fills can be timed.")
+        return 1
+
+    print("Robinhood will ask for your username, password and a verification step here.")
+    print("Only order history is read, and nothing but the fill times is kept.\n")
+    try:
+        fills = fetch_fills()
+    except RobinhoodUnavailable as error:
+        print(console.bad(str(error)))
+        return 1
+    except Exception as error:  # the unofficial client raises bare exceptions on failure
+        print(console.bad(f"Robinhood login or fetch failed ({type(error).__name__}): {error}"))
+        return 1
+
+    report = match_fills(fills, txns)
+    if not args.dry_run:
+        with db.session(settings.sqlite_path) as conn:
+            journal_book.save_fill_times(
+                conn,
+                [
+                    (t.source, t.digest, t.dup_index, f.executed_at, ORIGIN)
+                    for t, f in report.matched
+                ],
+            )
+
+    saved = "dry run, nothing saved" if args.dry_run else "times saved"
+    print(f"\n  {len(fills)} fills in the order history")
+    print(f"  {len(report.matched)} matched to ledger rows ({saved})")
+    print(
+        f"  {len(report.unmatched_fills)} matched no row, usually trades outside the "
+        "imported statements"
+    )
+    print(f"  {len(report.untimed_rows)} ledger trade rows still without a time")
+    for txn in report.untimed_rows[:10]:
+        print(f"    {txn.activity_date} {txn.trans_code} {txn.description} @ {txn.price}")
     return 0
 
 
@@ -2082,6 +2153,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "prices": _cmd_prices,
         "history": _cmd_history,
         "trades": _cmd_trades,
+        "import-fill-times": _cmd_import_fill_times,
     }
     handler = handlers[args.command]
 

@@ -97,7 +97,33 @@ export const api = {
   scan: (symbols, limit, { nearMiss = false } = {}) =>
     request(`/scan${query({ symbols, limit, near_miss: nearMiss || undefined })}`),
   gaps: (symbols) => request(`/gaps${query({ symbols })}`),
-  journal: ({ symbol, strategy } = {}) => request(`/journal${query({ symbol, strategy })}`),
+  journal: ({ symbol, strategy, tag, dte } = {}) =>
+    request(`/journal${query({ symbol, strategy, tag, dte })}`),
+  // What the trader adds to a position. The editor always sends every field, so a
+  // cleared box clears the stored value rather than leaving the old one behind.
+  saveAnnotation: (payload) =>
+    request("/journal/annotation", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  // The image goes up raw, typed by its own header; it never leaves this machine.
+  uploadScreenshot: (key, file) =>
+    request(`/journal/screenshot${query({ key, name: file.name })}`, {
+      method: "POST",
+      headers: { "content-type": file.type },
+      body: file,
+    }),
+  deleteScreenshot: (id) => request(`/journal/screenshot/${id}`, { method: "DELETE" }),
+  screenshotUrl: (id) => `${BASE}/journal/screenshot/${id}`,
+  setBalance: (value) =>
+    request("/journal/balance", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ starting_balance: value }),
+    }),
+  fetchRegime: () => request("/journal/regime", { method: "POST" }),
+  journalExportUrl: (kind) => `${BASE}/journal/export.csv${query({ kind })}`,
   // Two calls, deliberately not one. `signals` evaluates and delivers nothing, so a
   // dashboard refresh cannot consume the once-per-session suppression the scheduled
   // scan relies on. `recentSignals` reads the record of what was actually delivered.

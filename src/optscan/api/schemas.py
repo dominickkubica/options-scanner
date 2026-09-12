@@ -1071,6 +1071,159 @@ class ImportResultOut(ApiModel):
     detail: str
 
 
+class JournalLegOut(ApiModel):
+    right: str | None = None
+    strike: float | None = None
+    side: str
+    size: float
+    open_price: float | None = None
+    close_price: float | None = None
+    cash: float
+    expired: bool = False
+
+
+class JournalPositionOut(ApiModel):
+    """One position as it was placed: legs grouped. See `analytics/positions.py`.
+
+    Not `PositionOut`, which is the tracked position on the Positions page: that one is
+    entered by hand and monitored live, this one is derived from broker fills."""
+
+    key: str
+    symbol: str
+    expiry: date | None = None
+    opened_at: date
+    closed_at: date | None = None
+    is_open: bool
+    strategy: str
+    strategy_guess: str
+    guess_confident: bool
+    dte_at_entry: int | None = None
+    dte_class: str
+    held_days: int | None = None
+    weekday: str
+    units: float
+    #: Net per unit, positive for a credit received.
+    entry_price: float | None = None
+    #: Net per unit to close, positive for a debit paid.
+    exit_price: float | None = None
+    opening_cash: float
+    closing_cash: float
+    fees: float
+    realized: float | None = None
+    max_loss: float | None = None
+    r_multiple: float | None = None
+    close_multiple: float | None = None
+    planned_exit: float | None = None
+    exit_slippage: float | None = None
+    #: "HH:MM" on the trader's clock (Pacific), or None. Never estimated.
+    entry_time: str | None = None
+    exit_time: str | None = None
+    time_source: str | None = None
+    notes: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    #: Raised by the journal itself, as opposed to tags the trader chose.
+    flags: list[str] = Field(default_factory=list)
+    screenshots: list[int] = Field(default_factory=list)
+    vix: float | None = None
+    trend: str | None = None
+    account: float | None = None
+    legs: list[JournalLegOut] = Field(default_factory=list)
+
+
+class WeekdayOut(BreakdownOut):
+    avg_credit: float | None = None
+
+
+class StreaksOut(ApiModel):
+    #: Positive for a run of wins, negative for a run of losses.
+    current: int = 0
+    longest_win: int = 0
+    longest_loss: int = 0
+
+
+class StopReportOut(ApiModel):
+    planned_multiple: float
+    stopped: int = 0
+    mean_multiple: float | None = None
+    worst_multiple: float | None = None
+    beyond_stop: int = 0
+    planned_exits: int = 0
+    mean_slippage: float | None = None
+
+
+class SizingPointOut(ApiModel):
+    key: str
+    day: date
+    risk: float
+    account: float | None = None
+    share: float | None = None
+
+
+class SizingOut(ApiModel):
+    points: list[SizingPointOut] = Field(default_factory=list)
+    #: "share" of the account once a starting balance is set, "dollars" until then.
+    basis: str = "dollars"
+    median_risk: float | None = None
+    after_win_risk: float | None = None
+    after_win_n: int = 0
+    after_loss_risk: float | None = None
+    after_loss_n: int = 0
+    starting_balance: float | None = None
+    net_deposits: float = 0.0
+
+
+class BookOut(ApiModel):
+    """Everything reported over positions rather than symbol-days."""
+
+    positions: list[JournalPositionOut] = Field(default_factory=list)
+    by_strategy: list[BreakdownOut] = Field(default_factory=list)
+    by_dte_class: list[BreakdownOut] = Field(default_factory=list)
+    by_weekday: list[WeekdayOut] = Field(default_factory=list)
+    by_tag: list[BreakdownOut] = Field(default_factory=list)
+    by_vix: list[BreakdownOut] = Field(default_factory=list)
+    by_trend: list[BreakdownOut] = Field(default_factory=list)
+    by_entry_time: list[BreakdownOut] = Field(default_factory=list)
+    by_exit_time: list[BreakdownOut] = Field(default_factory=list)
+    r_expectancy: EstimateOut | None = None
+    day_streaks: StreaksOut = Field(default_factory=StreaksOut)
+    position_streaks: StreaksOut = Field(default_factory=StreaksOut)
+    stops: StopReportOut
+    sizing: SizingOut = Field(default_factory=SizingOut)
+    timed: int = 0
+    stop_multiple: float
+    mistake_tags: list[str] = Field(default_factory=list)
+    #: Choices for the filter controls, from the whole account rather than the filtered
+    #: set, so choosing one filter does not empty the others.
+    filters: dict[str, list[str]] = Field(default_factory=dict)
+    notes: list[str] = Field(default_factory=list)
+
+
+class AnnotationIn(ApiModel):
+    key: str
+    strategy: str | None = None
+    notes: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    planned_exit: float | None = None
+    entry_time: str | None = None
+    exit_time: str | None = None
+
+
+class BalanceIn(ApiModel):
+    starting_balance: float | None = None
+
+
+class ScreenshotOut(ApiModel):
+    id: int
+    key: str
+
+
+class RegimeOut(ApiModel):
+    stored: int
+    first: date | None = None
+    last: date | None = None
+    detail: str
+
+
 class JournalOut(ApiModel):
     """Journal style reporting over settled candidates.
 
@@ -1102,6 +1255,7 @@ class JournalOut(ApiModel):
     by_symbol: list[BreakdownOut] = Field(default_factory=list)
     by_dte: list[BreakdownOut] = Field(default_factory=list)
     by_score: list[BreakdownOut] = Field(default_factory=list)
+    book: BookOut | None = None
     reportable: bool = Field(
         description="False when the whole sample is under the cluster minimum for a claim."
     )

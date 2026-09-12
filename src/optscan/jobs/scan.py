@@ -18,6 +18,7 @@ from optscan.config import Settings
 from optscan.imports.marketchameleon import SOURCE as VENDOR_SOURCE
 from optscan.jobs.load import latest_snapshot
 from optscan.jobs.snapshot import capture_symbol
+from optscan.jobs.vol_indices import index_history
 from optscan.logging import get_logger
 from optscan.market_calendar import market_local_date
 from optscan.models import ChainSnapshot, SymbolEvents
@@ -114,16 +115,19 @@ def load_iv_history(settings: Settings, symbol: str, snapshot: ChainSnapshot) ->
         # Bounded at the snapshot's own session so a rank is never computed against
         # observations from after the capture it is describing.
         points = iv30_series(conn, symbol, source=VENDOR_SOURCE, until=snapshot.session_date)
+        # The ETF's Cboe volatility index, where it has one: current every session.
+        index = index_history(conn, symbol, until=snapshot.session_date)
     vendor = vendor_iv_history(points, VENDOR_SOURCE)
 
-    chosen = choose_iv_history(own, vendor)
-    if chosen is vendor and vendor:
+    chosen = choose_iv_history(own, vendor, index, asof=snapshot.session_date)
+    if chosen.downloaded:
         log.info(
             "using downloaded iv history",
             symbol=symbol,
-            source=VENDOR_SOURCE,
-            observations=len(vendor),
+            source=chosen.source,
+            observations=len(chosen),
             own_observations=len(own),
+            stale_days=chosen.stale_days,
         )
     return chosen
 

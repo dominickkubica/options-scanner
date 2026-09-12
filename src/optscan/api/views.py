@@ -13,6 +13,7 @@ is the easiest place in this whole project to hide that lie.
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from datetime import date, datetime
 
 from optscan.analytics.levels import DEFAULT_REALIZED_VOL_WINDOW
@@ -22,6 +23,7 @@ from optscan.api.deps import make_provenance
 from optscan.api.schemas import (
     BarOut,
     BollingerOut,
+    BookOut,
     BreakdownOut,
     CandidateStrikeOut,
     ChainOut,
@@ -37,7 +39,9 @@ from optscan.api.schemas import (
     HistoryOut,
     IntervalOut,
     IvRankOut,
+    JournalLegOut,
     JournalOut,
+    JournalPositionOut,
     LegOut,
     LevelOut,
     LevelsOut,
@@ -50,10 +54,15 @@ from optscan.api.schemas import (
     PositionOut,
     Provenance,
     ScoreComponentsOut,
+    SizingOut,
+    SizingPointOut,
     SkewPointOut,
+    StopReportOut,
+    StreaksOut,
     SymbolSummaryOut,
     TermPointOut,
     TriggerOut,
+    WeekdayOut,
 )
 from optscan.models import Leg, Opportunity, PriceBar, Right
 from optscan.screener.context import ExpiryAnalysis
@@ -713,8 +722,110 @@ def breakdown_view(breakdown) -> BreakdownOut:
     )
 
 
-def journal_view(report) -> JournalOut:
+def _hhmm(moment) -> str | None:
+    if moment is None:
+        return None
+    from optscan.analytics.positions import to_trader  # noqa: PLC0415
+
+    return f"{to_trader(moment):%H:%M}"
+
+
+def journal_position_view(position) -> JournalPositionOut:
+    return JournalPositionOut(
+        key=position.key,
+        symbol=position.symbol,
+        expiry=position.contract_expiry,
+        opened_at=position.opened_at,
+        closed_at=position.closed_at,
+        is_open=position.is_open,
+        strategy=position.strategy,
+        strategy_guess=position.guess,
+        guess_confident=position.confident,
+        dte_at_entry=position.dte_at_entry,
+        dte_class=position.dte_class,
+        held_days=position.held_days,
+        weekday=position.weekday,
+        units=position.units,
+        entry_price=position.entry_price,
+        exit_price=position.exit_price,
+        opening_cash=position.opening_cash,
+        closing_cash=position.closing_cash,
+        fees=position.fees,
+        realized=position.realized,
+        max_loss=position.max_loss,
+        r_multiple=position.r_multiple,
+        close_multiple=position.close_multiple,
+        planned_exit=position.annotation.planned_exit,
+        exit_slippage=position.exit_slippage,
+        entry_time=_hhmm(position.entry_at),
+        exit_time=_hhmm(position.exit_at),
+        time_source=position.time_source,
+        notes=position.annotation.notes,
+        tags=list(position.annotation.tags),
+        flags=list(position.flags),
+        screenshots=list(position.screenshots),
+        vix=position.vix,
+        trend=position.trend,
+        account=position.account,
+        legs=[
+            JournalLegOut(
+                right=leg.right,
+                strike=leg.strike,
+                side=leg.side,
+                size=leg.size,
+                open_price=leg.open_price,
+                close_price=leg.close_price,
+                cash=leg.cash,
+                expired=leg.ended_by_event,
+            )
+            for leg in position.legs
+        ],
+    )
+
+
+def book_view(book, *, filters: dict[str, list[str]], stop_multiple: float, tags) -> BookOut:
+    return BookOut(
+        positions=[journal_position_view(p) for p in book.positions],
+        by_strategy=[breakdown_view(item) for item in book.by_strategy],
+        by_dte_class=[breakdown_view(item) for item in book.by_dte_class],
+        by_weekday=[
+            WeekdayOut(
+                **breakdown_view(row.breakdown).model_dump(),
+                avg_credit=row.avg_credit,
+            )
+            for row in book.by_weekday
+        ],
+        by_tag=[breakdown_view(item) for item in book.by_tag],
+        by_vix=[breakdown_view(item) for item in book.by_vix],
+        by_trend=[breakdown_view(item) for item in book.by_trend],
+        by_entry_time=[breakdown_view(item) for item in book.by_entry_time],
+        by_exit_time=[breakdown_view(item) for item in book.by_exit_time],
+        r_expectancy=estimate_view(book.r_expectancy),
+        day_streaks=StreaksOut(**asdict(book.day_streaks)),
+        position_streaks=StreaksOut(**asdict(book.position_streaks)),
+        stops=StopReportOut(**asdict(book.stops)),
+        sizing=SizingOut(
+            points=[SizingPointOut(**asdict(point)) for point in book.sizing.points],
+            basis=book.sizing.basis,
+            median_risk=book.sizing.median_risk,
+            after_win_risk=book.sizing.after_win_risk,
+            after_win_n=book.sizing.after_win_n,
+            after_loss_risk=book.sizing.after_loss_risk,
+            after_loss_n=book.sizing.after_loss_n,
+            starting_balance=book.sizing.starting_balance,
+            net_deposits=book.sizing.net_deposits,
+        ),
+        timed=book.timed,
+        stop_multiple=stop_multiple,
+        mistake_tags=list(tags),
+        filters=filters,
+        notes=list(book.notes),
+    )
+
+
+def journal_view(report, book: BookOut | None = None) -> JournalOut:
     return JournalOut(
+        book=book,
         trades=report.trades,
         clusters=report.clusters,
         settlement_dates=report.settlement_dates,
