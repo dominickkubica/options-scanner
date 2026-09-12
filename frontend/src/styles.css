@@ -2794,15 +2794,8 @@ button.chip {
   outline-offset: 1px;
 }
 
-/* A day left out of the what-if view: still on the calendar, visibly set aside. */
-.calendar-cell.excluded {
-  border-style: dashed;
-  border-color: var(--muted);
-  opacity: 0.6;
-}
-
-/* The what-if banner. Accent rather than warning: it is a view the trader chose, and
-   it names the real total so the chosen view is never mistaken for the record. */
+/* The capped-view banner. Accent rather than warning: it is a view the trader chose,
+   and it names the real total so the chosen view is never mistaken for the record. */
 .view-banner {
   background: rgba(59, 130, 246, 0.08);
   border: 1px solid rgba(59, 130, 246, 0.3);
@@ -2812,19 +2805,6 @@ button.chip {
   margin-bottom: 12px;
   line-height: 1.7;
   color: var(--text);
-}
-
-.toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-button.chip:disabled {
-  opacity: 0.4;
-  cursor: default;
 }
 
 .balance-row {

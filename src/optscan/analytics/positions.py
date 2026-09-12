@@ -190,8 +190,9 @@ class Position:
     vix: float | None = None
     trend: str | None = None
     account: float | None = None
-    #: The result as if the trade had risked the account's median 1R. Set only in the
-    #: journal's normalized view; None everywhere else. See `normalize_to_median_risk`.
+    #: The result had the trade risked no more than the account's median 1R. Set only
+    #: in the journal's capped view, and only on trades above it. See
+    #: `cap_to_median_risk`.
     scaled: float | None = None
 
     # -- derived ------------------------------------------------------------------
@@ -210,8 +211,8 @@ class Position:
 
     @property
     def outcome(self) -> float:
-        """What the statistics count: the scaled result in the normalized view, else
-        the real one. The trade table always shows `realized`."""
+        """What the statistics count: the capped result in the capped view, else the
+        real one. The trade table always shows `realized`."""
         if self.scaled is not None:
             return self.scaled
         return self.realized or 0.0
@@ -956,33 +957,38 @@ def build_book(
     )
 
 
-def normalize_to_median_risk(
+def cap_to_median_risk(
     positions: Sequence[Position], everything: Sequence[Position]
 ) -> tuple[float | None, int]:
-    """Scale each closed position to the account's median 1R, in place.
+    """Scale every trade that risked more than the account's median 1R down to it.
 
-    The question this answers is "what does the record look like with size taken out".
-    On 2026-09-12 the worst day, QQQ on 8/24, lost $241.14, which is -0.97R: a trade
-    stopped almost exactly on its rule, on a position that risked $248 against a median
-    of about $35. It is an outlier in size, not in behaviour, and scaling every result
-    to one common risk is the view that shows that. `r_multiple x median 1R` keeps the
-    unit as dollars, so every figure on the page still reads as money.
+    The question is "what did oversizing cost", and it has to be answered without
+    inventing trades that were never taken. The first version scaled every trade to the
+    median, up as well as down, and on 2026-09-12 that turned +$154 into +$517. Split
+    apart, +$184 of the jump was oversized losers shrinking to normal size, which is the
+    answer, and +$218 was trades that risked $13 to $25 being blown up three to six
+    times, which is fiction. Capping keeps the first and drops the second: a trade at or
+    under the median keeps its real result, and a larger one keeps its R at the median's
+    size. The 8/24 loss, -0.97R on a $248 risk, becomes -0.97R on $75.
 
-    Returns the median 1R used and how many closed positions had no R and so could not
-    be scaled. The caller leaves those out of the view rather than mixing scaled and
-    unscaled dollars in one total.
+    Trades too small to carry an R are under the median by construction and keep their
+    real result, so nothing is left out. Returns the median 1R and how many trades were
+    scaled down.
     """
     units = [p.risk_unit for p in everything if not p.is_open and p.risk_unit]
     if not units:
         return None, 0
-    scale = statistics.median(units)
-    unscalable = 0
+    cap = statistics.median(units)
+    capped = 0
     for p in positions:
+        risk = p.risk_unit
         r = p.r_multiple
-        p.scaled = None if r is None else round(r * scale, 2)
-        if r is None and not p.is_open:
-            unscalable += 1
-    return scale, unscalable
+        if not p.is_open and risk is not None and r is not None and risk > cap:
+            p.scaled = round(r * cap, 2)
+            capped += 1
+        else:
+            p.scaled = None
+    return cap, capped
 
 
 def entries_from_positions(positions: Sequence[Position]) -> list[JournalEntry]:

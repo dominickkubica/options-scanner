@@ -1225,16 +1225,13 @@ class RegimeOut(ApiModel):
 
 
 class ViewOut(ApiModel):
-    """A what-if view of the journal: days left out, or sizes normalized. Never saved."""
+    """The journal's capped view: no trade counted above the median 1R. Never saved."""
 
-    excluded: list[date] = Field(default_factory=list)
-    #: What the excluded days actually made or lost, so the banner can say so.
-    excluded_profit: float = 0.0
-    normalized: bool = False
-    #: The median 1R every trade was scaled to, in dollars.
-    normalized_risk: float | None = None
-    #: Closed positions with no R, left out of the normalized view.
-    dropped_without_r: int = 0
+    capped: bool = False
+    #: The median 1R, in dollars: the most any trade is counted as having risked.
+    cap_risk: float | None = None
+    #: How many closed trades risked more than that and were scaled down.
+    capped_trades: int = 0
     #: The real total for the same filters, before any of this.
     actual_total: float = 0.0
 

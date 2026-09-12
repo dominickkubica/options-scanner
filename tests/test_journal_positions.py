@@ -359,24 +359,34 @@ def test_without_a_balance_sizing_is_in_dollars_and_stock_is_never_flagged(txns,
     assert "sized too big" not in by_key(positions, "TJX|-").flags
 
 
-def test_normalizing_puts_every_trade_on_one_risk(positions) -> None:
-    """An oversized loss stopped on its rule reads as the ordinary -1R it was."""
-    from optscan.analytics.positions import entries_from_positions, normalize_to_median_risk
+def test_capping_scales_only_the_trades_above_the_median_risk(positions) -> None:
+    """Oversized trades come down to the median; smaller ones are never enlarged.
 
-    scale, unscalable = normalize_to_median_risk(positions, positions)
-    assert scale is not None and unscalable == 0
-    condor = by_key(positions, "QQQ|2026-09-10")
-    assert condor.scaled == pytest.approx(round(condor.r_multiple * scale, 2))
-    assert condor.outcome == condor.scaled
-    assert condor.realized == pytest.approx(-39.40), "the real result is untouched"
+    1R here: the two condors 54.80 and 44.80, the AAPL spread 89.90, TJX shares 100.
+    The median is 72.35, so only AAPL and TJX are scaled.
+    """
+    from optscan.analytics.positions import cap_to_median_risk, entries_from_positions
+
+    ceiling, capped = cap_to_median_risk(positions, positions)
+    assert ceiling == pytest.approx((54.80 + 89.90) / 2)
+    assert capped == 2
+
+    small = by_key(positions, "QQQ|2026-09-10")
+    assert small.scaled is None, "a trade under the median is not enlarged"
+    assert small.outcome == pytest.approx(-39.40)
+
+    big = by_key(positions, "AAPL|2026-09-18")
+    assert big.r_multiple == pytest.approx(1.0)
+    assert big.outcome == pytest.approx(round(1.0 * ceiling, 2))
+    assert big.realized == pytest.approx(89.90), "the real result is untouched"
 
     entries = entries_from_positions(positions)
     assert sum(e.profit for e in entries) == pytest.approx(
-        sum(p.scaled for p in positions if not p.is_open), abs=0.02
+        sum(p.outcome for p in positions if not p.is_open), abs=0.02
     )
 
 
-def test_without_normalizing_the_outcome_is_the_real_result(positions) -> None:
+def test_without_capping_the_outcome_is_the_real_result(positions) -> None:
     from optscan.analytics.positions import entries_from_positions
 
     assert all(p.outcome == (p.realized or 0.0) for p in positions)

@@ -73,6 +73,10 @@ export function IvRankGauge({ ivRank, note }) {
         </text>
       </svg>
       {ivRank.caveat && <div className="chart-note">{ivRank.caveat}</div>}
+      {/* Which series the rank is measured against: a Cboe index, a vendor export or
+          this project's own captures. The API has always sent it and the gauge never
+          showed it, so a rank drawn from VIX looked exactly like one from nothing. */}
+      {ivRank.source_note && <div className="chart-note">{ivRank.source_note}</div>}
     </div>
   );
 }

@@ -193,7 +193,7 @@ function EquityCurve({ days }) {
 
 // Month grids, one per month that actually has a close. Clicking a day lists every
 // position closed on it in the trade table below.
-function CalendarPnl({ days, selected, onSelect, excluded = [] }) {
+function CalendarPnl({ days, selected, onSelect }) {
   const months = useMemo(() => {
     const byMonth = new Map();
     for (const point of days) {
@@ -237,11 +237,9 @@ function CalendarPnl({ days, selected, onSelect, excluded = [] }) {
               {Array.from({ length: daysInMonth }, (_, i) => {
                 const iso = `${month}-${String(i + 1).padStart(2, "0")}`;
                 const point = points.get(iso);
-                const out = excluded.includes(iso);
                 const classes = [
                   "calendar-cell",
                   point ? `filled clickable ${signClass(point.profit)}` : "",
-                  out ? "excluded" : "",
                   selected === iso ? "selected" : "",
                 ].join(" ");
                 return (
@@ -260,7 +258,6 @@ function CalendarPnl({ days, selected, onSelect, excluded = [] }) {
                     {point && (
                       <span className="calendar-value">{signedMoney(point.profit)}</span>
                     )}
-                    {out && <span className="calendar-value">excluded</span>}
                   </div>
                 );
               })}
@@ -947,20 +944,15 @@ export default function Journal() {
   const [imported, setImported] = useState(0);
   const [selected, setSelected] = useState(null);
   const [day, setDay] = useState(null);
-  // The what-if view: closing days left out, and whether sizes are normalized. Kept in
-  // the page only; a reload shows the real record again.
-  const [excluded, setExcluded] = useState([]);
-  const [normalize, setNormalize] = useState(false);
+  // Capped view: any trade that risked more than the account's median 1R is counted as
+  // if it had risked the median, and smaller trades keep their real result. It shows
+  // what oversizing cost without inventing larger trades. Kept in the page only; a
+  // reload shows the real record again.
+  const [cap, setCap] = useState(false);
   const { data, error, loading, reload } = useAsync(
-    () => api.journal({ ...filters, exclude: excluded, normalize }),
-    [filters, imported, excluded, normalize],
+    () => api.journal({ ...filters, cap }),
+    [filters, imported, cap],
   );
-
-  const excludeDay = (when) => {
-    if (when && !excluded.includes(when)) setExcluded([...excluded, when].sort());
-    setDay(null);
-  };
-  const restoreDay = (when) => setExcluded(excluded.filter((d) => d !== when));
 
   // Only the first load shows the placeholder. A save reloads in place, so an editor
   // that is open stays open and the page does not jump back to the top.
@@ -975,11 +967,7 @@ export default function Journal() {
     ? book.positions.filter((p) => p.closed_at === day)
     : book.positions;
   const hasVix = book.positions.some((p) => p.vix !== null);
-  const worst = data.days.length
-    ? data.days.reduce((low, point) => (point.profit < low.profit ? point : low))
-    : null;
   const view = data.view;
-  const whatIf = view && (view.excluded.length > 0 || view.normalized);
 
   const select = (name, options, label = name) => (
     <label>
@@ -1020,65 +1008,28 @@ export default function Journal() {
             {select("strategy", book.filters.strategies || [])}
             {select("tag", [...(book.filters.tags || []), "untagged"])}
             {select("dte", book.filters.dte || [], "DTE")}
-            <label className="toggle" title="Scale every trade as if it risked your median 1R">
-              <input
-                type="checkbox"
-                checked={normalize}
-                onChange={(event) => setNormalize(event.target.checked)}
-              />{" "}
-              normalize size
-            </label>
             <button
               type="button"
-              className="chip"
-              disabled={!worst || worst.profit >= 0}
-              title={worst ? `Leave out ${worst.day} (${signedMoney(worst.profit)})` : undefined}
-              onClick={() => excludeDay(worst.day)}
+              className={`chip ${cap ? "on" : ""}`}
+              aria-pressed={cap}
+              title="Count any trade that risked more than your median as if it risked the median"
+              onClick={() => setCap(!cap)}
             >
-              exclude worst day
+              cap size at median
             </button>
           </div>
         }
       >
-        {whatIf && (
+        {view?.capped && (
           <div className="view-banner">
-            <strong>What-if view.</strong>{" "}
-            {view.excluded.length > 0 && (
-              <>
-                Leaving out{" "}
-                {view.excluded.map((when) => (
-                  <button
-                    key={when}
-                    type="button"
-                    className="chip on"
-                    title="Put this day back"
-                    onClick={() => restoreDay(when)}
-                  >
-                    {when} ×
-                  </button>
-                ))}
-                ({signedMoney(view.excluded_profit)}).{" "}
-              </>
-            )}
-            {view.normalized && (
-              <>
-                Every trade scaled as if it risked the median {money(view.normalized_risk)}
-                {view.dropped_without_r
-                  ? `; ${view.dropped_without_r} too small to scale are left out`
-                  : ""}
-                . The trade table still shows real results.{" "}
-              </>
-            )}
-            Actual total {signedMoney(view.actual_total)}.{" "}
-            <button
-              type="button"
-              className="chip"
-              onClick={() => {
-                setExcluded([]);
-                setNormalize(false);
-              }}
-            >
-              reset
+            <strong>Capped at your median size.</strong> {count(view.capped_trades)}{" "}
+            {view.capped_trades === 1 ? "trade" : "trades"} that risked more than{" "}
+            {money(view.cap_risk)} {view.capped_trades === 1 ? "is" : "are"} counted as if
+            they had risked {money(view.cap_risk)}; everything smaller keeps its real result.
+            The trade table still shows real results. Actual total{" "}
+            {signedMoney(view.actual_total)}.{" "}
+            <button type="button" className="chip" onClick={() => setCap(false)}>
+              show real
             </button>
           </div>
         )}
@@ -1124,21 +1075,16 @@ export default function Journal() {
       </Panel>
 
       <Panel title="Calendar" right={<span className="muted">click a day to list its trades</span>}>
-        <CalendarPnl days={data.days} selected={day} onSelect={setDay} excluded={excluded} />
+        <CalendarPnl days={data.days} selected={day} onSelect={setDay} />
       </Panel>
 
       <Panel
         title={day ? `Trades closed ${day}` : "Trades"}
         right={
           day ? (
-            <span>
-              <button type="button" className="chip" onClick={() => excludeDay(day)}>
-                exclude this day
-              </button>
-              <button type="button" className="chip" onClick={() => setDay(null)}>
-                show all
-              </button>
-            </span>
+            <button type="button" className="chip" onClick={() => setDay(null)}>
+              show all
+            </button>
           ) : (
             <span className="muted">click a trade to tag it, add notes or a screenshot</span>
           )

@@ -385,33 +385,31 @@ def test_vix_is_fetched_through_a_seam_and_tagged_per_day(tmp_settings, monkeypa
     assert condor["vix"] == 16.5
 
 
-def test_an_excluded_day_leaves_the_view_with_all_its_positions(tmp_settings) -> None:
-    """The what-if view: the day's positions go, the headline follows, the real total
-    stays on the banner, and nothing is stored."""
+def test_a_capped_view_scales_only_the_trades_above_the_median_risk(tmp_settings) -> None:
+    """Oversized trades come down to the median; nothing is enlarged, nothing dropped."""
     client = _loaded(tmp_settings)
     real = client.get("/api/journal").json()
-    view = client.get("/api/journal", params={"exclude": "2026-09-11"}).json()
-
-    assert all(p["closed_at"] != "2026-09-11" for p in view["book"]["positions"])
-    assert view["view"]["excluded"] == ["2026-09-11"]
-    # The 9/11 condor lost 95.40; leaving it out lifts the total by that much.
-    assert view["view"]["excluded_profit"] == pytest.approx(-95.40)
-    assert view["total_profit"] == pytest.approx(real["total_profit"] + 95.40)
-    assert view["view"]["actual_total"] == pytest.approx(real["total_profit"])
-    # Nothing was saved: without the parameter the day is back.
-    assert client.get("/api/journal").json()["total_profit"] == real["total_profit"]
-
-
-def test_a_normalized_view_scales_every_trade_to_the_median_risk(tmp_settings) -> None:
-    client = _loaded(tmp_settings)
-    data = client.get("/api/journal", params={"normalize": "true"}).json()
+    data = client.get("/api/journal", params={"cap": "true"}).json()
     view = data["view"]
-    assert view["normalized"] is True
-    assert view["normalized_risk"] > 0
-    # Each counted trade is its R times the median 1R, so the total is their sum.
+    ceiling = view["cap_risk"]
+    assert view["capped"] is True
+    assert ceiling > 0
+
     positions = [p for p in data["book"]["positions"] if not p["is_open"]]
-    expected = sum(round(p["r_multiple"] * view["normalized_risk"], 2) for p in positions)
+    assert len(positions) == len([p for p in real["book"]["positions"] if not p["is_open"]])
+    expected = 0.0
+    scaled = 0
+    for p in positions:
+        r = p["r_multiple"]
+        risk = p["realized"] / r if r else None
+        if risk is not None and risk > ceiling:
+            expected += round(r * ceiling, 2)
+            scaled += 1
+        else:
+            expected += p["realized"]
+    assert view["capped_trades"] == scaled
     assert data["total_profit"] == pytest.approx(expected, abs=0.05)
+    assert view["actual_total"] == pytest.approx(real["total_profit"])
     # The table still reports what really happened.
     assert all(p["realized"] is not None for p in positions)
 
