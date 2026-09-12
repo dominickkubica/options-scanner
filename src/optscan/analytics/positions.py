@@ -50,7 +50,7 @@ from zoneinfo import ZoneInfo
 
 from optscan.analytics.calibration import count_clusters, proportion_interval
 from optscan.analytics.journal import Breakdown, Estimate, expectancy
-from optscan.analytics.ledger import Trade
+from optscan.analytics.ledger import JournalEntry, Trade
 from optscan.models.broker import OPTION_MULTIPLIER, BrokerTxn, Effect, TxnKind
 from optscan.models.enums import Right
 from optscan.models.opportunity import Action
@@ -190,6 +190,9 @@ class Position:
     vix: float | None = None
     trend: str | None = None
     account: float | None = None
+    #: The result as if the trade had risked the account's median 1R. Set only in the
+    #: journal's normalized view; None everywhere else. See `normalize_to_median_risk`.
+    scaled: float | None = None
 
     # -- derived ------------------------------------------------------------------
 
@@ -204,6 +207,14 @@ class Position:
     @property
     def realized(self) -> float | None:
         return None if self.is_open else round(self.opening_cash + self.closing_cash, 2)
+
+    @property
+    def outcome(self) -> float:
+        """What the statistics count: the scaled result in the normalized view, else
+        the real one. The trade table always shows `realized`."""
+        if self.scaled is not None:
+            return self.scaled
+        return self.realized or 0.0
 
     @property
     def dte_at_entry(self) -> int | None:
@@ -680,9 +691,7 @@ class Book:
 
 
 def _stat(position: Position) -> StatRow:
-    return StatRow(
-        position.symbol, position.closed_at or position.opened_at, position.realized or 0.0
-    )
+    return StatRow(position.symbol, position.closed_at or position.opened_at, position.outcome)
 
 
 def _breakdown(key: str, rows: Sequence[StatRow]) -> Breakdown:
@@ -939,12 +948,72 @@ def build_book(
         ),
         r_expectancy=expectancy(r_rows),
         day_streaks=streaks(day_profits),
-        position_streaks=streaks([p.realized or 0.0 for p in ordered]),
+        position_streaks=streaks([p.outcome for p in ordered]),
         stops=stop_report(closed),
         sizing=size,
         timed=timed,
         notes=notes,
     )
+
+
+def normalize_to_median_risk(
+    positions: Sequence[Position], everything: Sequence[Position]
+) -> tuple[float | None, int]:
+    """Scale each closed position to the account's median 1R, in place.
+
+    The question this answers is "what does the record look like with size taken out".
+    On 2026-09-12 the worst day, QQQ on 8/24, lost $241.14, which is -0.97R: a trade
+    stopped almost exactly on its rule, on a position that risked $248 against a median
+    of about $35. It is an outlier in size, not in behaviour, and scaling every result
+    to one common risk is the view that shows that. `r_multiple x median 1R` keeps the
+    unit as dollars, so every figure on the page still reads as money.
+
+    Returns the median 1R used and how many closed positions had no R and so could not
+    be scaled. The caller leaves those out of the view rather than mixing scaled and
+    unscaled dollars in one total.
+    """
+    units = [p.risk_unit for p in everything if not p.is_open and p.risk_unit]
+    if not units:
+        return None, 0
+    scale = statistics.median(units)
+    unscalable = 0
+    for p in positions:
+        r = p.r_multiple
+        p.scaled = None if r is None else round(r * scale, 2)
+        if r is None and not p.is_open:
+            unscalable += 1
+    return scale, unscalable
+
+
+def entries_from_positions(positions: Sequence[Position]) -> list[JournalEntry]:
+    """Closed positions folded into (symbol, closing day) entries, counting `outcome`.
+
+    The same grain as `ledger.journal_entries`, which builds from fills and stays the
+    path for real dollars because it is the audited one. This is the path for a view in
+    which the dollars are scaled, where fills no longer carry the number being counted.
+    """
+    buckets: dict[tuple[str, date], list[Position]] = defaultdict(list)
+    for p in positions:
+        if not p.is_open and p.closed_at is not None:
+            buckets[(p.symbol, p.closed_at)].append(p)
+
+    entries = []
+    for (symbol, day), group in buckets.items():
+        options = sum(1 for p in group if p.is_option)
+        instrument = "options" if options == len(group) else "equities" if options == 0 else "mixed"
+        entries.append(
+            JournalEntry(
+                symbol=symbol,
+                expiry=day,
+                profit=round(sum(p.outcome for p in group), 2),
+                strategy=instrument,
+                dte=max((p.held_days or 0) for p in group),
+                contracts=sum(len(p.legs) for p in group),
+                fees=round(sum(p.fees for p in group), 2),
+            )
+        )
+    entries.sort(key=lambda e: (e.expiry, e.symbol))
+    return entries
 
 
 def filter_positions(

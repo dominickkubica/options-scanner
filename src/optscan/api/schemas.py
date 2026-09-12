@@ -1224,6 +1224,21 @@ class RegimeOut(ApiModel):
     detail: str
 
 
+class ViewOut(ApiModel):
+    """A what-if view of the journal: days left out, or sizes normalized. Never saved."""
+
+    excluded: list[date] = Field(default_factory=list)
+    #: What the excluded days actually made or lost, so the banner can say so.
+    excluded_profit: float = 0.0
+    normalized: bool = False
+    #: The median 1R every trade was scaled to, in dollars.
+    normalized_risk: float | None = None
+    #: Closed positions with no R, left out of the normalized view.
+    dropped_without_r: int = 0
+    #: The real total for the same filters, before any of this.
+    actual_total: float = 0.0
+
+
 class JournalOut(ApiModel):
     """Journal style reporting over settled candidates.
 
@@ -1256,6 +1271,7 @@ class JournalOut(ApiModel):
     by_dte: list[BreakdownOut] = Field(default_factory=list)
     by_score: list[BreakdownOut] = Field(default_factory=list)
     book: BookOut | None = None
+    view: ViewOut | None = None
     reportable: bool = Field(
         description="False when the whole sample is under the cluster minimum for a claim."
     )

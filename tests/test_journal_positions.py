@@ -359,6 +359,33 @@ def test_without_a_balance_sizing_is_in_dollars_and_stock_is_never_flagged(txns,
     assert "sized too big" not in by_key(positions, "TJX|-").flags
 
 
+def test_normalizing_puts_every_trade_on_one_risk(positions) -> None:
+    """An oversized loss stopped on its rule reads as the ordinary -1R it was."""
+    from optscan.analytics.positions import entries_from_positions, normalize_to_median_risk
+
+    scale, unscalable = normalize_to_median_risk(positions, positions)
+    assert scale is not None and unscalable == 0
+    condor = by_key(positions, "QQQ|2026-09-10")
+    assert condor.scaled == pytest.approx(round(condor.r_multiple * scale, 2))
+    assert condor.outcome == condor.scaled
+    assert condor.realized == pytest.approx(-39.40), "the real result is untouched"
+
+    entries = entries_from_positions(positions)
+    assert sum(e.profit for e in entries) == pytest.approx(
+        sum(p.scaled for p in positions if not p.is_open), abs=0.02
+    )
+
+
+def test_without_normalizing_the_outcome_is_the_real_result(positions) -> None:
+    from optscan.analytics.positions import entries_from_positions
+
+    assert all(p.outcome == (p.realized or 0.0) for p in positions)
+    entries = entries_from_positions(positions)
+    assert sum(e.profit for e in entries) == pytest.approx(
+        sum(p.realized for p in positions if not p.is_open)
+    )
+
+
 def test_spy_trend_labels_need_twenty_sessions() -> None:
     closes = [
         (date(2026, 1, 1).replace(day=1 + i % 28, month=1 + i // 28), 100.0 + i) for i in range(25)

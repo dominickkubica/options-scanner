@@ -153,9 +153,15 @@ def _mount_frontend(app: FastAPI) -> None:
 
     index = dist / "index.html"
 
+    # The page shell must be revalidated on every load. Without a Cache-Control header
+    # browsers cache it heuristically, and on 2026-09-12 a rebuilt frontend stayed
+    # invisible behind yesterday's index.html, which pointed at yesterday's bundle. The
+    # bundles themselves are named by content hash, so they can be cached freely.
+    shell_headers = {"Cache-Control": "no-cache"}
+
     @app.get("/", include_in_schema=False)
     def _index() -> FileResponse:
-        return FileResponse(index)
+        return FileResponse(index, headers=shell_headers)
 
     @app.get("/{path:path}", include_in_schema=False)
     def _spa(path: str) -> FileResponse:
@@ -167,7 +173,7 @@ def _mount_frontend(app: FastAPI) -> None:
         candidate = (dist / path).resolve()
         if candidate.is_file() and _inside(candidate, dist):
             return FileResponse(candidate)
-        return FileResponse(index)
+        return FileResponse(index, headers=shell_headers)
 
 
 def _inside(candidate: Path, root: Path) -> bool:

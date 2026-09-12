@@ -52,7 +52,9 @@ from optscan.analytics.positions import (
     build_book,
     build_positions,
     cash_flows,
+    entries_from_positions,
     filter_positions,
+    normalize_to_median_risk,
     to_trader,
     trend_labels,
 )
@@ -64,6 +66,7 @@ from optscan.api.schemas import (
     JournalOut,
     RegimeOut,
     ScreenshotOut,
+    ViewOut,
 )
 from optscan.api.views import book_view, journal_view
 from optscan.config import Settings
@@ -171,6 +174,12 @@ def journal(
     strategy: Annotated[str | None, Query(description="Restrict to one strategy tag.")] = None,
     tag: Annotated[str | None, Query(description="Restrict to one mistake tag.")] = None,
     dte: Annotated[str | None, Query(description="0DTE, 1-7 DTE, 8+ DTE or stock.")] = None,
+    exclude: Annotated[
+        list[date] | None, Query(description="Closing days to leave out of this view.")
+    ] = None,
+    normalize: Annotated[
+        bool, Query(description="Scale every trade to the account's median risk.")
+    ] = False,
 ) -> JournalOut:
     """Closed trades from imported statements: the headline, and one row per position.
 
@@ -180,7 +189,31 @@ def journal(
     """
     txns, everything, balance = _load(settings)
     chosen = filter_positions(everything, symbol=symbol, strategy=strategy, tag=tag, dte_class=dte)
-    report = build_report(journal_entries([t for p in chosen for t in p.trades]))
+    actual_total = round(sum(p.realized or 0.0 for p in chosen if not p.is_open), 2)
+
+    # The what-if view. Excluded days leave with every position closed on them, and a
+    # normalized view counts each trade at the median 1R. Both only change what this
+    # response counts: nothing is written, and the trade table still shows real results.
+    days_out = sorted(set(exclude or []))
+    gone = [p for p in chosen if p.closed_at in days_out]
+    chosen = [p for p in chosen if p.closed_at not in days_out]
+    scale, unscalable = (None, 0)
+    if normalize:
+        scale, unscalable = normalize_to_median_risk(chosen, everything)
+        chosen = [p for p in chosen if p.is_open or p.scaled is not None]
+        report = build_report(entries_from_positions(chosen))
+    else:
+        # Real dollars keep the audited path, built from the fills themselves.
+        report = build_report(journal_entries([t for p in chosen for t in p.trades]))
+    view = ViewOut(
+        excluded=days_out,
+        excluded_profit=round(sum(p.realized or 0.0 for p in gone), 2),
+        normalized=normalize,
+        normalized_risk=scale,
+        dropped_without_r=unscalable,
+        actual_total=actual_total,
+    )
+
     book = build_book(
         chosen,
         everything,
@@ -193,6 +226,7 @@ def journal(
         book_view(
             book, filters=_filters(everything), stop_multiple=STOP_MULTIPLE, tags=MISTAKE_TAGS
         ),
+        view,
     )
 
 

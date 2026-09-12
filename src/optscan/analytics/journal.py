@@ -388,10 +388,9 @@ def build_report(items: Sequence) -> JournalReport:
             "one market move, so the effective sample is closer to that number than to "
             "the cluster count, and the intervals below are optimistic even so."
         )
-    notes.append(
-        "These are candidates the screen surfaced and settled at expiry, not positions "
-        "that were taken. No fill, no slippage, and no early management."
-    )
+    # No provenance note here any more. The report used to describe screen candidates
+    # settled at expiry and said so; it now reads real broker fills, and that sentence
+    # sat under the trader's own trades telling them none of it had been traded.
 
     return JournalReport(
         trades=len(settled),

@@ -97,8 +97,12 @@ export const api = {
   scan: (symbols, limit, { nearMiss = false } = {}) =>
     request(`/scan${query({ symbols, limit, near_miss: nearMiss || undefined })}`),
   gaps: (symbols) => request(`/gaps${query({ symbols })}`),
-  journal: ({ symbol, strategy, tag, dte } = {}) =>
-    request(`/journal${query({ symbol, strategy, tag, dte })}`),
+  // `exclude` is a list of closing days and `normalize` scales every trade to the
+  // median risk: a what-if view the server computes and never saves.
+  journal: ({ symbol, strategy, tag, dte, exclude, normalize } = {}) =>
+    request(
+      `/journal${query({ symbol, strategy, tag, dte, exclude, normalize: normalize || undefined })}`,
+    ),
   // What the trader adds to a position. The editor always sends every field, so a
   // cleared box clears the stored value rather than leaving the old one behind.
   saveAnnotation: (payload) =>

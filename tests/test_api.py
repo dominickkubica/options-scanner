@@ -572,6 +572,32 @@ def test_a_built_frontend_is_mounted_with_a_client_side_route_fallback(
         assert client.get("/api/health").json()["status"] == "ok"
 
 
+def test_the_page_shell_is_revalidated_on_every_load(
+    api_settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rebuilt frontend must show up on the next load, not after a hard refresh.
+
+    With no Cache-Control header browsers cache index.html heuristically, and on
+    2026-09-12 the Journal kept rendering yesterday's bundle for exactly that reason. The
+    shell is small and names the hashed bundles, so it is always revalidated; the
+    bundles themselves change name when they change and are left alone.
+    """
+    import optscan.api.app as app_module
+
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<!doctype html><title>optscan</title>", encoding="utf-8")
+    (dist / "assets" / "index-abc123.js").write_text("console.log(1)", encoding="utf-8")
+    monkeypatch.setattr(app_module, "frontend_dist", lambda: dist)
+
+    with build_client(api_settings) as client:
+        assert client.get("/").headers["cache-control"] == "no-cache"
+        assert client.get("/journal").headers["cache-control"] == "no-cache"
+        assert "no-cache" not in client.get("/assets/index-abc123.js").headers.get(
+            "cache-control", ""
+        )
+
+
 def test_the_watchlist_carries_a_quote_for_every_symbol_with_prices(tmp_settings):
     """The pinned sidebar reads price and daily move from here.
 

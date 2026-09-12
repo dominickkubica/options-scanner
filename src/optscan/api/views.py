@@ -823,9 +823,10 @@ def book_view(book, *, filters: dict[str, list[str]], stop_multiple: float, tags
     )
 
 
-def journal_view(report, book: BookOut | None = None) -> JournalOut:
+def journal_view(report, book: BookOut | None = None, view=None) -> JournalOut:
     return JournalOut(
         book=book,
+        view=view,
         trades=report.trades,
         clusters=report.clusters,
         settlement_dates=report.settlement_dates,

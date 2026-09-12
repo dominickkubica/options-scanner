@@ -20,6 +20,8 @@ import io
 from dataclasses import dataclass
 from datetime import date
 
+import pytest
+
 from optscan.analytics.journal import (
     SCORE_BANDS,
     DayPoint,
@@ -381,6 +383,37 @@ def test_vix_is_fetched_through_a_seam_and_tagged_per_day(tmp_settings, monkeypa
     positions = client.get("/api/journal").json()["book"]["positions"]
     condor = next(p for p in positions if p["key"] == CONDOR)
     assert condor["vix"] == 16.5
+
+
+def test_an_excluded_day_leaves_the_view_with_all_its_positions(tmp_settings) -> None:
+    """The what-if view: the day's positions go, the headline follows, the real total
+    stays on the banner, and nothing is stored."""
+    client = _loaded(tmp_settings)
+    real = client.get("/api/journal").json()
+    view = client.get("/api/journal", params={"exclude": "2026-09-11"}).json()
+
+    assert all(p["closed_at"] != "2026-09-11" for p in view["book"]["positions"])
+    assert view["view"]["excluded"] == ["2026-09-11"]
+    # The 9/11 condor lost 95.40; leaving it out lifts the total by that much.
+    assert view["view"]["excluded_profit"] == pytest.approx(-95.40)
+    assert view["total_profit"] == pytest.approx(real["total_profit"] + 95.40)
+    assert view["view"]["actual_total"] == pytest.approx(real["total_profit"])
+    # Nothing was saved: without the parameter the day is back.
+    assert client.get("/api/journal").json()["total_profit"] == real["total_profit"]
+
+
+def test_a_normalized_view_scales_every_trade_to_the_median_risk(tmp_settings) -> None:
+    client = _loaded(tmp_settings)
+    data = client.get("/api/journal", params={"normalize": "true"}).json()
+    view = data["view"]
+    assert view["normalized"] is True
+    assert view["normalized_risk"] > 0
+    # Each counted trade is its R times the median 1R, so the total is their sum.
+    positions = [p for p in data["book"]["positions"] if not p["is_open"]]
+    expected = sum(round(p["r_multiple"] * view["normalized_risk"], 2) for p in positions)
+    assert data["total_profit"] == pytest.approx(expected, abs=0.05)
+    # The table still reports what really happened.
+    assert all(p["realized"] is not None for p in positions)
 
 
 def test_both_exports_are_csv_files(tmp_settings) -> None:
