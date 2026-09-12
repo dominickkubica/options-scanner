@@ -129,8 +129,23 @@ class ScheduledJob:
 
 
 def python_executable() -> Path:
-    """The interpreter the task should run. Resolves to the venv when running inside it."""
+    """The interpreter this is running under. Resolves to the venv when inside it."""
     return Path(sys.executable)
+
+
+def task_executable() -> Path:
+    """The interpreter a scheduled task runs: the windowless twin of the current one.
+
+    The tasks run in the user's session, so python.exe opens a console window every
+    afternoon, and closing that stray window kills the job: the 2026-09-10 universe
+    capture died 80 symbols in with STATUS_CONTROL_C_EXIT, with no sleep, shutdown or
+    logoff anywhere in the system log. pythonw.exe runs the same code with no window to
+    close. Its output goes to data/logs; see `cli.attach_log_when_windowless`. Falls back
+    to the current interpreter where there is no pythonw, which is anywhere but Windows.
+    """
+    current = python_executable()
+    windowless = current.with_name("pythonw.exe")
+    return windowless if windowless.exists() else current
 
 
 def machine_clock_time(settings: Settings, at: time | None = None, on: date | None = None) -> str:
@@ -310,7 +325,7 @@ def register_script(settings: Settings, job: ScheduledJob) -> str:
     """
     at = machine_clock_time(settings, job.at)
     action = (
-        f"$action = New-ScheduledTaskAction -Execute {_quote(str(python_executable()))} "
+        f"$action = New-ScheduledTaskAction -Execute {_quote(str(task_executable()))} "
         f"-Argument {_quote(job.arguments)} -WorkingDirectory {_quote(str(REPO_ROOT))}"
     )
 

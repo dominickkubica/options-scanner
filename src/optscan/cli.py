@@ -681,6 +681,9 @@ def _cmd_snapshot(settings: Settings, args: argparse.Namespace) -> int:
                 f"  ok    {result.symbol:<6} {result.expiries:>3} expiries "
                 f"{result.contracts:>5} contracts{flag}"
             )
+        elif result.no_options:
+            # Not a failure, and the exit code does not count it: see SnapshotReport.
+            print(f"  none  {result.symbol:<6} no listed options in range, skipped")
         else:
             print(f"  FAIL  {result.symbol:<6} {result.error}")
 
@@ -2121,6 +2124,9 @@ def _cmd_trades(settings: Settings, args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # A windowless run (pythonw, as the scheduled tasks use) has already been given a
+    # log file by then: logging configures itself on the first import, long before
+    # this line. See `optscan.logging.attach_log_when_windowless`.
     args = build_parser().parse_args(argv)
     settings = get_settings()
     startup(settings, create_dirs=not args.check)

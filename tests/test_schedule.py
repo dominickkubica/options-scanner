@@ -130,12 +130,16 @@ class TestRegisterScript:
         assert "-ExecutionTimeLimit" in script
         assert "-MultipleInstances IgnoreNew" in script
 
-    def test_runs_the_current_interpreter(self, settings: Settings) -> None:
-        """The venv is pinned to 3.12 and the system default is not."""
+    def test_runs_the_current_interpreter_without_a_window(self, settings: Settings) -> None:
+        """The venv is pinned to 3.12 and the system default is not. And the task runs
+        its windowless twin, so there is no console for somebody to close mid-capture."""
         import sys
 
         script = register_script(settings, job_by_key(settings, "snapshot"))
-        assert str(Path(sys.executable)) in script
+        current = Path(sys.executable)
+        windowless = current.with_name("pythonw.exe")
+        expected = windowless if windowless.exists() else current
+        assert str(expected) in script
 
     def test_carries_the_job_arguments(self, settings: Settings) -> None:
         for key, expected in (
@@ -163,6 +167,32 @@ class TestRegisterScript:
             summary="it's fine",
         )
         assert "'it''s fine'" in register_script(settings, job)
+
+
+def test_a_windowless_run_writes_to_a_log_file(
+    tmp_path: Path, clean_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Under pythonw there is no console: stdout and stderr are None and the first log
+    line would raise. The job gets a file instead, and a normal run is left alone."""
+    import sys
+
+    from optscan.logging import attach_log_when_windowless
+
+    windowed = Settings(_env_file=None, data_dir=tmp_path)
+    assert attach_log_when_windowless(windowed, "snapshot") is None
+
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+    path = attach_log_when_windowless(windowed, "snapshot")
+    assert path == tmp_path / "logs" / "snapshot.log"
+    print("captured 285 of 286")
+    sys.stdout.flush()
+    handle = sys.stdout
+    monkeypatch.undo()
+    handle.close()
+    text = path.read_text(encoding="utf-8")
+    assert "===== " in text
+    assert "captured 285 of 286" in text
 
 
 class TestInstallAll:

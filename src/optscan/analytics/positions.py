@@ -16,9 +16,11 @@ unconfident, so the journal asks the trader to tag it rather than inventing a na
 trader's own tag always wins over the guess.
 
 Risk at entry is the worst the position could lose if every leg were held to expiry,
-found by evaluating the payoff at each strike. Exact for legs held together; for a
-position whose legs came and went during the day it treats them as held at once, which
-overstates the risk rather than understating it.
+found by evaluating the payoff at each strike. Exact for legs held together, and only
+computed for shapes the journal can name: a position scaled into during the day has
+each leg at its peak at a different moment, and treating those peaks as held at once
+netted three real positions into naked shorts worth $70,000 to $76,000 of "risk".
+Sizing therefore measures 1R, which the credit bounds, not risk at entry.
 
 ## R is the trader's own stop, not the theoretical maximum
 
@@ -520,7 +522,12 @@ def build_positions(trades: Sequence[Trade]) -> list[Position]:
                 closing_cash=closing_cash,
                 fees=round(sum(trade.fees for trade in group), 2),
                 units=units,
-                max_loss=risk_at_entry(legs, opening_cash),
+                # Only for a shape the journal can name. A position scaled into over the
+                # day holds each leg at its own peak at a different moment, and treating
+                # those peaks as one simultaneous position nets them into a naked short:
+                # on the real ledger three such positions came out at $70,000 to $76,000
+                # of "risk" against a median of $151. None rather than that number.
+                max_loss=risk_at_entry(legs, opening_cash) if confident else None,
                 guess=guess,
                 confident=confident,
             )
@@ -801,7 +808,13 @@ def sizing(
     cash_flows: Sequence[tuple[date, float]],
     starting_balance: float | None,
 ) -> Sizing:
-    """Risk at entry, and whether it creeps after wins or after losses.
+    """Risk per trade, measured as 1R, and whether it creeps after wins or losses.
+
+    1R rather than risk at entry. 1R is what the trader's stop puts at risk, bounded by
+    the credit (or the debit paid), so it cannot be inflated by how the legs of a
+    scaled-into position happened to overlap. Risk at entry could, and did: three
+    positions at $70,000 to $76,000 dragged "after a losing day" to $14,499 while the
+    median trade risked $151.
 
     The account is the starting balance, plus deposits, interest and fees in the
     imported statements up to that day, plus everything realized before it.
@@ -835,18 +848,19 @@ def sizing(
     after_win: list[float] = []
     after_loss: list[float] = []
     for p in positions:
-        if p.max_loss is None:
+        risk = p.risk_unit
+        if risk is None:
             continue
         account = share = None
         if use_share:
             account = starting_balance or 0.0
             account += sum(amount for day, amount in cash_flows if day <= p.opened_at)
             account += sum(value for day, value in by_day.items() if day < p.opened_at)
-            share = p.max_loss / account if account > 0 else None
+            share = risk / account if account > 0 else None
         p.account = account
-        points.append(SizingPoint(p.key, p.opened_at, p.max_loss, account, share))
+        points.append(SizingPoint(p.key, p.opened_at, risk, account, share))
 
-        value = share if use_share else p.max_loss
+        value = share if use_share else risk
         if value is None or not p.is_option:
             continue
         measured[p.key] = value

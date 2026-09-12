@@ -167,6 +167,27 @@ class TestRunSnapshot:
         assert row["symbol"] == "BADSYM"
         assert "SymbolNotFound" in row["error"]
 
+    def test_a_symbol_with_no_options_is_skipped_not_failed(
+        self, settings: Settings, frozen_snapshot, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """IONR has prices and no listed options. Counted as a failure, it marked the
+        whole universe capture failed every day while 285 of 286 symbols were captured.
+        It is still recorded, so the gap in its history is explainable."""
+        provider = FakeProvider(frozen_snapshot)
+        real = provider.get_expirations
+        monkeypatch.setattr(
+            provider, "get_expirations", lambda symbol: [] if symbol == "NOOPT" else real(symbol)
+        )
+        report = run_snapshot(
+            settings, provider=provider, now=DURING_SESSION, symbols=["NOOPT", "SPY"]
+        )
+        assert report.failed == []
+        assert [r.symbol for r in report.no_options] == ["NOOPT"]
+        assert [r.symbol for r in report.succeeded] == ["SPY"]
+        with db.session(settings.sqlite_path) as conn:
+            rows = {row["symbol"]: row for row in db.recent_runs(conn)}
+        assert "no listed expiries" in rows["NOOPT"]["error"]
+
     def test_uses_the_watchlist_when_no_symbols_are_given(
         self, settings: Settings, fake_provider: FakeProvider
     ) -> None:

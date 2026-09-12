@@ -344,7 +344,8 @@ def test_sizing_reads_the_account_as_of_each_trade(txns, positions) -> None:
     point = next(p for p in book.sizing.points if p.key == condor.key)
     # 4000 starting + 1000 deposited + 10 from the TJX round trip closed before 9/10.
     assert point.account == pytest.approx(5010.0)
-    assert point.share == pytest.approx((500 - 54.80) / 5010.0)
+    # 1R, the credit at a 2x stop, not the spread's width: what the stop puts at risk.
+    assert point.share == pytest.approx(54.80 / 5010.0)
 
 
 def test_without_a_balance_sizing_is_in_dollars_and_stock_is_never_flagged(txns, positions) -> None:
@@ -394,6 +395,30 @@ def test_without_capping_the_outcome_is_the_real_result(positions) -> None:
     assert sum(e.profit for e in entries) == pytest.approx(
         sum(p.realized for p in positions if not p.is_open)
     )
+
+
+def test_a_scaled_into_position_gets_no_risk_at_entry_and_sizes_by_1r() -> None:
+    """Legs at their peaks at different moments, treated as one position, net into a
+    naked short: three real positions read $70,000 to $76,000 of risk. Here two short
+    502 puts and one short 500 against one long 499 would read as two naked puts."""
+    layered = HEADER + "".join(
+        [
+            row("9/15/2026", "SPY", "SPY 9/15/2026 Put $500.00", "BTC", "1", "$0.10", "($10.05)"),
+            row("9/15/2026", "SPY", "SPY 9/15/2026 Put $502.00", "BTC", "2", "$0.10", "($20.05)"),
+            row("9/15/2026", "SPY", "SPY 9/15/2026 Put $499.00", "STC", "1", "$0.01", "$0.95"),
+            row("9/15/2026", "SPY", "SPY 9/15/2026 Put $500.00", "STO", "1", "$0.50", "$49.95"),
+            row("9/15/2026", "SPY", "SPY 9/15/2026 Put $502.00", "STO", "2", "$0.60", "$119.95"),
+            row("9/15/2026", "SPY", "SPY 9/15/2026 Put $499.00", "BTO", "1", "$0.30", "($30.05)"),
+        ]
+    )
+    rows = parse_rows(list(csv.DictReader(io.StringIO(layered))))
+    [position] = build_positions(build_trades(rows))
+    assert position.guess == "multi-leg"
+    assert position.max_loss is None
+    assert position.risk_unit == pytest.approx(49.95 + 119.95 - 30.05)
+
+    book = build_book([position], [position])
+    assert [p.risk for p in book.sizing.points] == [pytest.approx(139.85)]
 
 
 def test_spy_trend_labels_need_twenty_sessions() -> None:

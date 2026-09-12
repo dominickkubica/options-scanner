@@ -873,8 +873,8 @@ function SizingPanel({ sizing, onSaved }) {
           value={show(sizing.median_risk)}
           sub={
             share
-              ? "risk at entry as a share of the account"
-              : "risk at entry in dollars; set the balance to see it as a share of the account"
+              ? "1R, what your stop puts at risk, as a share of the account"
+              : "1R in dollars, what your stop puts at risk; set the balance to see it as a share of the account"
           }
         />
         <Tile

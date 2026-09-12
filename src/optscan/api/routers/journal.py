@@ -73,7 +73,7 @@ from optscan.config import Settings
 from optscan.imports import RobinhoodParseError
 from optscan.imports.robinhood import parse_rows
 from optscan.models.broker import BrokerTxn
-from optscan.storage import db, ledger
+from optscan.storage import db, ledger, vol_index
 from optscan.storage import journal_book as book_store
 from optscan.storage.vendor import daily_bars, preferred_source
 
@@ -127,7 +127,10 @@ def _load(settings: Settings) -> tuple[list[BrokerTxn], list[Position], float | 
         notes = book_store.annotations(conn)
         shots = book_store.screenshots(conn)
         times = book_store.fill_times(conn)
-        vix = book_store.vix(conn)
+        # VIX is already stored daily in vol_index for SPY's IV rank, so the journal
+        # reads it from there and the regime panel works without a separate fetch. The
+        # journal's own fetched table, the same Yahoo closes, only fills any gap.
+        vix = {**dict(vol_index.series(conn, "^VIX")), **book_store.vix(conn)}
         balance = book_store.starting_balance(conn)
         spy = _closes(conn, TREND_SYMBOL)
 

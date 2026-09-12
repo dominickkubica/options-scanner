@@ -26,7 +26,7 @@ from optscan.market_calendar import (
     session_state,
 )
 from optscan.models import ChainSnapshot, OptionChain
-from optscan.providers import MarketDataProvider, ProviderError, get_provider
+from optscan.providers import MarketDataProvider, NoDataAvailable, ProviderError, get_provider
 from optscan.providers.retry import with_retry
 from optscan.storage import db, snapshots
 
@@ -44,6 +44,9 @@ class SymbolResult:
     partial: bool = False
     path: str | None = None
     error: str | None = None
+    #: The symbol has no options to capture. Not ok, and not a failure either: nothing
+    #: went wrong and nothing will go right tomorrow.
+    no_options: bool = False
 
 
 @dataclass(slots=True)
@@ -62,7 +65,12 @@ class SnapshotReport:
 
     @property
     def failed(self) -> list[SymbolResult]:
-        return [r for r in self.results if not r.ok]
+        """Captures that went wrong. Symbols with no options are not among them."""
+        return [r for r in self.results if not r.ok and not r.no_options]
+
+    @property
+    def no_options(self) -> list[SymbolResult]:
+        return [r for r in self.results if r.no_options]
 
     @property
     def total_contracts(self) -> int:
@@ -125,7 +133,10 @@ def capture_symbol(
         max_expiries=settings.snapshot_max_expiries,
     )
     if not wanted:
-        raise ProviderError(
+        # NoDataAvailable, not a plain ProviderError: this is a symbol with no options to
+        # capture, which no retry fixes. Raised as a failure, IONR alone marked the whole
+        # 286 symbol universe capture failed every day while 285 were captured fine.
+        raise NoDataAvailable(
             f"{symbol} has no listed expiries inside {settings.snapshot_max_dte} DTE"
         )
 
@@ -281,7 +292,12 @@ def _capture_and_store(
         )
     except (ProviderError, ValueError) as error:
         message = f"{type(error).__name__}: {error}"
-        log.error("symbol capture failed", symbol=symbol, error=message)
+        # Still recorded either way, so the gap in a symbol's history is explainable.
+        no_options = isinstance(error, NoDataAvailable)
+        if no_options:
+            log.info("symbol has no options to capture", symbol=symbol, reason=str(error))
+        else:
+            log.error("symbol capture failed", symbol=symbol, error=message)
         db.record_run(
             conn,
             symbol=symbol,
@@ -292,7 +308,7 @@ def _capture_and_store(
             contracts=0,
             error=message,
         )
-        return SymbolResult(symbol=symbol, ok=False, error=message)
+        return SymbolResult(symbol=symbol, ok=False, error=message, no_options=no_options)
 
 
 def describe_state(settings: Settings, now: datetime | None = None) -> str:
