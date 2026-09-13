@@ -292,6 +292,26 @@ class TestLedgerStorage:
         assert len(trades) == 2
         assert sum(t.cash for t in trades) == pytest.approx(12.80)
 
+    def test_a_narrower_export_of_the_same_fills_inserts_nothing(self, conn):
+        """BUG-0003. The digest once hashed Process Date, Settle Date and Instrument,
+        which the parser does not require, so the same fill exported without them, or
+        with a blank Settle Date, was a new row and the spread's P/L doubled."""
+        from optscan.imports.robinhood import REQUIRED_COLUMNS
+
+        import_transactions(conn, parse_rows(SPREAD))
+        six = [{column: row[column] for column in REQUIRED_COLUMNS} for row in SPREAD]
+        blank = [{**row, "Settle Date": ""} for row in SPREAD]
+
+        assert import_transactions(conn, parse_rows(six)).rows_inserted == 0
+        assert import_transactions(conn, parse_rows(blank)).rows_inserted == 0
+        assert len(all_transactions(conn)) == 4
+
+    def test_a_row_missing_a_required_column_is_refused(self):
+        """The API's import skips parse_file's header check, so parse_rows checks too."""
+        without_amount = {k: v for k, v in SPREAD[0].items() if k != "Amount"}
+        with pytest.raises(RobinhoodParseError, match="missing expected columns"):
+            parse_rows([without_amount])
+
 
 class TestJournalEntries:
     """The grain the journal reports on, which is not the grain the ledger stores."""

@@ -1,23 +1,86 @@
 """SQLite: watchlist, and a manifest of every snapshot run.
 
-Migrations are a plain ordered list of SQL statements guarded by user_version. No
-migration framework, because the schema is small, local, and single writer. Each
-migration must be additive: this database will be years old before the tool is done.
+Migrations are a plain ordered list guarded by user_version, each applied in one
+transaction. No migration framework, because the schema is small, local, and single
+writer. Each migration must be additive: this database will be years old before the
+tool is done. All but one are SQL. Migration 13 is a Python function, because it
+re-keys stored rows with a hash SQLite cannot compute.
 """
 
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterable, Iterator
+from collections import Counter
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from pathlib import Path
 
 from optscan.logging import get_logger
+from optscan.models.broker import txn_digest
+from optscan.tickers import normalize_ticker
 
 log = get_logger("optscan.storage.db")
 
-MIGRATIONS: tuple[str, ...] = (
+
+def _rekey_broker_ledger(conn: sqlite3.Connection) -> None:
+    """Migration 13: re-key the broker ledger with the six column digest (BUG-0003).
+
+    The old digest hashed nine raw columns, three of them optional, so an export shaped
+    differently gave a held fill a new identity and an overlapping import inserted it
+    again. Every parsed column is in the table, so each row is re-keyed from them by
+    the importer's own `txn_digest`. Occurrence indexes are reassigned in import order
+    within each new digest, and fill times, which are keyed on the row's identity,
+    follow their rows.
+    """
+    rows = conn.execute(
+        "SELECT id, source, digest, dup_index, activity_date, description, trans_code, "
+        "quantity, is_short, price, amount FROM broker_txn ORDER BY id"
+    ).fetchall()
+    seen: Counter[tuple[str, str]] = Counter()
+    moved: dict[tuple[str, str, int], tuple[str, int]] = {}
+    updates: list[tuple[str, int, int]] = []
+    for row in rows:
+        (ident, source, old_digest, old_index, activity, description, code) = row[:7]
+        quantity, is_short, price, amount = row[7:]
+        digest = txn_digest(
+            source,
+            activity_date=date.fromisoformat(activity),
+            description=description,
+            trans_code=code,
+            quantity=quantity,
+            is_short=bool(is_short),
+            price=price,
+            amount=amount,
+        )
+        index = seen[(source, digest)]
+        seen[(source, digest)] += 1
+        moved[(source, old_digest, old_index)] = (digest, index)
+        updates.append((digest, index, ident))
+
+    # Rebuilt rather than updated through: rows passing each other mid-update would trip
+    # the unique index on a clash that does not exist once every row is written.
+    conn.execute("DROP INDEX idx_broker_txn_identity")
+    conn.executemany("UPDATE broker_txn SET digest = ?, dup_index = ? WHERE id = ?", updates)
+    conn.execute(
+        "CREATE UNIQUE INDEX idx_broker_txn_identity ON broker_txn (source, digest, dup_index)"
+    )
+
+    times = conn.execute(
+        "SELECT source, digest, dup_index, executed_at, origin, recorded_at FROM fill_time"
+    ).fetchall()
+    conn.execute("DELETE FROM fill_time")
+    conn.executemany(
+        "INSERT INTO fill_time (source, digest, dup_index, executed_at, origin, recorded_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (source, *moved.get((source, digest, index), (digest, index)), *rest)
+            for source, digest, index, *rest in times
+        ],
+    )
+
+
+MIGRATIONS: tuple[str | Callable[[sqlite3.Connection], None], ...] = (
     # 1
     """
     CREATE TABLE watchlist (
@@ -471,6 +534,9 @@ MIGRATIONS: tuple[str, ...] = (
         PRIMARY KEY (index_symbol, session_date)
     );
     """,
+    # 13: re-key the broker ledger on the six columns every export carries. A function
+    # rather than SQL; the reasoning is on it.
+    _rekey_broker_ledger,
 )
 
 
@@ -502,9 +568,23 @@ def migrate(conn: sqlite3.Connection) -> int:
     for version, script in enumerate(MIGRATIONS, start=1):
         if version <= current:
             continue
-        conn.executescript(script)
-        conn.execute(f"PRAGMA user_version = {version}")
-        conn.commit()
+        # One transaction per migration. For SQL it is carried in the script text:
+        # `executescript` commits whatever is pending and then runs in autocommit, so a
+        # BEGIN issued beforehand is discarded and a script that died halfway left its
+        # first tables committed under the old user_version; every later open replayed
+        # it and failed on "already exists". The rollback is not automatic either.
+        try:
+            if callable(script):
+                conn.execute("BEGIN")
+                script(conn)
+                conn.execute(f"PRAGMA user_version = {version}")
+                conn.commit()
+            else:
+                conn.executescript(f"BEGIN;\n{script}\nPRAGMA user_version = {version};\nCOMMIT;")
+        except BaseException:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
         log.info("applied migration", version=version)
         current = version
     return current
@@ -531,6 +611,10 @@ def add_symbol(conn: sqlite3.Connection, symbol: str, note: str | None = None) -
     normalized = symbol.strip().upper()
     if not normalized:
         raise ValueError("symbol must not be blank")
+    # The one place every watchlist symbol is written, so the one place the ticker rule
+    # is enforced. A stored symbol becomes a snapshot write path, and the check used to
+    # live only in the dashboard route, so `optscan watchlist add` bypassed it.
+    normalized = normalize_ticker(normalized)
     cursor = conn.execute(
         "INSERT OR IGNORE INTO watchlist (symbol, added_at, note) VALUES (?, ?, ?)",
         (normalized, datetime.now(UTC).isoformat(), note),

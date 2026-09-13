@@ -46,7 +46,6 @@ legs missing from it, which is worse than a crash because nothing would ever say
 from __future__ import annotations
 
 import csv
-import hashlib
 import re
 from collections import Counter
 from collections.abc import Iterable, Iterator
@@ -55,7 +54,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from optscan.models.broker import OPTION_MULTIPLIER, BrokerTxn, Effect, TxnKind
+from optscan.models.broker import OPTION_MULTIPLIER, BrokerTxn, Effect, TxnKind, txn_digest
 from optscan.models.enums import Right
 from optscan.models.opportunity import Action
 
@@ -222,29 +221,6 @@ def _fee(
     return round(gross - abs(amount), 4) if amount > 0 else round(abs(amount) - gross, 4)
 
 
-def _digest(source: str, row: dict[str, Any]) -> str:
-    """Stable identity for a row's content.
-
-    Not unique on its own: two identical fills on one day are two trades. The ledger
-    pairs this with an occurrence index. See `storage/ledger.py`.
-    """
-    payload = "|".join(
-        str(row.get(column, "") or "").strip()
-        for column in (
-            "Activity Date",
-            "Process Date",
-            "Settle Date",
-            "Instrument",
-            "Description",
-            "Trans Code",
-            "Quantity",
-            "Price",
-            "Amount",
-        )
-    )
-    return hashlib.sha256(f"{source}|{payload}".encode()).hexdigest()[:32]
-
-
 def _is_footer(row: dict[str, Any]) -> bool:
     """The disclaimer paragraph Robinhood appends, and any wholly blank row."""
     code = (row.get("Trans Code") or "").strip()
@@ -260,13 +236,20 @@ def parse_rows(
     *,
     source_file: str | None = None,
 ) -> list[BrokerTxn]:
-    """Parse already-read CSV rows. Pure: no file access, no database, no clock."""
+    """Parse already-read CSV rows. Pure: no file access, no database, no clock.
+
+    Checks the required columns on every row itself, because the API's import hands
+    rows straight here without passing through `parse_file`'s header check.
+    """
     seen: Counter[str] = Counter()
     out: list[BrokerTxn] = []
 
     for index, raw in enumerate(rows, start=2):  # 2 because row 1 is the header
         if _is_footer(raw):
             continue
+        missing = [column for column in REQUIRED_COLUMNS if column not in raw]
+        if missing:
+            raise RobinhoodParseError(f"row {index} is missing expected columns {missing}")
 
         code = (raw.get("Trans Code") or "").strip()
         description = (raw.get("Description") or "").strip()
@@ -282,7 +265,19 @@ def parse_rows(
         parsed = _classify(code, description, index)
         kind = parsed.kind
 
-        digest = _digest(SOURCE, raw)
+        # Identity over the six required columns as parsed, never the optional three:
+        # hashing those gave one fill a different identity per export shape, and an
+        # overlapping import then inserted it twice (BUG-0003).
+        digest = txn_digest(
+            SOURCE,
+            activity_date=activity,
+            description=description,
+            trans_code=code,
+            quantity=quantity,
+            is_short=is_short,
+            price=abs(price) if price is not None else None,
+            amount=amount,
+        )
         dup_index = seen[digest]
         seen[digest] += 1
 

@@ -14,47 +14,50 @@ name = "optscan"
 dynamic = ["version"]
 description = "Options selling scanner and dashboard"
 requires-python = ">=3.12,<3.13"
+# Every range is capped below the next major of the version the suite last passed on,
+# so a reinstall cannot silently pick up a release nobody tested. The exact tested tree,
+# transitive dependencies included, is constraints.txt; the README installs against it.
 dependencies = [
-    "pydantic>=2.7",
-    "pydantic-settings>=2.3",
-    "structlog>=24.1",
+    "pydantic>=2.7,<3",
+    "pydantic-settings>=2.3,<3",
+    "structlog>=24.1,<27",
     # Phase 1: data layer
-    "yfinance>=0.2.40",
-    "pandas>=2.2",
-    "pyarrow>=16.0",
-    "duckdb>=1.0",
-    "pandas-market-calendars>=4.4",
+    "yfinance>=0.2.40,<2",
+    "pandas>=2.2,<4",
+    "pyarrow>=16.0,<26",
+    "duckdb>=1.0,<2",
+    "pandas-market-calendars>=4.4,<6",
     # Phase 2: analytics. scipy is used only for root finding in the vol solver.
-    "scipy>=1.13",
+    "scipy>=1.13,<2",
     # Phase 3: screener config.
-    "pyyaml>=6.0",
+    "pyyaml>=6.0,<7",
     # Phase 4: dashboard API.
-    "fastapi>=0.115",
-    "uvicorn[standard]>=0.30",
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.30,<1",
     # Phase 5: the Tradier adapter. Tradier publishes no SDK, so this is how the vendor
     # is reached. Already present transitively for the API tests; named here because a
     # runtime dependency that only arrives through a dev extra is a broken install
     # waiting for the first person who does not install the dev extra.
-    "httpx>=0.27",
+    "httpx>=0.27,<1",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.2",
-    "pytest-cov>=5.0",
-    "ruff>=0.5",
-    "pre-commit>=3.7",
+    "pytest>=8.2,<10",
+    "pytest-cov>=5.0,<8",
+    "ruff>=0.5,<1",
+    "pre-commit>=3.7,<5",
     # Independent oracle for the greeks and vol tests. Not a runtime dependency:
     # our pricing is our own, and vollib exists to disagree with it if we are wrong.
-    "vollib>=1.0.11",
+    "vollib>=1.0.11,<2",
     # Exercises the API without a running server.
-    "httpx>=0.27",
+    "httpx>=0.27,<1",
 ]
 # Fill times from Robinhood's order history (`optscan import-fill-times`). Optional: an
 # unofficial client, only needed by someone who imports times, and only ever run by the
 # trader in their own terminal because it prompts for their login.
 robinhood = [
-    "robin_stocks>=3.0",
+    "robin_stocks>=3.0,<4",
 ]
 
 [project.scripts]

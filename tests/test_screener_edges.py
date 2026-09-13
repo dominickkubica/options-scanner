@@ -277,8 +277,8 @@ class TestScoringBranches:
                 "events": EventWindow(earnings=date(2026, 8, 1)),
             }
         )
-        clean = score_event_risk(candidate(), analysis, analysis.expiries[0])
-        dirty = score_event_risk(candidate(), with_earnings, with_earnings.expiries[0])
+        clean = score_event_risk(candidate(), analysis, analysis.expiries[0], wide_config)
+        dirty = score_event_risk(candidate(), with_earnings, with_earnings.expiries[0], wide_config)
         assert clean == 1.0
         assert dirty == pytest.approx(0.4)
 

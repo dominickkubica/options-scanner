@@ -222,6 +222,8 @@ def record_alert(
             (position_id, kind, datetime.now(UTC).isoformat(), detail),
         )
     except sqlite3.IntegrityError:
+        # The failed INSERT left a transaction open holding the write lock.
+        conn.rollback()
         return False
     conn.commit()
     return True

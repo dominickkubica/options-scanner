@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -38,6 +39,31 @@ class TestMigrations:
         connection = db.connect(nested)
         connection.close()
         assert nested.exists()
+
+    def test_a_migration_that_fails_halfway_is_rolled_back_whole(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """BUG-0007. Before, the first two tables stayed committed under the old
+        user_version, and every later open replayed the script and died on
+        "table half_a already exists"."""
+        path = tmp_path / "test.sqlite"
+        applied = db.MIGRATIONS
+        broken = "CREATE TABLE half_a (x); CREATE TABLE half_b (x); SELECT * FROM missing;"
+        monkeypatch.setattr(db, "MIGRATIONS", (*applied, broken))
+        with pytest.raises(sqlite3.OperationalError):
+            db.connect(path)
+
+        monkeypatch.setattr(db, "MIGRATIONS", applied)
+        connection = db.connect(path)
+        try:
+            tables = {
+                row[0]
+                for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            assert not {"half_a", "half_b"} & tables
+            assert connection.execute("PRAGMA user_version").fetchone()[0] == len(applied)
+        finally:
+            connection.close()
 
 
 class TestWatchlist:

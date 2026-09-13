@@ -32,6 +32,7 @@ from optscan.catalogue import SymbolEntry, build_catalogue, search
 from optscan.config import Settings
 from optscan.logging import get_logger
 from optscan.storage import db
+from optscan.tickers import normalize_ticker
 
 router = APIRouter(tags=["catalogue"])
 
@@ -239,12 +240,13 @@ def add_to_watchlist(symbol: str, settings: SettingsDep) -> WatchlistChangeOut:
 
     Idempotent: adding one already there reports `changed: false`.
     """
-    ticker = symbol.strip().upper()
-    if not ticker or not ticker.replace(".", "").replace("-", "").isalnum():
+    try:
+        ticker = normalize_ticker(symbol)
+    except ValueError:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"{symbol!r} is not a ticker.",
-        )
+        ) from None
 
     with db.session(settings.sqlite_path) as conn:
         added = db.add_symbol(conn, ticker, note="added from the dashboard")

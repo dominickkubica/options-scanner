@@ -1,7 +1,8 @@
 """Entry rules, and the equivalence that keeps three implementations honest.
 
 The arithmetic in `rules.py` is a rolling restatement of the scalar arithmetic in
-`levels.py`, which is itself already pinned against the frontend's `compute.js`. Three
+`levels.py`, which is itself pinned against the frontend's `compute.js` by
+test_indicator_golden.py and frontend/tests/compute.test.js. Three
 implementations of one formula is a standing hazard: the day they drift, the chart draws
 one line, the alert fires on a second and the backtest measures a third, and nothing
 fails loudly.

@@ -30,11 +30,15 @@ class EventWindow:
     ex_dividend: date | None = None
     dividend_amount: float | None = None
 
-    def earnings_before(self, expiry: date, asof: date) -> bool:
-        """True when an earnings report falls in the life of the position."""
+    def earnings_before(self, expiry: date, asof: date, *, buffer_days: int = 0) -> bool:
+        """True when an earnings report falls in the life of the position.
+
+        `buffer_days` extends the window past expiry: an expiry that lands just before a
+        report still trades in that report's volatility.
+        """
         if self.earnings is None:
             return False
-        return asof <= self.earnings <= expiry
+        return asof <= self.earnings <= expiry + timedelta(days=buffer_days)
 
     def ex_dividend_before(self, expiry: date, asof: date) -> bool:
         if self.ex_dividend is None:
@@ -102,16 +106,25 @@ def assess_events(
     right: Right | str | None = None,
     extrinsic_value: float | None = None,
     assignment_window_days: int = 5,
+    earnings_buffer_days: int = 0,
 ) -> EventRisk:
-    """Everything scheduled between now and expiry, and what it implies."""
+    """Everything scheduled between now and expiry, and what it implies.
+
+    `earnings_buffer_days` is screen.yaml's `earnings_buffer_days`. It was once read only
+    by a function nothing called, so setting it changed no scan output at all.
+    """
     reasons: list[str] = []
 
-    has_earnings = events.earnings_before(expiry, asof)
+    has_earnings = events.earnings_before(expiry, asof, buffer_days=earnings_buffer_days)
     days_to_earnings = events.days_to_earnings(asof)
     if has_earnings:
+        where = (
+            f"falls before the {expiry} expiry"
+            if events.earnings_before(expiry, asof)
+            else f"falls within {earnings_buffer_days} days after the {expiry} expiry"
+        )
         reasons.append(
-            f"earnings on {events.earnings} falls before the {expiry} expiry, "
-            "so elevated IV here is priced, not mispriced"
+            f"earnings on {events.earnings} {where}, so elevated IV here is priced, not mispriced"
         )
 
     has_ex_div = events.ex_dividend_before(expiry, asof)
@@ -155,7 +168,6 @@ def excludes_earnings(
 
     The buffer extends the exclusion past expiry, for people who do not want to be
     holding into the week of a report even if the position technically expires first.
+    The same window `assess_events` uses, so the two cannot disagree.
     """
-    if events.earnings is None:
-        return True
-    return not (asof <= events.earnings <= expiry + timedelta(days=buffer_days))
+    return not events.earnings_before(expiry, asof, buffer_days=buffer_days)

@@ -8,7 +8,7 @@ because it is invisible once it is wrong.
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 
 import pytest
 
@@ -472,3 +472,25 @@ class TestAlertSuppression:
 
         with db.session(path) as conn:
             assert store.already_alerted(conn, identifier, "tested") is True
+
+    def test_a_repeat_alert_releases_the_write_lock(self, conn) -> None:
+        """BUG-0008. The refused INSERT left a transaction open, so every other writer
+        on the database waited out its busy timeout until this connection closed."""
+        stored = store.add_position(conn, position())
+        store.record_alert(conn, stored.id, "tested")
+        assert store.record_alert(conn, stored.id, "tested") is False
+        assert not conn.in_transaction
+
+
+class TestCloseTime:
+    """BUG-0009. `model_copy` skips validation, so close() checks the time itself."""
+
+    def test_a_naive_close_time_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="timezone aware"):
+            position().close(200.0, when=datetime(2026, 7, 20, 16, 0))
+
+    def test_an_aware_close_time_is_kept_in_utc(self) -> None:
+        new_york = timezone(timedelta(hours=-4))
+        closed = position().close(200.0, when=datetime(2026, 7, 20, 16, 0, tzinfo=new_york))
+        assert closed.closed_at == datetime(2026, 7, 20, 20, 0, tzinfo=UTC)
+        assert closed.closed_at.utcoffset() == timedelta(0)

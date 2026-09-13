@@ -85,7 +85,7 @@ ignore it before it has ever been right.
 
 ```bash
 py -3.12 -m venv venv
-venv\Scripts\python -m pip install -e ".[dev]"
+venv\Scripts\python -m pip install -e ".[dev]" -c constraints.txt
 copy .env.example .env
 venv\Scripts\pre-commit install
 npm --prefix frontend install

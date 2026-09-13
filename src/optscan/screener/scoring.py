@@ -148,6 +148,7 @@ def score_event_risk(
     candidate: Candidate,
     analysis: SymbolAnalysis,
     expiry: ExpiryAnalysis,
+    config: ScreenConfig,
 ) -> float:
     """1.0 for a clean window, less for anything scheduled inside it.
 
@@ -156,7 +157,7 @@ def score_event_risk(
     Reaching here at all means the earnings filter was turned off, so the position is
     scored down rather than excluded.
     """
-    risk = _event_risk(candidate, analysis, expiry)
+    risk = _event_risk(candidate, analysis, expiry, config)
     score = 1.0
     if risk.has_earnings:
         score -= 0.6
@@ -197,14 +198,14 @@ def score_candidate(
     config: ScreenConfig,
 ) -> Opportunity:
     """Score a candidate and package it as an Opportunity."""
-    risk = _event_risk(candidate, analysis, expiry)
+    risk = _event_risk(candidate, analysis, expiry, config)
 
     components = ScoreComponents(
         premium=score_premium(candidate, config),
         iv_rank=score_iv_rank(analysis),
         liquidity=candidate.liquidity_score if candidate.liquidity_score is not None else 0.0,
         probability=score_probability(candidate, config),
-        event_risk=score_event_risk(candidate, analysis, expiry),
+        event_risk=score_event_risk(candidate, analysis, expiry, config),
         fetched_at=analysis.asof,
         source=analysis.source,
     )

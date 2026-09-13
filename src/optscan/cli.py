@@ -20,7 +20,28 @@ from optscan.screener.config import ScreenConfig
 #: Commands whose runs are logged, so `optscan health` can say whether the work has
 #: happened. Exactly the scheduled jobs: logging `status` or `config` would bury the
 #: rows that matter under rows nobody asked about.
-TRACKED_JOBS = frozenset({"snapshot", "record", "resolve", "backup", "manage", "signals"})
+TRACKED_JOBS = frozenset(
+    {"snapshot", "capture", "prices", "record", "resolve", "backup", "manage", "signals"}
+)
+
+
+def job_key(args: argparse.Namespace) -> str | None:
+    """The scheduled job a command line belongs to, or None when it is not one.
+
+    Not always the verb. The universe capture runs `snapshot --universe`, and logging
+    it under the verb filed its success as the watchlist capture's: a missed 15:45
+    watchlist run, the one loss this project cannot buy back, read as OK because the
+    15:50 universe run had written a row. `prices` runs `prices sync` and was never
+    logged at all, so health called a working job missing every day.
+    `tests/test_job_keys.py` parses every scheduled job's own command line and checks
+    it lands on that job's key, so the two cannot drift apart again.
+    """
+    if args.command == "snapshot":
+        return "capture" if getattr(args, "universe", None) is not None else "snapshot"
+    if args.command == "prices":
+        return "prices" if getattr(args, "prices_command", None) == "sync" else None
+    return args.command if args.command in TRACKED_JOBS else None
+
 
 #: Where the signal listing changes colour. Presentation only: the severities
 #: themselves live in `analytics.signals`, and these mirror them rather than deciding
@@ -700,7 +721,13 @@ def _cmd_watchlist(settings: Settings, args: argparse.Namespace) -> int:
 
         if args.watchlist_command == "add":
             for symbol in args.symbols:
-                added = db.add_symbol(conn, symbol)
+                try:
+                    added = db.add_symbol(conn, symbol)
+                except ValueError as error:
+                    # Refused rather than stored: a stored symbol becomes a snapshot
+                    # write path, and the capture job would write wherever it pointed.
+                    print(f"refused: {error}")
+                    return 1
                 print(f"{'added' if added else 'already present'}: {symbol.upper()}")
         elif args.watchlist_command == "remove":
             for symbol in args.symbols:
@@ -1342,13 +1369,31 @@ def _print_backtest(console, strategy, result, *, show_trades: bool) -> None:
         print(console.warn(note))
 
 
-def _cmd_signals(settings: Settings, args: argparse.Namespace) -> int:
+def _print_recent_signals(settings: Settings, days: int) -> int:
     from datetime import UTC, datetime, timedelta
 
-    from optscan.console import Console
-    from optscan.jobs.signals import DEFAULT_MIN_SEVERITY, run_scan
     from optscan.storage import db
     from optscan.storage import signals as store
+
+    since = (datetime.now(UTC) - timedelta(days=days)).date()
+    with db.session(settings.sqlite_path) as conn:
+        rows = store.recent_signals(conn, since=since)
+    if not rows:
+        print(f"Nothing has fired since {since}.")
+        return 0
+    for row in rows:
+        print(
+            f"  {row['session']}  [{row['severity']}] {row['symbol']:<6} "
+            f"{row['kind']:<26} {row['message']}"
+        )
+    print()
+    print(f"{len(rows)} signals since {since}.")
+    return 0
+
+
+def _cmd_signals(settings: Settings, args: argparse.Namespace) -> int:
+    from optscan.console import Console
+    from optscan.jobs.signals import DEFAULT_MIN_SEVERITY, run_scan
 
     console = Console.for_stream(settings.color_mode)
     threshold = args.min_severity if args.min_severity is not None else DEFAULT_MIN_SEVERITY
@@ -1357,22 +1402,16 @@ def _cmd_signals(settings: Settings, args: argparse.Namespace) -> int:
     # than a separate one because the question "what fired" and the question "what is
     # firing" are the same question a day apart.
     if args.recent is not None:
-        since = (datetime.now(UTC) - timedelta(days=args.recent)).date()
-        with db.session(settings.sqlite_path) as conn:
-            rows = store.recent_signals(conn, since=since)
-        if not rows:
-            print(f"Nothing has fired since {since}.")
-            return 0
-        for row in rows:
-            print(
-                f"  {row['session']}  [{row['severity']}] {row['symbol']:<6} "
-                f"{row['kind']:<26} {row['message']}"
-            )
-        print()
-        print(f"{len(rows)} signals since {since}.")
-        return 0
+        return _print_recent_signals(settings, args.recent)
 
-    symbols = _signal_symbols(settings, args)
+    from optscan.universe import UniverseError
+
+    try:
+        symbols = _signal_symbols(settings, args)
+    except UniverseError as error:
+        # An unknown group names the ones that exist, rather than a traceback.
+        print(console.bad(str(error)))
+        return 1
     if not symbols:
         print(
             console.warn(
@@ -1432,8 +1471,10 @@ def _signal_symbols(settings: Settings, args: argparse.Namespace) -> list[str]:
     if args.group:
         from optscan.universe import load_universe
 
-        groups = load_universe(settings)
-        return list(groups.get(args.group, ()))
+        # `load_universe` takes a path and returns a Universe whose groups are read
+        # through `.symbols`. The earlier `load_universe(settings).get(...)` raised
+        # AttributeError on every run with --group, so the flag never worked once.
+        return load_universe().symbols(args.group)
 
     from optscan.storage import db
 
@@ -2163,14 +2204,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     }
     handler = handlers[args.command]
 
-    if args.command not in TRACKED_JOBS:
+    key = job_key(args)
+    if key is None:
         return handler(settings, args)
 
     # Logged whoever started it. A hole filled by hand is filled, so the health report
     # asks whether the work happened rather than who asked for it.
     from optscan.storage import jobs as job_log
 
-    with job_log.track(settings.sqlite_path, args.command) as run:
+    with job_log.track(settings.sqlite_path, key) as run:
         code = handler(settings, args)
         if code != 0:
             # A non-zero return is a failure the job reported about itself, and it has

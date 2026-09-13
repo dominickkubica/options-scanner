@@ -253,6 +253,27 @@ class TestDeltas:
                     f"version {payload['version']} arrived as a delta after a gap"
                 )
 
+    def test_an_overflow_on_the_cycle_itself_still_forces_a_full_resync(
+        self, hub: LiveHub, frozen_snapshot: ChainSnapshot
+    ) -> None:
+        """BUG-0006. The test above only ever overflows on the status offer, because each
+        tick queues exactly two events. Here the cycle offer is the one that overflows,
+        and the resync it asked for used to be wiped on the very next line."""
+        expiry = frozen_snapshot.expiries[0]
+        sub = hub.subscribe("SPY", expiry)
+        hub.tick()
+        while not sub.events.full():
+            sub.events.put_nowait(("filler", {}))
+
+        hub._feeds[("SPY", expiry)].next_due = 0.0
+        hub.tick()
+        assert sub.needs_full, "the resync the overflow asked for was erased"
+
+        drain(sub)
+        hub._feeds[("SPY", expiry)].next_due = 0.0
+        hub.tick()
+        assert cycles(sub)[0]["full"] is True
+
 
 class TestFailures:
     def test_a_failed_fetch_never_becomes_a_version(
@@ -460,6 +481,27 @@ class TestStatus:
 
         assert hub._thread is None
         hub.stop()
+
+    def test_a_stopped_hub_never_builds_a_fresh_provider(self, hub: LiveHub) -> None:
+        """SEC-0004. A poller that outlived stop()'s join found no provider and built a
+        new credentialed client that nothing would ever close."""
+        from optscan.providers import ProviderError
+
+        hub.stop()
+        with pytest.raises(ProviderError, match="stopped"):
+            hub._get_provider()
+
+    def test_the_loop_closes_the_provider_on_its_way_out(
+        self, hub: LiveHub, provider: MovingProvider
+    ) -> None:
+        """What stop() leaves to the poller when its join gives up on a slow call."""
+        closed: list[bool] = []
+        provider.close = lambda: closed.append(True)  # type: ignore[method-assign]
+        hub._get_provider()
+        hub._running, hub._stopped = False, True
+        hub._loop()
+        assert closed == [True]
+        assert hub._provider is None
 
     def test_the_delay_is_reported_rather_than_left_to_be_inferred(
         self, tmp_path, provider: MovingProvider

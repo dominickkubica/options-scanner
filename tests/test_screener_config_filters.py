@@ -341,6 +341,18 @@ class TestEventFilter:
         )
         assert result.reason is Rejection.EARLY_ASSIGNMENT_RISK
 
+    def test_the_configured_buffer_reaches_the_filter(self) -> None:
+        """BUG-0010. Earnings three days after expiry pass with no buffer and are
+        excluded with a seven day one; before, the key changed nothing."""
+        expiry = FakeAnalysis().expiries[0].expiry
+        report = date.fromordinal(expiry.toordinal() + 3)
+        analysis = FakeAnalysis(events=EventWindow(earnings=report))
+        assert check_events(candidate(), analysis, analysis.expiries[0], ScreenConfig()).passed
+
+        buffered = ScreenConfig.model_validate({"filters": {"events": {"earnings_buffer_days": 7}}})
+        result = check_events(candidate(), analysis, analysis.expiries[0], buffered)
+        assert result.reason is Rejection.EARNINGS_BEFORE_EXPIRY
+
 
 class TestEvaluateAndTally:
     def test_evaluate_reports_the_first_and_most_decisive_failure(self) -> None:

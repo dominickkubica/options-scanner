@@ -134,14 +134,17 @@ def logged(
     pop: float | None = 0.80,
     finished_beyond: bool | None = False,
     scan_id: int = 1,
+    settlement_price: float | None = 750.0,
+    strategy: str = "put_credit_spread",
 ) -> LoggedOpportunity:
+    """A 700 put short for a 5.00 credit, so the breakeven is 695."""
     return LoggedOpportunity(
         id=identifier,
         scan_id=scan_id,
         recorded_at=datetime(2026, 7, 1, tzinfo=UTC),
         session_date=date(2026, 7, 1),
         symbol=symbol,
-        strategy="put_credit_spread",
+        strategy=strategy,
         expiry=expiry,
         dte=51,
         underlying_price=740.0,
@@ -158,7 +161,7 @@ def logged(
         liquidity_score=0.9,
         score=score,
         outcome="expired_worthless" if profit and profit > 0 else "breached_loss",
-        settlement_price=750.0,
+        settlement_price=settlement_price,
         finished_beyond=finished_beyond,
         profit=profit,
         profit_fraction=1.0 if profit and profit > 0 else -1.0,
@@ -228,13 +231,15 @@ class TestBuckets:
 
 
 class TestCalibration:
+    """The logged position is a 700 put short for 5.00, so its breakeven is 695."""
+
     def test_a_perfectly_calibrated_model_has_no_error(self) -> None:
-        """80 percent predicted, 80 of 100 finish clear."""
+        """80 percent predicted, 80 of 100 settle clear of the breakeven."""
         items = [
             logged(
                 i,
                 pop=0.80,
-                finished_beyond=i >= 80,
+                settlement_price=650.0 if i >= 80 else 750.0,
                 expiry=date(2026, 8, 1) + timedelta(days=i),
             )
             for i in range(100)
@@ -253,7 +258,7 @@ class TestCalibration:
             logged(
                 i,
                 pop=0.90,
-                finished_beyond=i >= 70,
+                settlement_price=650.0 if i >= 70 else 750.0,
                 expiry=date(2026, 8, 1) + timedelta(days=i),
             )
             for i in range(100)
@@ -262,12 +267,14 @@ class TestCalibration:
         assert band.error > 0.15
 
     def test_calibration_is_measured_on_the_event_not_on_profit(self) -> None:
-        """A position can make money after being breached. Scoring on profit would let
-        a model be wrong about where price finished and still look calibrated."""
+        """The profit column is not what is scored. Every row here is marked a win yet
+        settled at 690, under the 695 breakeven, so the model was wrong about the event
+        it forecast and must not look calibrated."""
         items = [
             logged(
                 i,
                 pop=0.90,
+                settlement_price=690.0,
                 finished_beyond=True,
                 profit=100.0,
                 expiry=date(2026, 8, 1) + timedelta(days=i),
@@ -277,6 +284,30 @@ class TestCalibration:
         band = next(p for p in probability_calibration(items) if p.low == 0.90)
         assert band.actual == pytest.approx(0.0)
         assert band.error == pytest.approx(0.90)
+
+    def test_a_breached_strike_that_cleared_the_breakeven_is_a_hit(self) -> None:
+        """BUG-0001. Settling at 697 breaches the 700 strike but clears the 695
+        breakeven, which is exactly what the forecast said would happen. Scored against
+        the strike, as it once was, every such row counted as the model being wrong."""
+        items = [
+            logged(
+                i,
+                pop=0.80,
+                settlement_price=697.0,
+                finished_beyond=True,
+                expiry=date(2026, 8, 1) + timedelta(days=i),
+            )
+            for i in range(50)
+        ]
+        band = next(p for p in probability_calibration(items) if p.low == 0.80)
+        assert band.actual == pytest.approx(1.0)
+        assert brier_score(items) == pytest.approx((0.80 - 1.0) ** 2)
+
+    def test_a_two_sided_forecast_is_not_scored_against_one_side(self) -> None:
+        """A condor's POP covers both sides, and the logged row keeps only the put."""
+        condors = [logged(i, strategy="iron_condor") for i in range(20)]
+        assert probability_calibration(condors) == []
+        assert brier_score(condors) is None
 
     def test_brier_rewards_confident_and_correct(self) -> None:
         confident = [logged(i, pop=0.99, finished_beyond=False) for i in range(50)]

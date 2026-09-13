@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
-from datetime import date, timedelta
 from enum import StrEnum
 
 from optscan.analytics.events import assess_events
@@ -170,7 +169,7 @@ def check_events(
 ) -> FilterResult:
     """Earnings inside the position's life, and dividend driven assignment risk."""
     rules = config.filters.events
-    risk = _event_risk(candidate, analysis, expiry)
+    risk = _event_risk(candidate, analysis, expiry, config)
 
     if rules.exclude_earnings and risk.has_earnings:
         return _fail(Rejection.EARNINGS_BEFORE_EXPIRY)
@@ -179,8 +178,17 @@ def check_events(
     return PASSED
 
 
-def _event_risk(candidate: Candidate, analysis: SymbolAnalysis, expiry: ExpiryAnalysis):
-    """Event assessment for the position's worst short call, if it has one."""
+def _event_risk(
+    candidate: Candidate,
+    analysis: SymbolAnalysis,
+    expiry: ExpiryAnalysis,
+    config: ScreenConfig,
+):
+    """Event assessment for the position's worst short call, if it has one.
+
+    Takes the config rather than defaulting the buffer, so the filter and the score
+    cannot read two different earnings windows.
+    """
     short_call = next(
         (leg for leg in candidate.short_legs if leg.right is Right.CALL),
         None,
@@ -197,6 +205,7 @@ def _event_risk(candidate: Candidate, analysis: SymbolAnalysis, expiry: ExpiryAn
         right=Right.CALL if short_call else None,
         extrinsic_value=extrinsic,
         assignment_window_days=5,
+        earnings_buffer_days=config.filters.events.earnings_buffer_days,
     )
 
 
@@ -288,12 +297,3 @@ class RejectionTally:
         self.counts.update(other.counts)
         self.considered += other.considered
         self.passed += other.passed
-
-
-def earnings_in_window(analysis: SymbolAnalysis, expiry: date, config: ScreenConfig) -> bool:
-    """Whether earnings fall before an expiry, honoring the configured buffer."""
-    earnings = analysis.events.earnings
-    if earnings is None:
-        return False
-    buffer = timedelta(days=config.filters.events.earnings_buffer_days)
-    return analysis.session_date <= earnings <= expiry + buffer

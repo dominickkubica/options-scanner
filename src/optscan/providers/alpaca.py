@@ -367,6 +367,27 @@ class AlpacaProvider(MarketDataProvider):
                 reset=response.headers.get(HEADER_RESET),
             )
 
+    @staticmethod
+    def _merge_page(merged: dict[str, Any], chunk: dict[str, Any]) -> dict[str, Any]:
+        """Fold one page of a keyed response into the pages before it.
+
+        Keys can repeat across pages. The bars endpoint answers `{"bars": {"AAPL": [...]}}`
+        on every page, each with a different slice of rows under the same symbol, so a
+        plain dict merge kept only the last page: replayed 2026-09-12, pages of 1000 and
+        258 rows came back as 258, with no error. Lists under a repeated key are
+        extended; anything else, like a chain snapshot keyed by unique contract, is
+        taken from the newer page exactly as before.
+        """
+        out = dict(merged)
+        for key, value in chunk.items():
+            previous = out.get(key)
+            out[key] = (
+                previous + value
+                if isinstance(previous, list) and isinstance(value, list)
+                else value
+            )
+        return out
+
     def _paged(
         self, url: str, params: dict[str, Any], collect: str
     ) -> list[dict[str, Any]] | dict[str, Any]:
@@ -377,7 +398,7 @@ class AlpacaProvider(MarketDataProvider):
             body = self._get(url, {**params, **({"page_token": token} if token else {})})
             chunk = body.get(collect)
             if isinstance(chunk, dict):
-                merged = {**(merged or {}), **chunk}
+                merged = self._merge_page(merged or {}, chunk)
             elif isinstance(chunk, list):
                 merged = (merged or []) + chunk
             token = body.get("next_page_token")

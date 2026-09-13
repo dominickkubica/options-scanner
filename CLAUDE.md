@@ -94,6 +94,8 @@ venv\Scripts\python scripts/coverage_floor.py  # per module floor, after pytest 
 venv\Scripts\python -m optscan serve  # API on 8000, plus the UI if it is built
 npm --prefix frontend run dev         # Vite on 5173, proxying /api to 8000
 npm --prefix frontend run build       # emit frontend/dist for optscan serve
+npm --prefix frontend test            # compute.js against levels.py; pytest runs it too
+venv\Scripts\python -m pip install -e ".[dev]" -c constraints.txt   # the tested tree
 ```
 
 Never start either server through Bash. Use the preview tool with the `optscan-api`
@@ -802,9 +804,11 @@ a regression test now pins that shape.
 - **Colour is never the only carrier.** Every coloured state also has a word, and
   anything laid out in columns pads with `console.pad`, because f-string padding counts
   the escape sequence and silently misaligns the table.
-- **No outcome has ever actually been resolved.** The settling path is covered by an
-  offline test with a fake provider; the first real `optscan resolve` run is outstanding
-  and cannot happen before 2026-08-21.
+- **Outcomes have resolved, but not enough of them to claim anything.** The first real
+  `optscan resolve` runs settled 14 clusters over 3 settlement dates (the Journal findings
+  above), under `MIN_CLUSTERS_FOR_A_CLAIM` (20), so the report still draws no conclusion.
+  "Resolved but below the threshold" is not "never resolved": the calibration table
+  prints from these rows today.
 - **`WebhookSink` has never been run against a real endpoint.**
 - Two captured sessions exist, so every IV rank still reads `insufficient`.
 - **`OPTSCAN_LIVE_ENABLED` is false by default** and should stay that way until asked.

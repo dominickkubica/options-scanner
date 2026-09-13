@@ -17,10 +17,11 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from optscan import __version__
@@ -68,6 +69,53 @@ the daily candles are the two exceptions, and both say so when they are unavaila
 """.strip()
 
 
+#: Methods that change something. A browser sends an Origin header on every one of these
+#: when the page making the request is on another origin.
+UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+#: `Sec-Fetch-Site` values a write may carry when there is no Origin to check.
+SAFE_FETCH_SITES = frozenset({"same-origin", "none"})
+
+
+def _same_origin(origin: str, request: Request) -> bool:
+    parsed = urlsplit(origin)
+    host = request.headers.get("host", "")
+    return (
+        parsed.scheme in ("http", "https") and bool(host) and parsed.netloc.lower() == host.lower()
+    )
+
+
+async def refuse_cross_site_writes(request: Request, call_next):
+    """Refuse a state-changing request that another site's page sent.
+
+    CORS decides whether a browser hands a cross-origin *response* back to the page that
+    asked. It does not stop the request running. Measured 2026-09-12: a POST to
+    /api/watchlist/ZZZZ carrying `Origin: https://evil.example` returned 200 and pinned
+    the symbol, and a `text/plain` POST to /api/journal/import would have written forged
+    rows into the broker ledger, which has no delete path. So a write is accepted only
+    from this app's own origin, from the Vite dev server, or from a client that is not a
+    web page at all: the CLI, curl and the tests send no Origin.
+
+    This is not a DNS rebinding defence and must not be read as one. Under rebinding the
+    browser believes the attacker's page is same origin, so the Origin matches the Host;
+    only a check on the Host name itself stops that, and this does not make one.
+    """
+    if request.method in UNSAFE_METHODS:
+        origin = request.headers.get("origin")
+        site = request.headers.get("sec-fetch-site")
+        if origin is not None:
+            refused = origin not in DEV_ORIGINS and not _same_origin(origin, request)
+        else:
+            refused = site is not None and site not in SAFE_FETCH_SITES
+        if refused:
+            log.warning("refused a cross-site write", path=request.url.path, origin=origin)
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Refused: this change came from another site's page."},
+            )
+    return await call_next(request)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = get_settings()
@@ -107,9 +155,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         CORSMiddleware,
         allow_origins=list(DEV_ORIGINS),
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
+        # PUT and DELETE too: the frontend uses both, and without them a direct call
+        # from the dev origin was refused on its preflight.
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
         allow_headers=["*"],
     )
+    app.middleware("http")(refuse_cross_site_writes)
 
     for router in (
         health.router,

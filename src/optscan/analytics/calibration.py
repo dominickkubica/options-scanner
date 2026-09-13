@@ -35,17 +35,22 @@ the lower bound. Wilson behaves at the extremes and is barely more code.
 
 ## What "calibrated" means here, and what it does not
 
-The probability model claims a short strike finishes out of the money with probability
-p. Calibration asks whether the strikes it called 80 percent actually finished out of
-the money 80 percent of the time. That is a question about the model, and it is
-deliberately measured against `finished_beyond` rather than against profit: a position
-can make money after being breached, and scoring that as a hit would let a model be
+The probability model claims a position settles on the profitable side of its
+breakeven with probability p. Calibration asks whether the positions it called 80
+percent actually did so 80 percent of the time. That is a question about the model, and
+it is deliberately measured against where price settled rather than against profit:
+profit moves with the long leg and the commission, and scoring it would let a model be
 wrong about the event and still look calibrated.
 
+Both sides have to be the same event. `finished_beyond` is measured at the strike, which
+is the right boundary for classifying outcomes and the wrong one here: a forecast made
+at the breakeven and scored at the strike reads optimistic by construction (BUG-0001).
+Two sided strategies are left out, because their logged row keeps one short leg.
+
 `probability.py` already states the direction it is expected to be wrong: lognormal
-tails are too thin, so it should prove optimistic on the far strikes. Finding exactly
-that is the expected result rather than a surprise, and finding the opposite would mean
-something is wrong with this file rather than with the market.
+tails are too thin, so it should prove optimistic on the far strikes. Finding that is
+the expected result rather than a surprise, and only with matching events can it be told
+apart from an artifact of this file.
 """
 
 from __future__ import annotations
@@ -53,6 +58,9 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+
+from optscan.analytics.probability import breakeven
+from optscan.models import Right, Strategy
 
 #: Resolved outcomes below which nothing is reported at all. Twenty independent
 #: clusters is already generous for a claim about a win rate; below it the interval is
@@ -267,26 +275,26 @@ def probability_calibration(
 ) -> list[CalibrationPoint]:
     """Predicted probability of profit against how often it actually happened.
 
-    Measured on `finished_beyond` inverted, not on profit. The model predicts an event
-    about where price finishes; whether that event was survivable is a separate
+    Measured on where price settled against the breakeven, which is the event the
+    forecast is about, and not on profit: whether the event was survivable is a separate
     question, and scoring the model on profit would let it be wrong about the event and
-    still look right.
+    still look right. See `finished_profitable` for why not against the strike.
     """
     usable = [
-        item
+        (item, observed)
         for item in items
-        if item.probability_of_profit is not None and item.finished_beyond is not None
+        if item.probability_of_profit is not None
+        and (observed := finished_profitable(item)) is not None
     ]
     points: list[CalibrationPoint] = []
 
     for low, high in bands:
-        inside = [item for item in usable if low <= item.probability_of_profit < high]
+        inside = [pair for pair in usable if low <= pair[0].probability_of_profit < high]
         if not inside:
             continue
-        predicted = sum(item.probability_of_profit for item in inside) / len(inside)
-        # The model's claim is that the short strike is NOT breached, so the observed
-        # equivalent is the share that did not finish beyond it.
-        actual = sum(1 for item in inside if not item.finished_beyond) / len(inside)
+        rows = [item for item, _ in inside]
+        predicted = sum(item.probability_of_profit for item in rows) / len(rows)
+        actual = sum(1 for _, observed in inside if observed) / len(inside)
         points.append(
             CalibrationPoint(
                 low=low,
@@ -294,7 +302,7 @@ def probability_calibration(
                 predicted=predicted,
                 actual=actual,
                 count=len(inside),
-                clusters=count_clusters(inside),
+                clusters=count_clusters(rows),
             )
         )
     return points
@@ -308,17 +316,45 @@ def brier_score(items: Sequence) -> float | None:
     completely useless, and the Brier score notices while the table does not.
     """
     usable = [
-        item
+        (item.probability_of_profit, observed)
         for item in items
-        if item.probability_of_profit is not None and item.finished_beyond is not None
+        if item.probability_of_profit is not None
+        and (observed := finished_profitable(item)) is not None
     ]
     if not usable:
         return None
-    total = sum(
-        (item.probability_of_profit - (0.0 if item.finished_beyond else 1.0)) ** 2
-        for item in usable
-    )
+    total = sum((forecast - (1.0 if observed else 0.0)) ** 2 for forecast, observed in usable)
     return total / len(usable)
+
+
+#: Strategies whose stored forecast is the joint probability of both sides finishing
+#: clear. The logged row keeps one short leg, the put, so there is no single breakeven
+#: to settle that forecast against, and scoring it against the put alone would be a
+#: second mismatch of events.
+TWO_SIDED_STRATEGIES = frozenset({Strategy.IRON_CONDOR, Strategy.SHORT_STRANGLE})
+
+
+def finished_profitable(item) -> bool | None:
+    """Whether the underlying settled on the profitable side of the breakeven.
+
+    That is the event `probability_of_profit` forecasts: it is measured at the
+    breakeven, the strike less the credit for a put and plus it for a call. Until
+    2026-09-12 it was scored against `finished_beyond`, which is measured at the strike,
+    so the forecast event strictly contained the observed one and every band read as
+    optimistic by construction, most of all in the middle bands (BUG-0001).
+
+    Exact for the single sided strategies, because a long leg does not move the
+    breakeven. None where it cannot be said: no settlement yet, or a two sided strategy.
+    """
+    if item.strategy in TWO_SIDED_STRATEGIES:
+        return None
+    if item.settlement_price is None or item.credit is None or item.short_right is None:
+        return None
+    right = Right.parse(item.short_right)
+    level = breakeven(right, item.short_strike, item.credit)
+    if right is Right.PUT:
+        return item.settlement_price > level
+    return item.settlement_price < level
 
 
 def validate(items: Sequence, *, buckets: int = DEFAULT_BUCKETS) -> ValidationReport:

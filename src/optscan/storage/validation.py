@@ -312,6 +312,8 @@ def record_outcome(
             ),
         )
     except sqlite3.IntegrityError:
+        # The failed INSERT left a transaction open holding the write lock.
+        conn.rollback()
         return False
     conn.commit()
     return True

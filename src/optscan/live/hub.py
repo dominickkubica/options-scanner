@@ -269,6 +269,16 @@ class Subscription:
             _drain(self.events)
             self.events.put_nowait((name, payload))
 
+    def take_needs_full(self) -> bool:
+        """Read and clear the resync flag in one step.
+
+        Callers consume the flag *before* offering. Clearing it after the offer, as this
+        once did, erased the resync an overflow inside that very offer had just asked
+        for, and the subscriber was left holding a delta against a version it never saw.
+        """
+        wanted, self.needs_full = self.needs_full, False
+        return wanted
+
 
 def _drain(target: queue.Queue) -> None:
     while True:
@@ -364,11 +374,18 @@ class LiveHub:
                     sub.offer("status", self.status().as_dict())
             self._feeds.clear()
             self._quote_cache.clear()
+        if thread is not None and thread.is_alive():
+            # Still inside a vendor call, whose client timeout is far longer than this
+            # join. Closing the client under it turns a clean stop into a vendor error,
+            # so the loop closes the provider itself on its way out, and _get_provider
+            # refuses to build a fresh credentialed client once stopped.
+            log.warning("live poller still busy at stop; it closes the provider on exit")
+            return
         self._close_provider()
 
     def _close_provider(self) -> None:
-        provider = self._provider
-        self._provider = None
+        with self._lock:
+            provider, self._provider = self._provider, None
         close = getattr(provider, "close", None)
         if close is not None:
             close()
@@ -402,8 +419,8 @@ class LiveHub:
             # mid cycle sees the last good numbers with their real age instead of an
             # empty panel until the next poll.
             if feed.cycle is not None:
+                sub.take_needs_full()
                 sub.offer("cycle", self._as_delta(feed.cycle, None, full=True).as_dict())
-                sub.needs_full = False
             sub.offer("status", self.status().as_dict())
 
         self._wake.set()
@@ -516,6 +533,10 @@ class LiveHub:
                 wait = self._settings.live_poll_seconds
             self._wake.wait(timeout=wait)
             self._wake.clear()
+        # stop() gives up waiting on a slow vendor call rather than closing the client
+        # under it, which leaves the teardown to this thread.
+        if self._stopped:
+            self._close_provider()
 
     def tick(self) -> float:
         """Refresh whatever is due and return how long to wait before the next look.
@@ -602,10 +623,11 @@ class LiveHub:
             subscribers = list(feed.subscribers.values())
 
         for sub in subscribers:
-            full = sub.needs_full or previous is None
+            # Consumed before the offer, so an overflow inside it re-arms the flag and
+            # the next cycle goes out in full.
+            full = sub.take_needs_full() or previous is None
             delta = self._as_delta(cycle, None if full else previous, full=full)
             sub.offer("cycle", delta.as_dict())
-            sub.needs_full = False
             sub.offer("status", status)
 
     def _build_cycle(self, feed: _Feed) -> LiveCycle:
@@ -719,9 +741,15 @@ class LiveHub:
         return contracts
 
     def _get_provider(self) -> MarketDataProvider:
-        if self._provider is None:
-            self._provider = self._provider_factory()
-        return self._provider
+        # Under the lock like every other shared field, and refused once stopped: a
+        # poller that outlived stop()'s join used to find no provider here and build a
+        # fresh credentialed client that nothing would ever close.
+        with self._lock:
+            if self._stopped:
+                raise ProviderError("the live hub has stopped")
+            if self._provider is None:
+                self._provider = self._provider_factory()
+            return self._provider
 
     # ----------------------------------------------------------------------------
     # Delta encoding

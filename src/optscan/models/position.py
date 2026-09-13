@@ -38,7 +38,7 @@ from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from optscan.models.base import UtcDatetime
+from optscan.models.base import UtcDatetime, _require_utc
 from optscan.models.enums import Right
 from optscan.models.market import Symbol
 from optscan.models.opportunity import Action, Strategy
@@ -266,11 +266,16 @@ class Position(UserRecord):
         commission: float = 0.0,
         when: datetime | None = None,
     ) -> Position:
-        """Return this position closed at a stated value."""
+        """Return this position closed at a stated value.
+
+        `model_copy` does not validate its update, so `closed_at`'s UtcDatetime check is
+        applied here by hand. Without it a naive `datetime.now()` was accepted and then
+        shifted by the machine's UTC offset when stored.
+        """
         return self.model_copy(
             update={
                 "status": PositionStatus.CLOSED,
-                "closed_at": when or datetime.now(UTC),
+                "closed_at": _require_utc(when) if when is not None else datetime.now(UTC),
                 "close_value": close_value,
                 "commission_close": commission,
             }

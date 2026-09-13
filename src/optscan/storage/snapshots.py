@@ -23,6 +23,7 @@ import pyarrow.parquet as pq
 
 from optscan.logging import get_logger
 from optscan.models import ChainSnapshot
+from optscan.tickers import is_ticker, normalize_ticker
 
 log = get_logger("optscan.storage.snapshots")
 
@@ -102,7 +103,10 @@ def snapshot_to_table(snapshot: ChainSnapshot) -> pa.Table:
 
 
 def snapshot_dir(root: Path, symbol: str, session_date: date) -> Path:
-    return root / f"symbol={symbol.upper()}" / f"session_date={session_date.isoformat()}"
+    # A validated ticker is exactly one path component, so the directory cannot land
+    # outside root. See tickers.py for what an unchecked symbol could do here.
+    ticker = normalize_ticker(symbol)
+    return root / f"symbol={ticker}" / f"session_date={session_date.isoformat()}"
 
 
 def snapshot_filename(captured_at: datetime) -> str:
@@ -138,6 +142,10 @@ def write_snapshot(snapshot: ChainSnapshot, root: Path) -> Path:
         raise ValueError(f"refusing to write an empty snapshot for {snapshot.symbol}")
 
     directory = snapshot_dir(root, snapshot.symbol, snapshot.session_date)
+    # Behind the ticker check, so that no later change to the path helper can reopen
+    # it: nothing is written outside the snapshot root.
+    if root.resolve() not in directory.resolve().parents:
+        raise ValueError(f"refusing to write a snapshot outside {root}: {directory}")
     directory.mkdir(parents=True, exist_ok=True)
     path = unique_path(directory, snapshot.fetched_at)
 
@@ -158,11 +166,21 @@ def write_snapshot(snapshot: ChainSnapshot, root: Path) -> Path:
 
 
 def snapshot_files(root: Path, symbol: str | None = None) -> list[Path]:
-    """Every snapshot file under root, optionally for one symbol, sorted by path."""
+    """Every snapshot file under root, optionally for one symbol, sorted by path.
+
+    The symbol is a literal directory name, never pattern text. It used to be spliced
+    into the glob, and `SPY/../..` from the scan's query string walked above root to any
+    parquet file the server could read (SEC-0001). Something that is not a ticker has
+    no snapshots.
+    """
     if not root.exists():
         return []
-    pattern = f"symbol={symbol.upper()}/**/*.parquet" if symbol else "**/*.parquet"
-    return sorted(root.glob(pattern))
+    if not symbol:
+        return sorted(root.glob("**/*.parquet"))
+    if not is_ticker(symbol):
+        return []
+    base = root / f"symbol={normalize_ticker(symbol)}"
+    return sorted(base.glob("**/*.parquet")) if base.is_dir() else []
 
 
 def read_snapshots(

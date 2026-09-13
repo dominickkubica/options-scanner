@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from optscan.api.deps import (
     ProviderFactory,
@@ -32,6 +32,7 @@ from optscan.screener.config import ScreenConfig
 from optscan.screener.gaps import find_gaps
 from optscan.screener.scan import ScanResult, scan_analysis
 from optscan.storage import db
+from optscan.tickers import is_ticker, normalize_ticker
 
 router = APIRouter(tags=["scan"])
 log = get_logger("optscan.api.scan")
@@ -48,7 +49,16 @@ SymbolsQuery = Annotated[
 
 def _targets(symbols: list[str] | None, settings: Settings) -> list[str]:
     if symbols:
-        return [symbol.strip().upper() for symbol in symbols if symbol.strip()]
+        wanted = [symbol for symbol in symbols if symbol.strip()]
+        refused = [symbol for symbol in wanted if not is_ticker(symbol)]
+        if refused:
+            # A 422 naming the value, rather than an empty result or, before 2026-09-12,
+            # a parquet read from wherever the path pointed. See SEC-0001.
+            raise HTTPException(
+                status_code=422,
+                detail="Not a ticker: " + ", ".join(repr(symbol) for symbol in refused),
+            )
+        return [normalize_ticker(symbol) for symbol in wanted]
     with db.session(settings.sqlite_path) as conn:
         db.seed_watchlist(conn, settings.default_watchlist)
         return db.list_watchlist(conn)

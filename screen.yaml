@@ -68,6 +68,9 @@ filters:
     # Elevated IV before a report is priced, not mispriced. Selling it is a bet on
     # the size of the move, which is a different trade from selling rich vol.
     exclude_earnings: true
+    # Days past expiry that still count as inside the event: an expiry the Friday
+    # before a report still trades in its volatility. Applies to the filter and the
+    # score alike. 0 means only reports inside the position's life.
     earnings_buffer_days: 0
     exclude_early_assignment_risk: true
 

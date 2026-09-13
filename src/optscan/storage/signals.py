@@ -49,6 +49,9 @@ def record_signal(conn: sqlite3.Connection, signal: Signal, *, now: datetime | N
             ),
         )
     except sqlite3.IntegrityError:
+        # Python's sqlite3 opened a transaction for the failed INSERT and it still
+        # holds the write lock; without this the next writer waits out busy_timeout.
+        conn.rollback()
         return False
     conn.commit()
     return True

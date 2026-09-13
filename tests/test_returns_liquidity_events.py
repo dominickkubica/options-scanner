@@ -274,6 +274,18 @@ class TestEvents:
         assert excludes_earnings(events, expiry, TODAY)
         assert not excludes_earnings(events, expiry, TODAY, buffer_days=7)
 
+    def test_the_buffer_reaches_the_verdict_the_screen_uses(self) -> None:
+        """BUG-0010. Earnings three days after the expiry: clean with no buffer, flagged
+        with a seven day one. The buffer was once read only by a function nothing
+        called, so setting it changed no scan output at all."""
+        events = EventWindow(earnings=date(2026, 8, 24))
+        expiry = date(2026, 8, 21)
+        assert not assess_events(events, expiry, TODAY).has_earnings
+
+        risk = assess_events(events, expiry, TODAY, earnings_buffer_days=7)
+        assert risk.has_earnings
+        assert any("within 7 days after the 2026-08-21 expiry" in r for r in risk.reasons)
+
 
 class TestEarlyAssignment:
     def test_short_call_with_less_extrinsic_than_the_dividend(self) -> None:

@@ -2968,3 +2968,90 @@ ticker's final session triggers forever and would sit at the top of a list of th
 trade today.
 
 1,639 tests pass.
+
+## 2026-09-12: an outside audit, and what it found
+
+An audit of `f071239` filed seventeen issues and a short analysis. Each issue was checked
+against the code before anything changed, and all seventeen were real. Ordered by what
+they would have cost.
+
+### Three that produced a wrong answer silently
+
+**Calibration scored a breakeven forecast against a strike outcome (BUG-0001).**
+`probability_of_profit` is measured at the breakeven and `finished_beyond` at the strike,
+so for any credit the forecast event contains the observed one and every band read
+optimistic by construction. Worst in the middle bands, which is the opposite shape from
+the far-tail optimism `probability.py` predicts, so it could have hidden that too. The
+observed event is now `finished_profitable`, derived at read time from the settlement,
+strike and credit already on the row: no migration, and settled rows are rescored.
+Condors and strangles are refused, because their stored POP is two sided and the row
+keeps only the put.
+
+**The ledger digest hashed three columns the parser does not require (BUG-0003).** One
+fill had a different identity per export shape, so an overlapping import doubled it. The
+digest is now `txn_digest` over the six required columns as parsed values, and migration
+13, the first written in Python, re-keyed the stored ledger with it and carried the fill
+times across. Measured on the real database before and after, with a backup taken first:
+468 rows, all 433 fill times still joined, realized $153.86, zero mismatches. The eight
+rows that share a new digest are eight pairs of identical fills that already carried
+indexes 0 and 1, so nothing merged.
+
+**Paged bars kept only the last page (BUG-0002).** A plain dict merge replaced each page's
+rows with the next, so 1,000 + 258 bars came back as 258 with no error. Every adapter test
+had stopped at one page.
+
+### Commands that crashed or jobs that logged nothing
+
+`signals --group` raised on every run (BUG-0004). `capture` logged under `snapshot` and
+`prices sync` not at all (BUG-0005), so the health surface could not see either. The job
+key is now derived from the parsed command rather than from a new flag, so the installed
+scheduled tasks needed no reinstall, and a test pins every scheduled command line to its
+key.
+
+### Local security
+
+All reachable only from this machine, all fixed: a symbol used as a glob could read any
+parquet file (SEC-0001); a page on another site could write through the API, because CORS
+stops the response and not the request (SEC-0002, an Origin check that says it is no DNS
+rebinding defence); a watchlist symbol became a write path (SEC-0003). One validator,
+`tickers.py`, now guards every place a symbol meets a path. The live hub could strand a
+credentialed client on a slow stop (SEC-0004). Dependencies are capped below the next
+major and `constraints.txt` pins the tested tree (SEC-0005); it is not hashed, because that
+needs pip-tools or uv, a new tool, which was not added without asking.
+
+### The rest
+
+The live resync flag was cleared after the offer that set it (BUG-0006). A migration that
+died halfway bricked the database (BUG-0007): each now runs in one transaction. A refused
+INSERT held the write lock (BUG-0008). `Position.close` accepted a naive time, because
+`model_copy` does not validate (BUG-0009). `earnings_buffer_days` reached nothing
+(BUG-0010), and now reaches the filter and the score through one window. The `compute.js`
+parity claim is now executed: a golden file from `levels.py` and a `node --test` check,
+run by the Python suite (CHORE-0001). A stale CLAUDE.md line said no outcome had resolved
+(DOCS-0001). CORS now allows the PUT and DELETE the frontend uses.
+
+### Scope that arrived without an entry
+
+The audit's first finding (F1) was that twenty-two commits from 09-10 to 09-12 added four
+pieces of scope and said nothing here. The reasoning lives in the code; the short form:
+
+- **Live chains on demand, with failover** (`api/deps.py`, `live_chain`). Never written to
+  storage, because the 15:45 capture is the IV history's only writer and one sampling
+  time is what keeps the series comparable. Declines outside a session, where a live chain
+  is a worse sample than the capture. Providers are tried in order, and a failure is
+  cached so a dead vendor is not retried on every request.
+- **The journal trade book** (`analytics/positions.py`). Per-contract round trips grouped
+  back into the positions a person placed, by symbol, expiry and day. The strategy is a
+  guess that says when it is unconfident, R is the trader's own stop rather than the
+  spread's width, times come from the order history or the trader and are never
+  estimated, and breakdowns cluster on symbol and closing day.
+- **The holdout ledger** (migration 10). A holdout is held out once, so every out of
+  sample look is recorded and a later search on overlapping symbols is told how many
+  finalists came before it.
+- **Cboe volatility indices** (migration 12). Their own table and never `vendor_daily`,
+  whose readers all take a row as that symbol's price.
+
+Not taken up: the analysis's duplicate provider selectors (F2) and its coverage findings
+(F5, F7, F8), which were observations rather than filed issues.
+
+1,816 tests pass.

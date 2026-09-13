@@ -32,6 +32,7 @@ fills is that the real numbers are available.
 
 from __future__ import annotations
 
+import hashlib
 from datetime import date
 from enum import StrEnum
 
@@ -42,6 +43,47 @@ from optscan.models.opportunity import Action
 
 #: Shares per option contract. Robinhood exports do not state it.
 OPTION_MULTIPLIER = 100
+
+
+def _number(value: float | None) -> str:
+    return "" if value is None else repr(float(value))
+
+
+def txn_digest(
+    source: str,
+    *,
+    activity_date: date,
+    description: str,
+    trans_code: str,
+    quantity: float | None,
+    is_short: bool,
+    price: float | None,
+    amount: float | None,
+) -> str:
+    """Stable identity for a statement row, from what every export of it carries.
+
+    Hashes the six columns the parser requires, as parsed values. It once hashed nine
+    raw columns including Process Date, Settle Date and Instrument, which the parser
+    does not require, so one fill had a different identity per export shape and an
+    overlapping import inserted it twice (BUG-0003). Parsed values rather than raw text
+    so that stored rows can be re-keyed by the same function (migration 13), and so
+    "$0.61" and "0.61" are one fill.
+
+    Not unique on its own: two identical fills on one day are two trades. The ledger
+    pairs this with an occurrence index. See `storage/ledger.py`.
+    """
+    payload = "|".join(
+        (
+            activity_date.isoformat(),
+            description.strip(),
+            trans_code.strip(),
+            _number(quantity),
+            "S" if is_short else "",
+            _number(price),
+            _number(amount),
+        )
+    )
+    return hashlib.sha256(f"{source}|{payload}".encode()).hexdigest()[:32]
 
 
 class TxnKind(StrEnum):
