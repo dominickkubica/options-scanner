@@ -3134,3 +3134,29 @@ pre-specified Tier 1 cell rather than a search result, which is why it is worth
 checking; the check is to run the same rule, unchanged, on sessions after 2026-09-11.
 
 1,867 tests pass.
+
+### Later the same day: the survivor does not survive settlement
+
+Asked to look into it, four checks on the 0DTE condor held to expiry, run as one-off
+scripts over the same tape at k=0.5:
+
+- **It is a plateau, not a spike.** Across 4 entry times, 5 short deltas and 4 wing
+  widths, all 80 variants are positive and 77 have intervals clear of zero, and the
+  mean grows roughly in proportion to wing width.
+- **It is stable.** Positive every year (2025 clear of zero on its own), QQQ +$10.06
+  and SPY +$5.99 each clear of zero.
+- **It does not survive a realistic settlement.** The study settles at the 16:00
+  close. Re-settled with each option exercised if in the money on the 17:30 after
+  hours price, and the resulting shares closed at the next open, it makes -$0.43
+  (-$13.80 to +$11.85) and its worst day goes from -$334 to -$3,458. Moneyness changed
+  after the close on 168 of 1,285 checked positions. The worst single case: 2026-06-22,
+  a QQQ short put a dollar in the money, its wing expired worthless, QQQ opened $22
+  lower, -$2,275 on a condor the study had scored at -$49.
+- **The risk cannot be dodged and the premium kept.** Closing at 15:55 whenever the
+  underlying is within 0.25% of a short strike closes 43% of positions and leaves
+  +$1.92 (-$4.04 to +$7.68); wider bands converge on closing everything (+$1.13).
+
+So the +$8 was the pay for pin and overnight gap risk the study did not charge for.
+The study's hold-to-expiry rows are optimistic by construction and should be read that
+way; modelling after hours exercise in the engine itself is the fix if they are ever
+relied on. No rule in this study is worth trading.
