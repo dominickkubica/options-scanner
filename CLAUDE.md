@@ -96,6 +96,9 @@ npm --prefix frontend run dev         # Vite on 5173, proxying /api to 8000
 npm --prefix frontend run build       # emit frontend/dist for optscan serve
 npm --prefix frontend test            # compute.js against levels.py; pytest runs it too
 venv\Scripts\python -m pip install -e ".[dev]" -c constraints.txt   # the tested tree
+venv\Scripts\optscan premium sync      # cache QQQ/SPY 0-1 DTE option minute trades (resumable)
+venv\Scripts\optscan premium study     # stop x DTE, target x DTE, side x trend, every k
+venv\Scripts\optscan premium reconcile # your own 0DTE fills against the study's marks
 ```
 
 Never start either server through Bash. Use the preview tool with the `optscan-api`
@@ -230,6 +233,17 @@ Robinhood activity export, `optscan trades` reports what the account actually di
 symbol with fresh stored bars and delivers what is new through the existing alert sinks.
 `analytics/signals.py`, `jobs/signals.py`, `storage/signals.py`, `api/routers/signals.py`,
 `frontend/src/views/Signals.jsx`, migration 9.
+
+**Exception, authorized 2026-09-13: the short premium study.** `optscan premium sync`
+caches QQQ and SPY 0 to 1 DTE option minute trades from Alpaca (February 2024 on,
+`data/option_tape`); `premium study` replays spreads and condors on them under every
+stop, target and fill assumption; `premium reconcile` prices the account's own 0DTE
+fills at the same marks. `storage/option_tape.py`, `jobs/option_tape.py`,
+`analytics/premium.py`, `analytics/premium_stats.py`, `analytics/vector_bsm.py`,
+`jobs/premium.py`. Trade prints, never quotes: marks are a per minute smile and every
+exit fills the minute after it triggers, because filling at the trigger minute was a
+measured $2.50 to $6.60 a condor of noise. Results and their limits in the DECISIONS
+entry of 2026-09-14.
 
 - **Every threshold was measured before it shipped**, over 44,113 symbol-days (294
   symbols, one session in five across three years). At the defaults the whole universe

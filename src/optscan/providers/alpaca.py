@@ -1111,6 +1111,127 @@ class AlpacaProvider(MarketDataProvider):
         rows = (bars or {}).get(contract_symbol) if isinstance(bars, dict) else None
         return [_bar(underlying, row, self.name) for row in rows or []]
 
+    def get_session_minutes(self, symbol: str, start: datetime, end: datetime) -> list[PriceBar]:
+        """Minute bars between two instants, at the prices that actually printed.
+
+        `get_intraday_bars` asks for `adjustment=all`, which is right for a chart and
+        wrong beside an option. Dividends move old prices away from what traded, so a
+        2024 minute sits under the tape and every strike is misplaced against it.
+        Measured 2026-09-13 at 10:00 on 2024-03-13: QQQ 434.29 adjusted, 440.12 raw.
+        An option study priced off the adjusted series centres every strike ladder
+        about six dollars too low and finds the near strikes "barely traded".
+
+        The caller passes the session's own bounds, from the market calendar, so an
+        early close is not padded with minutes that never existed.
+        """
+        ticker = symbol.strip().upper()
+        bars = self._paged(
+            f"{self.settings.alpaca_data_url}{STOCK_BARS_PATH}",
+            {
+                "symbols": ticker,
+                "timeframe": "1Min",
+                "start": start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "end": end.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "feed": STOCK_BARS_FEED,
+                "limit": 10_000,
+                "adjustment": "raw",
+                "sort": "asc",
+            },
+            collect="bars",
+        )
+        rows = (bars or {}).get(ticker) if isinstance(bars, dict) else None
+        if not rows:
+            raise NoDataAvailable(f"alpaca returned no raw minute bars for {ticker}")
+        return [_bar(ticker, row, self.name) for row in rows]
+
+    def get_option_tape(
+        self,
+        contracts: Sequence[str],
+        start: datetime,
+        end: datetime,
+        *,
+        batch: int = 100,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """One minute trade bars for many contracts at once, keyed by contract.
+
+        Batched because the endpoint takes a comma separated list. Measured 2026-09-13:
+        one request carried 114 contracts, and a whole 0DTE session of a strike ladder
+        came back in two or three pages in under a second, where one request per
+        contract would be a hundred. `batch` stays at 100 to keep a URL well short of
+        any length limit.
+
+        **Trade prices, not quotes.** See `get_option_bars`: a minute with no trade has
+        no row, and a row's close is the last print, on whichever side lifted. Each row
+        keeps the vendor's VWAP and trade count so a caller can weight a thin print
+        accordingly rather than trusting one lot as much as a thousand.
+        """
+        out: dict[str, list[dict[str, Any]]] = {}
+        names = list(dict.fromkeys(contracts))
+        for index in range(0, len(names), batch):
+            chunk = names[index : index + batch]
+            bars = self._paged(
+                f"{self.settings.alpaca_data_url}{OPTION_BARS_PATH}",
+                {
+                    "symbols": ",".join(chunk),
+                    "timeframe": "1Min",
+                    "start": start.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "end": end.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "limit": 10_000,
+                    "sort": "asc",
+                },
+                collect="bars",
+            )
+            if not isinstance(bars, dict):
+                continue
+            for contract, rows in bars.items():
+                try:
+                    _, expiry, right, strike = parse_occ_symbol(contract)
+                except ValueError:
+                    log.warning("option tape skipped an unparseable contract", contract=contract)
+                    continue
+                parsed = out.setdefault(contract, [])
+                for row in rows or []:
+                    moment = _timestamp(row.get("t"))
+                    close = positive(row.get("c"))
+                    if moment is None or close is None:
+                        continue
+                    parsed.append(
+                        {
+                            "expiry": expiry,
+                            "right": str(right),
+                            "strike": strike,
+                            "ts": moment,
+                            "close": close,
+                            "vwap": positive(row.get("vw")),
+                            "volume": whole(row.get("v")) or 0,
+                            "trades": whole(row.get("n")) or 0,
+                        }
+                    )
+        return out
+
+    def get_option_ladder_tape(
+        self,
+        underlying: str,
+        expiries: Sequence[date],
+        strikes: Sequence[float],
+        start: datetime,
+        end: datetime,
+    ) -> tuple[int, dict[str, list[dict[str, Any]]]]:
+        """`get_option_tape` for every put and call at these strikes and expiries.
+
+        Returns how many contracts were asked for beside what came back, because the
+        vendor omits a contract that did not trade rather than saying so, and "three
+        hundred asked, forty traded" is information a caller should keep.
+        """
+        ticker = underlying.strip().upper()
+        contracts = [
+            occ_symbol(ticker, expiry, right, strike)
+            for expiry in expiries
+            for strike in strikes
+            for right in (Right.PUT, Right.CALL)
+        ]
+        return len(contracts), self.get_option_tape(contracts, start, end)
+
 
 # ---------------------------------------------------------------------- parsing
 

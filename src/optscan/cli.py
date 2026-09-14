@@ -613,6 +613,86 @@ def build_parser() -> argparse.ArgumentParser:
 
     prices_sub.add_parser("groups", help="List the universe groups and their sizes.")
 
+    premium = sub.add_parser(
+        "premium",
+        help="The short premium study: credit spreads and condors on intraday option trades.",
+        description=(
+            "Replays put credit spreads, call credit spreads and iron condors on QQQ and "
+            "SPY from Alpaca's one minute option trades, February 2024 onward. Trade "
+            "prices, never quotes: the vendor has no historical quotes, so every fill "
+            "is a modelled spread around a mark, and every result says so."
+        ),
+    )
+    premium_sub = premium.add_subparsers(dest="premium_command", required=True)
+    premium_sync = premium_sub.add_parser(
+        "sync",
+        help="Fetch and cache intraday option trades. Resumable; held sessions are skipped.",
+    )
+    premium_sync.add_argument(
+        "--symbol",
+        action="append",
+        dest="symbols",
+        metavar="TICKER",
+        help="Defaults to QQQ and SPY, which list an expiry every session. Repeatable.",
+    )
+    premium_sync.add_argument("--start", help="First session, YYYY-MM-DD. Default 2024-02-01.")
+    premium_sync.add_argument("--end", help="Last session, YYYY-MM-DD. Default the last one.")
+    premium_sync.add_argument(
+        "--width",
+        type=float,
+        default=0.03,
+        help="How far past the day's range the strike ladder reaches, as a fraction.",
+    )
+    premium_sync.add_argument(
+        "--horizon",
+        type=int,
+        default=1,
+        help="Expiries beyond the session's own to fetch. 1 covers 0 and 1 DTE.",
+    )
+    premium_study = premium_sub.add_parser(
+        "study",
+        help=(
+            "Run the grid: stop policy and profit target by DTE, put and call side by "
+            "trend, every result at every fill assumption."
+        ),
+    )
+    premium_study.add_argument(
+        "--symbol", action="append", dest="symbols", metavar="TICKER", help="Default QQQ, SPY."
+    )
+    premium_study.add_argument("--start", help="First session, YYYY-MM-DD.")
+    premium_study.add_argument("--end", help="Last session, YYYY-MM-DD.")
+    premium_study.add_argument(
+        "--dte", type=int, nargs="+", default=[0, 1], help="Days to expiry at entry, 0 and 1."
+    )
+    premium_study.add_argument(
+        "--delta", type=float, default=0.20, help="Short strike |delta| at entry."
+    )
+    premium_study.add_argument("--width", type=float, default=2.0, help="Wing width, dollars.")
+    premium_study.add_argument(
+        "--minute", type=int, default=30, help="Entry, in minutes after the open. 30 is 10:00."
+    )
+    premium_study.add_argument(
+        "--k",
+        type=float,
+        nargs="+",
+        default=[0.0, 0.25, 0.5, 1.0],
+        help="Share of the modelled half spread paid per leg, each way. Reported at each.",
+    )
+    premium_study.add_argument(
+        "--fit-spreads",
+        action="store_true",
+        help="Refit the spread model from the stored captures before running.",
+    )
+    premium_study.add_argument("--json", action="store_true", help="Print every cell as JSON.")
+    premium_study.add_argument("--save", help="Also write every cell as JSON to this file.")
+    premium_sub.add_parser(
+        "reconcile",
+        help=(
+            "Replay your own QQQ and SPY 0DTE fills against the study's marks, to see "
+            "which fill assumption your real fills actually match."
+        ),
+    )
+
     sub.add_parser(
         "history",
         help="What downloaded vendor history is held, per symbol.",
@@ -1367,6 +1447,117 @@ def _print_backtest(console, strategy, result, *, show_trades: bool) -> None:
     print()
     for note in result.notes:
         print(console.warn(note))
+
+
+def _cmd_premium(settings: Settings, args: argparse.Namespace) -> int:
+    from datetime import date
+
+    from optscan.console import Console
+    from optscan.jobs.option_tape import DEFAULT_SYMBOLS, sync_tape
+    from optscan.providers import ProviderError
+
+    console = Console.for_stream(settings.color_mode)
+    if args.premium_command == "study":
+        return _premium_study(settings, args, console)
+    if args.premium_command == "reconcile":
+        return _premium_reconcile(settings)
+    try:
+        start = date.fromisoformat(args.start) if args.start else None
+        end = date.fromisoformat(args.end) if args.end else None
+    except ValueError as error:
+        print(console.bad(f"Not a date: {error}"))
+        return 2
+
+    def progress(done: int, total: int, label: str) -> None:
+        if done % 20 == 0 or done == total:
+            print(f"  {done}/{total}  {label}", flush=True)
+
+    try:
+        report = sync_tape(
+            settings,
+            args.symbols or DEFAULT_SYMBOLS,
+            start=start,
+            end=end,
+            width=args.width,
+            horizon=args.horizon,
+            progress=progress,
+        )
+    except ProviderError as error:
+        print(console.bad(str(error)))
+        return 1
+    print(report.summary())
+    warning = report.warning()
+    if warning:
+        print(console.warn(warning))
+    return 1 if report.failed else 0
+
+
+def _premium_study(settings: Settings, args: argparse.Namespace, console) -> int:
+    import json as json_module
+    from dataclasses import replace
+    from datetime import date
+    from pathlib import Path
+
+    from optscan.analytics.premium import EntryRule
+    from optscan.jobs.premium import (
+        DEFAULT_SYMBOLS,
+        StudySpec,
+        cell_rows,
+        fit_spread_model,
+        report_lines,
+        row_payload,
+        run_study,
+    )
+
+    try:
+        spec = StudySpec(
+            symbols=tuple(symbol.upper() for symbol in (args.symbols or DEFAULT_SYMBOLS)),
+            start=date.fromisoformat(args.start) if args.start else None,
+            end=date.fromisoformat(args.end) if args.end else None,
+            dtes=tuple(args.dte),
+            entry=EntryRule(minute=args.minute, short_delta=args.delta, width=args.width),
+            ks=tuple(args.k),
+        )
+    except ValueError as error:
+        print(console.bad(str(error)))
+        return 2
+    notes: list[str] = []
+    if args.fit_spreads:
+        fit = fit_spread_model(settings, spec.symbols)
+        spec = replace(spec, spreads=fit.model)
+        notes.append(
+            f"Spread model refit from {fit.sessions} captured sessions "
+            f"(quotes per bucket, same day {fit.samples_same_day}, later {fit.samples_later})."
+        )
+
+    def progress(done: int, total: int, label: str) -> None:
+        if done % 100 == 0 or done == total:
+            print(f"  {done}/{total}  {label}", flush=True)
+
+    try:
+        result = run_study(settings, spec, progress=progress)
+    except ValueError as error:
+        print(console.bad(str(error)))
+        return 2
+    rows = cell_rows(result)
+    if args.save or args.json:
+        payload = json_module.dumps([row_payload(row) for row in rows], indent=2, default=str)
+        if args.save:
+            Path(args.save).write_text(payload, encoding="utf-8")
+        if args.json:
+            print(payload)
+            return 0
+    for line in report_lines(result, rows, notes=notes):
+        print(line)
+    return 0
+
+
+def _premium_reconcile(settings: Settings) -> int:
+    from optscan.jobs.premium import reconcile, reconcile_lines
+
+    for line in reconcile_lines(reconcile(settings)):
+        print(line)
+    return 0
 
 
 def _print_recent_signals(settings: Settings, days: int) -> int:
@@ -2198,6 +2389,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "import": _cmd_import,
         "import-history": _cmd_import_history,
         "prices": _cmd_prices,
+        "premium": _cmd_premium,
         "history": _cmd_history,
         "trades": _cmd_trades,
         "import-fill-times": _cmd_import_fill_times,

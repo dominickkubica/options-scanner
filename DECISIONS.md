@@ -3055,3 +3055,82 @@ Not taken up: the analysis's duplicate provider selectors (F2) and its coverage 
 (F5, F7, F8), which were observations rather than filed issues.
 
 1,816 tests pass.
+
+## 2026-09-14: the short premium study, and what it can and cannot say
+
+The user brought a spec: theory for short premium on big tech and the index ETFs, a
+simulation design, and a ranked grid of questions. Asked to choose between a free
+partial build, buying quote data, or only replaying the account's own trades, they
+chose the free build. `optscan premium sync | study | reconcile`.
+
+### The data decided the scope
+
+There is no historical option quote anywhere this project can reach for free. Alpaca
+has one minute option **trade** bars from February 2024. Measured before building,
+across four sessions from calm to crashing: 0DTE strikes within five dollars of QQQ or
+SPY print in 359 to 390 of 390 minutes, ten dollars out most minutes, twenty out barely
+on a calm day, and 7 and 30 DTE contracts print in 24 to 270 minutes with gaps of up to
+three and a half hours. Minute level management can be tested at 0 and 1 DTE on the two
+ETFs and nowhere else, so that is the scope: QQQ and SPY, 0 and 1 DTE, entry at 10:00,
+short strike nearest 0.20 delta, two dollar wings.
+
+The tape is 1,310 sessions, 37.7 million minute bars, 367 MB, fetched a hundred
+contracts a request. The first probe of it fell into the sixteenth instance of the
+recurring trap: strikes centred on adjusted prices, which sit six dollars under what
+QQQ traded in 2024, made the early tape look empty.
+
+### Marks and fills
+
+A leg is marked off a smile fitted each minute to the out of the money prints, never
+at its own last print, because the wings print least. The array solver is pinned to
+the scalar one by tests. Fills are the mark plus or minus k half spreads, the half
+spread measured on the project's own captures (penny markets: half a cent out of the
+money at 0 to 3 DTE), fees the account's own measured 4 cents a contract to buy and 6
+to sell. Every cell is reported at k of 0, 0.25, 0.5 and 1.
+
+### The engine caught a lie in itself
+
+A profit target first filled at the minute it triggered. Refilling the same trades one
+minute later cost every target $2.50 to $6.60 a condor, which was the whole of its
+apparent edge, including a 1 DTE condor with a 25 percent target that had read +$7.17
+with an interval clear of zero. The trigger minute is disproportionately one where the
+mark dipped on noise, so filling there took the favourable side of it. Every exit now
+fills at the next minute with a mark. Stops, which always did, fill a median half cent
+better than their trigger as that noise reverts, but one in ten fills 13 cents a share
+or more worse.
+
+### What it found, at k=0.5, 652 sessions a cell, Benjamini-Hochberg over 456 cells
+
+- **Flattened before the close, nothing is distinguishable from zero**, for any
+  structure at either DTE. The 0DTE condor makes +$1.13 a position, interval -$3.38 to
+  +$5.51. Between k=0 and k=1 it goes from +$3.95 to -$1.68: whatever it earns lives
+  inside the spread.
+- **No stop and no profit target improves on no management**, once the grid is
+  corrected. Tight delta stops lose outright: a 0.30 delta stop on a 0.20 delta condor
+  makes -$2.61 (-$3.82 to -$1.54), stopping out on noise.
+- **One family survives: the 0DTE condor held to expiry.** +$8.03 a position (+$3.07 to
+  +$12.47, q 0.03), +$7.03 at k=1 with the interval still clear of zero, every
+  month-left-out mean between +$7.16 and +$9.49, and positive without its five worst
+  days. With a 1.5x or 2x stop it is about the same, +$7.34 and +$7.89. Neither side
+  alone clears zero (put +$3.71, call +$4.25); the condor does because its two sides
+  offset each other's variance.
+- **The call side is weaker, as the spec predicted, but not significantly.** 1 DTE call
+  spreads entered with the prior close under its 20 session average lost -$10.97
+  (-$22.31 to -$0.12), which fits the backtester's oversold mean reversion finding, and
+  is one of twelve uncorrected splits.
+- **The reconciliation could replay 7 of 48 positions**, because 17 were scaled in over
+  more than two minutes. Their entries gave up a median cent a share against the mark,
+  about k=0.5, and their exits nothing. Seven is not a calibration.
+
+### Why the one positive result is not yet a finding
+
+It holds the position into the close, where the settlement is exact but the risks are
+not modelled: 17 percent of those condors settled within fifty cents of a short
+strike, so pin risk and after hours assignment are live and absent. Its lead over
+flattening (+$6.89) is partly the exit spread and fees it skips and partly premium
+marked at 15:55, where the marks are least trustworthy. It is the best cell of a grid,
+on one entry rule, over two and a half years with no crash like 2020 in them. It was a
+pre-specified Tier 1 cell rather than a search result, which is why it is worth
+checking; the check is to run the same rule, unchanged, on sessions after 2026-09-11.
+
+1,867 tests pass.
