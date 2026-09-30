@@ -1,3 +1,15 @@
+<p align="center">
+  <img src="docs/banner.svg" alt="Options Selling Scanner" width="100%">
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-0d0b24?style=for-the-badge&logo=python&logoColor=22d39b">
+  <img src="https://img.shields.io/badge/DuckDB-0d0b24?style=for-the-badge&logo=duckdb&logoColor=ffd166">
+  <img src="https://img.shields.io/badge/FastAPI-0d0b24?style=for-the-badge&logo=fastapi&logoColor=22d39b">
+  <img src="https://img.shields.io/badge/React-0d0b24?style=for-the-badge&logo=react&logoColor=61dafb">
+  <img src="https://img.shields.io/badge/places_no_orders-0d0b24?style=for-the-badge">
+</p>
+
 # Options Selling Scanner
 
 A local-first tool that ingests options chains, computes its own greeks and volatility
