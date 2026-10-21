@@ -537,6 +537,58 @@ MIGRATIONS: tuple[str | Callable[[sqlite3.Connection], None], ...] = (
     # 13: re-key the broker ledger on the six columns every export carries. A function
     # rather than SQL; the reasoning is on it.
     _rekey_broker_ledger,
+    # 14: one row per symbol per session holding every condition a future study might
+    # want to filter on. This table exists because of a hard data limit rather than a
+    # design preference: **there is no historical per-strike open interest anywhere**,
+    # in the option tape or from any vendor this project can reach, so gamma exposure,
+    # the zero-gamma level and the call and put walls cannot be backtested at all. They
+    # can only be recorded forward from today and studied once enough sessions exist.
+    # The price-derived columns ride along so that when that day comes, every candidate
+    # condition is on one row measured at one moment, rather than reconstructed later
+    # from sources that disagree about what the price was.
+    """
+    CREATE TABLE daily_condition (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_date        TEXT NOT NULL,
+        symbol              TEXT NOT NULL,
+        recorded_at         TEXT NOT NULL,
+        spot                REAL NOT NULL,
+        spot_source         TEXT,
+        expiry              TEXT,
+        dte                 INTEGER,
+
+        -- Gamma and open interest. Null is normal: a thin chain, a vendor with no open
+        -- interest for the expiry, or a flip outside the band are all real states.
+        regime              TEXT,
+        total_gex           REAL,
+        zero_gamma          REAL,
+        call_wall           REAL,
+        call_wall_oi        INTEGER,
+        put_wall            REAL,
+        put_wall_oi         INTEGER,
+        pin                 REAL,
+        pin_oi              INTEGER,
+        max_pain            REAL,
+        priced_oi           INTEGER,
+        total_oi            INTEGER,
+
+        -- Price-derived conditions, from the same stored bars the levels panel uses.
+        rsi14               REAL,
+        ema20               REAL,
+        ema50               REAL,
+        ema200              REAL,
+        atr14               REAL,
+        realized_vol        REAL,
+        nearest_level       REAL,
+        nearest_level_kind  TEXT,
+        iv_rank             REAL,
+        iv_rank_confidence  TEXT,
+
+        note                TEXT,
+        UNIQUE (session_date, symbol)
+    );
+    CREATE INDEX idx_daily_condition_symbol ON daily_condition (symbol, session_date);
+    """,
 )
 
 

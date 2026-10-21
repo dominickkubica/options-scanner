@@ -450,6 +450,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip the provider. Nothing can be settled without price history.",
     )
 
+    conditions_cmd = sub.add_parser(
+        "conditions",
+        help="Record today's gamma, levels and indicators, one row per symbol.",
+        description=(
+            "Writes every condition a later study might filter on. This exists because "
+            "no historical per-strike open interest is available anywhere, so gamma, "
+            "the zero-gamma level and the walls cannot be backtested and can only be "
+            "recorded forward. Run it daily; ask it questions in a few months."
+        ),
+    )
+    conditions_cmd.add_argument(
+        "--symbol",
+        action="append",
+        dest="symbols",
+        metavar="TICKER",
+        help="Defaults to the watchlist. Repeatable.",
+    )
+    conditions_cmd.add_argument(
+        "--coverage",
+        action="store_true",
+        help="Print what is held per symbol instead of recording anything.",
+    )
+
     validate_cmd = sub.add_parser(
         "validate",
         help="Report whether the score actually separates outcomes.",
@@ -1926,6 +1949,37 @@ def _cmd_resolve(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_conditions(settings: Settings, args: argparse.Namespace) -> int:
+    from optscan.jobs.conditions import run_record_conditions
+    from optscan.storage import conditions as store
+    from optscan.storage import db
+
+    if args.coverage:
+        with db.session(settings.sqlite_path) as conn:
+            rows = store.coverage(conn)
+        if not rows:
+            print("Nothing recorded yet. Run `optscan conditions` daily to start the series.")
+            return 0
+        print(f"  {'symbol':<8} {'sessions':>9} {'first':>12} {'last':>12} {'with a flip':>12}")
+        for row in rows:
+            print(
+                f"  {row['symbol']:<8} {row['sessions']:>9} {row['first_session']:>12} "
+                f"{row['last_session']:>12} {row['with_flip']:>12}"
+            )
+        print()
+        print("  Gamma cannot be backtested: no vendor publishes historical per-strike")
+        print("  open interest. This series is the only way it will ever be testable.")
+        return 0
+
+    result = run_record_conditions(settings, symbols=args.symbols)
+    print(
+        f"Recorded {result.recorded} symbols, {result.already_held} already held for this session."
+    )
+    for note in result.notes[:10]:
+        print(f"  note: {note}")
+    return 0
+
+
 def _cmd_validate(settings: Settings, args: argparse.Namespace) -> int:
     from optscan.analytics.calibration import validate
     from optscan.jobs.validate import next_settlement, status_counts
@@ -2407,6 +2461,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "manage": _cmd_manage,
         "record": _cmd_record,
         "resolve": _cmd_resolve,
+        "conditions": _cmd_conditions,
         "validate": _cmd_validate,
         "backup": _cmd_backup,
         "shortcut": _cmd_shortcut,

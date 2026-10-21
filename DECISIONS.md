@@ -3380,3 +3380,49 @@ measures the four-component score. It is still the right measurement to have in 
 before the five-component rows settle in late November.
 
 1,956 tests pass.
+
+## 2026-10-21, B: gamma cannot be backtested, so start recording it
+
+Step B was to condition the entry on the gamma regime, the walls, RSI, the EMAs and the
+tested levels. The first thing to establish was whether that can be measured at all, and
+for half of it the answer is no.
+
+**There is no historical per-strike open interest anywhere this project can reach.** The
+option tape stores trades: `contract, expiry, right, strike, ts, close, vwap, volume,
+trades`. Volume is not open interest. yfinance publishes open interest only as it stands
+today. Market Chameleon's daily export carries call and put open interest as whole-chain
+totals for 24 symbols back to 2014-01-02, which can make a put/call ratio and cannot make
+a wall.
+
+So the call wall, the put wall, the pin, max pain, net GEX and the zero-gamma level
+**cannot be backtested**. Not poorly: the inputs for any date before today do not exist.
+Anyone who reports a backtested gamma result on this data has fabricated the input.
+
+The only honest route is to record them forward. `optscan conditions` writes one row per
+symbol per session into `daily_condition` (migration 14): the whole gamma profile, plus
+RSI, EMA 20/50/200, ATR, realized vol, the nearest tested level and its kind, and the IV
+rank with its confidence. `optscan conditions --coverage` says how little is held, which
+for the first several months is the honest headline.
+
+Three decisions on it:
+
+- **The price conditions ride along rather than being recomputed later.** They could be
+  rebuilt from stored bars, but a study filtering on gamma *and* RSI needs both measured
+  at the same moment on the same spot. Recomputing one side later joins a number from a
+  15:45 chain to one from a 16:00 bar on a spot from a third vendor, which is a silent
+  mismatch of exactly the kind this project keeps finding.
+- **Never overwrite a session.** A 15:45 reading and a 20:00 one are different samples of
+  a moving thing, and replacing the first pools two sampling times into one series. Same
+  rule, and the same reason, as the IV history having exactly one writer.
+- **Half a row beats no row.** A symbol whose chain fails still records its price
+  conditions against the stored capture's quote or the last daily close, with the source
+  named. A gap in a forward-recorded series cannot be filled in later.
+
+Spot falls back chain underlying -> stored capture quote -> daily close, and which one
+was used is a column, because they are different prices from different moments.
+
+What can be studied now, with history that exists: RSI, the EMAs, the tested levels and
+the variance risk premium on 294 symbols of daily bars, and CCS/PCS at 0-1 DTE on the
+QQQ/SPY option tape. That is step B proper and is not started.
+
+1,968 tests pass.
