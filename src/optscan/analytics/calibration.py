@@ -56,6 +56,7 @@ apart from an artifact of this file.
 from __future__ import annotations
 
 import math
+from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
@@ -85,6 +86,15 @@ MIN_ROWS_FOR_HALVES = 4
 #: rather than a rounding artifact, and the report says so.
 HIGH_WIN_RATE = 0.6
 
+#: How far apart two bands' capital has to be before the report says so in words. Three
+#: times is already enough to reverse a dollar ordering, and the first real sample ran
+#: to ten.
+CAPITAL_SPREAD_WORTH_SAYING = 3.0
+
+#: A variance needs two observations. One cluster gets a point estimate with no width,
+#: which is honest about there being nothing to spread.
+MIN_FOR_A_SPREAD = 2
+
 
 @dataclass(frozen=True, slots=True)
 class Interval:
@@ -106,7 +116,12 @@ class Interval:
 
 @dataclass(frozen=True, slots=True)
 class Bucket:
-    """One slice of the score range, and how its candidates actually did."""
+    """One slice of the score range, and how its candidates actually did.
+
+    `mean_profit` is dollars per position and is kept because it is what a reader asks
+    for first. It is also, on this data, the most misleading number in the report: see
+    `mean_capital`.
+    """
 
     label: str
     low: float
@@ -118,10 +133,51 @@ class Bucket:
     mean_profit: float
     total_profit: float
     mean_score: float
+    #: Mean capital at risk per position. Printed next to `mean_profit` because the two
+    #: are only comparable together: on the first honest look the lowest scoring band
+    #: risked $44,375 a position and the highest $4,478, so the dollar ordering between
+    #: them was reporting position size and not score quality.
+    mean_capital: float | None = None
+    #: Profit per dollar risked, averaged over clusters rather than over rows, since
+    #: rows from one chain settle together and a chain with two hundred of them would
+    #: otherwise count two hundred times.
+    return_on_capital: Interval | None = None
 
     @property
     def usable(self) -> bool:
         return self.clusters >= MIN_CLUSTERS_FOR_A_CLAIM
+
+
+@dataclass(frozen=True, slots=True)
+class StrategySplit:
+    """One strategy's top half by score against its bottom half, per dollar risked.
+
+    Comparing score bands across the whole sample compares strategies: the bands sort
+    almost cleanly into cash secured puts at the bottom and spreads at the top, so a
+    difference between them is mostly a difference between the positions, not between
+    good and bad scores. This asks the question inside one strategy, where the capital
+    and the shape are alike and only the score differs.
+    """
+
+    strategy: str
+    clusters: int
+    count: int
+    bottom: Interval | None
+    top: Interval | None
+
+    @property
+    def separates(self) -> bool | None:
+        """Whether the top half beats the bottom, by non-overlapping intervals.
+
+        None when either half is too thin to carry one. Same conservative rule the
+        headline uses: it will call a real effect inconclusive before it calls noise a
+        finding.
+        """
+        if self.bottom is None or self.top is None:
+            return None
+        if self.clusters < MIN_CLUSTERS_FOR_A_CLAIM:
+            return None
+        return self.top.low > self.bottom.high
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,6 +212,11 @@ class ValidationReport:
     #: The headline. None when the sample cannot support an answer, which it will be
     #: for months, and that is the correct output rather than a placeholder.
     scores_separate: bool | None = None
+    #: Profit per dollar risked across everything resolved, by cluster. The comparable
+    #: figure: `mean_profit` is an average over positions that are not the same size.
+    return_on_capital: Interval | None = None
+    #: Per strategy, the same question asked where capital and shape are alike.
+    by_strategy: tuple[StrategySplit, ...] = ()
     notes: tuple[str, ...] = field(default_factory=tuple)
 
     @property
@@ -221,6 +282,84 @@ def proportion_interval(items: Sequence, predicate) -> Interval | None:
     )
 
 
+def _capital(item) -> float | None:
+    """What the position tied up, or None when there is no honest figure.
+
+    `max_loss` is the capital a defined risk position needs. An undefined risk position
+    has none by design, and is left out of every return figure rather than given a
+    denominator that would flatter it.
+    """
+    capital = getattr(item, "max_loss", None)
+    if capital is None or not math.isfinite(capital) or capital <= 0:
+        return None
+    return capital
+
+
+def return_on_capital(items: Sequence) -> Interval | None:
+    """Mean profit per dollar risked, averaged over clusters, with a 95% interval.
+
+    Clusters rather than rows, for the reason the whole module repeats: a chain's rows
+    settle on one market move, so two hundred of them are one observation. The interval
+    is a normal one on the cluster means, which is the right shape here because this is
+    a mean of a continuous quantity rather than a proportion -- `wilson_interval` is for
+    the win rate and would be wrong on a return that can be negative.
+    """
+    usable = [
+        (item, _capital(item))
+        for item in items
+        if item.profit is not None and _capital(item) is not None
+    ]
+    if not usable:
+        return None
+
+    per_cluster: dict[object, list[float]] = defaultdict(list)
+    for item, capital in usable:
+        per_cluster[cluster_key(item)].append(item.profit / capital)  # type: ignore[operator]
+
+    means = [sum(values) / len(values) for values in per_cluster.values()]
+    if not means:
+        return None
+
+    value = sum(means) / len(means)
+    if len(means) < MIN_FOR_A_SPREAD:
+        return Interval(value, value, value, len(usable), len(means))
+
+    variance = sum((m - value) ** 2 for m in means) / (len(means) - 1)
+    error = Z_95 * math.sqrt(variance / len(means))
+    return Interval(value, value - error, value + error, len(usable), len(means))
+
+
+def strategy_splits(items: Sequence) -> list[StrategySplit]:
+    """Each strategy's top half by score against its bottom half, per dollar risked.
+
+    Within strategy because the score bands are substantially a strategy sorter, so a
+    cross-band comparison is largely a comparison of cash secured puts against spreads.
+    Halves rather than quartiles, for the reason the headline uses halves: they use
+    every observation instead of throwing the middle away.
+    """
+    grouped: dict[str, list] = defaultdict(list)
+    for item in items:
+        if item.profit is not None and _capital(item) is not None:
+            grouped[item.strategy].append(item)
+
+    splits: list[StrategySplit] = []
+    for strategy, rows in sorted(grouped.items()):
+        ordered = sorted(rows, key=lambda item: item.score)
+        middle = len(ordered) // 2
+        if middle == 0:
+            continue
+        splits.append(
+            StrategySplit(
+                strategy=strategy,
+                clusters=count_clusters(rows),
+                count=len(rows),
+                bottom=return_on_capital(ordered[:middle]),
+                top=return_on_capital(ordered[middle:]),
+            )
+        )
+    return splits
+
+
 def score_buckets(items: Sequence, buckets: int = DEFAULT_BUCKETS) -> list[Bucket]:
     """Split resolved candidates by score and report each slice.
 
@@ -246,8 +385,11 @@ def score_buckets(items: Sequence, buckets: int = DEFAULT_BUCKETS) -> list[Bucke
 
         wins = sum(1 for item in slice_ if item.profit > 0)
         profits = [item.profit for item in slice_]
+        capitals = [c for c in (_capital(item) for item in slice_) if c is not None]
         result.append(
             Bucket(
+                mean_capital=(sum(capitals) / len(capitals)) if capitals else None,
+                return_on_capital=return_on_capital(slice_),
                 label=f"Q{index + 1}",
                 low=slice_[0].score,
                 high=slice_[-1].score,
@@ -415,6 +557,28 @@ def validate(items: Sequence, *, buckets: int = DEFAULT_BUCKETS) -> ValidationRe
                 )
             )
 
+    roc = return_on_capital(resolved)
+    splits = strategy_splits(resolved)
+
+    # Said whenever the bands differ in size, which on real data they always do. The
+    # dollar column is the first thing anyone reads and it compares positions that are
+    # not the same size; without this the reader draws the conclusion the data does not
+    # support, which is exactly what happened to this project for six weeks.
+    sized = [b for b in slices if b.mean_capital]
+    if len(sized) >= MIN_BUCKETS:
+        widest = max(sized, key=lambda b: b.mean_capital or 0.0)
+        narrowest = min(sized, key=lambda b: b.mean_capital or 0.0)
+        spread = (widest.mean_capital or 0.0) / (narrowest.mean_capital or 1.0)
+        if spread >= CAPITAL_SPREAD_WORTH_SAYING:
+            notes.append(
+                f"The score bands do not risk the same money: {widest.label} averages "
+                f"{widest.mean_capital:,.0f} a position against {narrowest.label}'s "
+                f"{narrowest.mean_capital:,.0f}, {spread:.0f}x. Compare the return on "
+                "capital column, not the dollar column, and read the per-strategy table "
+                "below: the bands sort largely into strategies, so a difference between "
+                "them is partly a difference between the positions themselves."
+            )
+
     mean_profit = sum(profits) / len(profits)
     win_rate = proportion_interval(resolved, lambda item: item.profit > 0)
     if win_rate is not None and win_rate.value > HIGH_WIN_RATE and mean_profit < 0:
@@ -438,6 +602,8 @@ def validate(items: Sequence, *, buckets: int = DEFAULT_BUCKETS) -> ValidationRe
         mean_profit=mean_profit,
         total_profit=sum(profits),
         scores_separate=separates,
+        return_on_capital=roc,
+        by_strategy=tuple(splits),
         notes=tuple(notes),
     )
 

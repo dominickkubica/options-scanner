@@ -20,7 +20,9 @@ from optscan.analytics.calibration import (
     brier_score,
     count_clusters,
     probability_calibration,
+    return_on_capital,
     score_buckets,
+    strategy_splits,
     validate,
     wilson_interval,
 )
@@ -133,7 +135,7 @@ class TestWilson:
 
 
 def logged(
-    identifier: int,
+    identifier: int = 1,
     *,
     symbol: str = "SPY",
     expiry: date = date(2026, 8, 21),
@@ -144,6 +146,7 @@ def logged(
     scan_id: int = 1,
     settlement_price: float | None = 750.0,
     strategy: str = "put_credit_spread",
+    max_loss: float | None = 500.0,
 ) -> LoggedOpportunity:
     """A 700 put short for a 5.00 credit, so the breakeven is 695."""
     return LoggedOpportunity(
@@ -161,7 +164,7 @@ def logged(
         width=10.0,
         credit=5.0,
         max_profit=500.0,
-        max_loss=500.0,
+        max_loss=max_loss,
         probability_of_profit=pop,
         short_delta=-0.2,
         iv=0.15,
@@ -801,3 +804,204 @@ def _short(opportunity) -> float | None:
     """The same short leg the store picks, so the two keys line up."""
     leg = _short_leg(opportunity)
     return None if leg is None else leg.strike
+
+
+class TestReturnOnCapital:
+    """Profit per dollar risked, which is the figure the dollar column cannot give.
+
+    The whole reason this exists: for six weeks CLAUDE.md carried "the score is
+    anti-correlated with profit" on the strength of mean dollars per position, when the
+    lowest band was risking $44,375 a position and the highest $4,478. A mean over
+    positions of different size is not a comparison between them.
+    """
+
+    def test_it_divides_profit_by_the_capital_at_risk(self) -> None:
+        rows = [logged(score=0.5, profit=50.0, max_loss=500.0, expiry=date(2026, 1, 2))]
+
+        result = return_on_capital(rows)
+
+        assert result is not None
+        assert result.value == pytest.approx(0.10)
+
+    def test_a_chain_counts_once_however_many_rows_it_has(self) -> None:
+        """Two hundred rows off one chain settle on one market move. Averaging over rows
+        would let a single Friday outvote every other week in the sample."""
+        busy = [
+            logged(score=0.5, profit=100.0, max_loss=1_000.0, expiry=date(2026, 1, 2))
+            for _ in range(200)
+        ]
+        quiet = [logged(score=0.5, profit=0.0, max_loss=1_000.0, expiry=date(2026, 2, 6))]
+
+        result = return_on_capital([*busy, *quiet])
+
+        assert result is not None
+        assert result.value == pytest.approx(0.05)  # not 0.0995, which rows would give
+        assert result.clusters == 2
+
+    def test_a_position_with_no_capital_figure_is_left_out(self) -> None:
+        """An undefined risk position has no honest denominator, so it gets none rather
+        than one that would flatter it."""
+        rows = [
+            logged(score=0.5, profit=50.0, max_loss=500.0, expiry=date(2026, 1, 2)),
+            logged(score=0.5, profit=900.0, max_loss=None, expiry=date(2026, 2, 6)),
+        ]
+
+        result = return_on_capital(rows)
+
+        assert result is not None
+        assert result.value == pytest.approx(0.10)
+        assert result.clusters == 1
+
+    def test_the_interval_widens_as_clusters_thin(self) -> None:
+        def sample(clusters: int):
+            return [
+                logged(
+                    score=0.5,
+                    profit=100.0 if index % 2 else -50.0,
+                    max_loss=1_000.0,
+                    expiry=date(2026, 1, 2) + timedelta(days=7 * index),
+                )
+                for index in range(clusters)
+            ]
+
+        few = return_on_capital(sample(4))
+        many = return_on_capital(sample(40))
+
+        assert few is not None and many is not None
+        assert few.width > many.width
+
+    def test_one_cluster_gets_a_point_rather_than_a_fake_interval(self) -> None:
+        rows = [logged(score=0.5, profit=50.0, max_loss=500.0, expiry=date(2026, 1, 2))]
+
+        result = return_on_capital(rows)
+
+        assert result is not None
+        assert result.low == result.high == result.value
+
+    def test_nothing_resolvable_is_none_not_zero(self) -> None:
+        assert return_on_capital([]) is None
+        assert (
+            return_on_capital(
+                [logged(score=0.5, profit=10.0, max_loss=None, expiry=date(2026, 1, 2))]
+            )
+            is None
+        )
+
+    def test_a_loss_is_negative_rather_than_clamped(self) -> None:
+        """Wilson is for the win rate. A return can go below zero and must be allowed to."""
+        rows = [logged(score=0.5, profit=-250.0, max_loss=500.0, expiry=date(2026, 1, 2))]
+
+        result = return_on_capital(rows)
+
+        assert result is not None
+        assert result.value == pytest.approx(-0.5)
+
+
+class TestStrategySplits:
+    """Within strategy, because the score bands are largely a strategy sorter."""
+
+    def rows(self):
+        """Condors where the score genuinely ranks, and puts where it does not."""
+        out = []
+        for index in range(40):
+            week = date(2026, 1, 2) + timedelta(days=7 * index)
+            out.append(
+                logged(
+                    symbol="SPY",
+                    score=0.9,
+                    profit=200.0,
+                    max_loss=1_000.0,
+                    expiry=week,
+                    strategy="iron_condor",
+                )
+            )
+            out.append(
+                logged(
+                    symbol="QQQ",
+                    score=0.4,
+                    profit=-100.0,
+                    max_loss=1_000.0,
+                    expiry=week,
+                    strategy="iron_condor",
+                )
+            )
+            out.append(
+                logged(
+                    symbol="AAPL",
+                    score=0.9,
+                    profit=5.0,
+                    max_loss=1_000.0,
+                    expiry=week,
+                    strategy="cash_secured_put",
+                )
+            )
+            out.append(
+                logged(
+                    symbol="MSFT",
+                    score=0.4,
+                    profit=5.0,
+                    max_loss=1_000.0,
+                    expiry=week,
+                    strategy="cash_secured_put",
+                )
+            )
+        return out
+
+    def test_each_strategy_is_reported_separately(self) -> None:
+        splits = {split.strategy: split for split in strategy_splits(self.rows())}
+
+        assert set(splits) == {"iron_condor", "cash_secured_put"}
+
+    def test_a_strategy_whose_score_ranks_is_marked_as_separating(self) -> None:
+        splits = {split.strategy: split for split in strategy_splits(self.rows())}
+        condor = splits["iron_condor"]
+
+        assert condor.top is not None and condor.bottom is not None
+        assert condor.top.value > condor.bottom.value
+        assert condor.separates is True
+
+    def test_a_strategy_whose_score_ranks_nothing_is_not(self) -> None:
+        splits = {split.strategy: split for split in strategy_splits(self.rows())}
+
+        assert splits["cash_secured_put"].separates is False
+
+    def test_too_few_clusters_refuses_rather_than_guesses(self) -> None:
+        thin = [
+            logged(score=0.9, profit=200.0, max_loss=1_000.0, expiry=date(2026, 1, 2)),
+            logged(score=0.4, profit=-100.0, max_loss=1_000.0, expiry=date(2026, 1, 9)),
+        ]
+        splits = strategy_splits(thin)
+
+        assert splits
+        assert all(split.separates is None for split in splits)
+
+
+class TestCapitalWarning:
+    """The report has to say when the bands are not the same size."""
+
+    def spread_rows(self, small: float, large: float):
+        out = []
+        for index in range(60):
+            week = date(2026, 1, 2) + timedelta(days=7 * index)
+            out.append(logged(score=0.3, profit=10.0, max_loss=large, expiry=week, symbol="SPY"))
+            out.append(logged(score=0.5, profit=10.0, max_loss=large, expiry=week, symbol="QQQ"))
+            out.append(logged(score=0.7, profit=10.0, max_loss=small, expiry=week, symbol="AAPL"))
+            out.append(logged(score=0.9, profit=10.0, max_loss=small, expiry=week, symbol="MSFT"))
+        return out
+
+    def test_bands_that_risk_different_money_are_called_out(self) -> None:
+        report = validate(self.spread_rows(small=1_000.0, large=40_000.0))
+
+        assert any("do not risk the same money" in note for note in report.notes)
+
+    def test_bands_that_risk_alike_are_not(self) -> None:
+        report = validate(self.spread_rows(small=1_000.0, large=1_100.0))
+
+        assert not any("do not risk the same money" in note for note in report.notes)
+
+    def test_the_report_carries_the_comparable_figure(self) -> None:
+        report = validate(self.spread_rows(small=1_000.0, large=40_000.0))
+
+        assert report.return_on_capital is not None
+        assert report.by_strategy
+        assert all(bucket.mean_capital is not None for bucket in report.buckets)

@@ -1953,22 +1953,14 @@ def _cmd_validate(settings: Settings, args: argparse.Namespace) -> int:
     print()
     print(f"  overall win rate  {report.overall_win_rate}")
     print(f"  mean profit       {report.mean_profit:+.2f} per contract")
+    if report.return_on_capital is not None:
+        print(f"  per dollar risked {report.return_on_capital}  <- the comparable figure")
     print(f"  total profit      {report.total_profit:+.2f}")
     if report.brier is not None:
         print(f"  brier score       {report.brier:.4f}  (0.25 is a coin flip, lower is better)")
 
-    if report.buckets:
-        print()
-        print(
-            f"  {'bucket':<8} {'score':<14} {'n':>4} {'clust':>6} {'win rate':<22} {'mean P/L':>10}"
-        )
-        for bucket in report.buckets:
-            span = f"{bucket.low:.3f}-{bucket.high:.3f}"
-            rate = str(bucket.win_rate) if bucket.win_rate else "n/a"
-            print(
-                f"  {bucket.label:<8} {span:<14} {bucket.count:>4} {bucket.clusters:>6} "
-                f"{rate:<22} {bucket.mean_profit:>+10.2f}"
-            )
+    _print_buckets(report)
+    _print_strategy_splits(report)
 
     if report.calibration:
         print()
@@ -1992,6 +1984,43 @@ def _cmd_validate(settings: Settings, args: argparse.Namespace) -> int:
     for note in report.notes:
         print(f"  note: {note}")
     return 0
+
+
+def _print_buckets(report) -> None:
+    """Score bands, with the capital each one risked beside the dollars it made."""
+    if not report.buckets:
+        return
+    print()
+    print(
+        f"  {'bucket':<8} {'score':<14} {'n':>4} {'clust':>6} {'win rate':<22} "
+        f"{'mean P/L':>10} {'capital':>11} {'per $ risked':>22}"
+    )
+    for bucket in report.buckets:
+        span = f"{bucket.low:.3f}-{bucket.high:.3f}"
+        rate = str(bucket.win_rate) if bucket.win_rate else "n/a"
+        capital = f"{bucket.mean_capital:>11,.0f}" if bucket.mean_capital else f"{'n/a':>11}"
+        roc = str(bucket.return_on_capital) if bucket.return_on_capital else "n/a"
+        print(
+            f"  {bucket.label:<8} {span:<14} {bucket.count:>4} {bucket.clusters:>6} "
+            f"{rate:<22} {bucket.mean_profit:>+10.2f} {capital} {roc:>22}"
+        )
+
+
+def _print_strategy_splits(report) -> None:
+    """The same question inside one strategy, which is where it can be asked cleanly."""
+    if not report.by_strategy:
+        return
+    print()
+    print("  Within one strategy, where capital and shape are alike:")
+    print(
+        f"  {'strategy':<20} {'clust':>6} {'bottom half by score':<24} "
+        f"{'top half':<24} {'separates':<10}"
+    )
+    for split in report.by_strategy:
+        bottom = str(split.bottom) if split.bottom else "n/a"
+        top = str(split.top) if split.top else "n/a"
+        verdict = {True: "yes", False: "no", None: "too thin"}[split.separates]
+        print(f"  {split.strategy:<20} {split.clusters:>6} {bottom:<24} {top:<24} {verdict:<10}")
 
 
 def _money(value: float, console=None) -> str:

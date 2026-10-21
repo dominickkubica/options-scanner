@@ -3345,3 +3345,38 @@ endpoint whose window is `datetime.now() - 14 days`. It passed on the day it was
 and started failing 47 days later, having never been wrong about the code. Dated against
 the real clock now. Worth noting that a background run of the suite reported exit 0 while
 its own output contained the failure, so the exit code was not to be trusted either.
+
+## 2026-10-21, later: the validation report measures return on capital
+
+Step A of refining the score. The report headlined mean dollars per position, which is
+an average over positions that are not the same size, and that single choice carried a
+wrong conclusion in CLAUDE.md for six weeks. It now reports **profit per dollar risked**
+beside it, per score band and per strategy.
+
+Three decisions worth keeping:
+
+- **Clusters, not rows.** A chain's rows settle on one market move, so the return is
+  averaged per (symbol, expiry) cluster and then across clusters. On the real sample one
+  busy Friday would otherwise outvote whole months.
+- **A normal interval on the cluster means, not Wilson.** Wilson is for the win rate. A
+  return can be negative and must be allowed to be; clamping it to [0, 1] would hide
+  exactly the losses the figure exists to show.
+- **No denominator is better than a flattering one.** A position with no `max_loss` is
+  left out of every return figure rather than given a substitute. Undefined risk has no
+  honest capital number, which is why the screener disables those strategies.
+
+The report also says in words when the bands do not risk alike (`CAPITAL_SPREAD_WORTH_
+SAYING`, 3x), because the dollar column is the first thing anyone reads.
+
+**What it shows on the current 222 clusters.** Per dollar risked by band: 2% (1 to 4),
+26% (21 to 32), 24% (19 to 29), 9% (5 to 14) -- an inverted U, not the monotone
+anti-correlation the old note claimed, with the lowest band the worst rather than the
+best. Within strategy, nothing separates: call credit spreads 0% bottom half against 1%
+top, cash secured puts 0% against 0%, iron condors 36% (29 to 44) against 27% (22 to 33),
+put credit spreads 9% against 8%. Condors are mildly inverted and the intervals overlap.
+
+Every one of those rows was scored without an IV rank (see the entry above), so this
+measures the four-component score. It is still the right measurement to have in place
+before the five-component rows settle in late November.
+
+1,956 tests pass.
