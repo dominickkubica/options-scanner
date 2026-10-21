@@ -3426,3 +3426,48 @@ the variance risk premium on 294 symbols of daily bars, and CCS/PCS at 0-1 DTE o
 QQQ/SPY option tape. That is step B proper and is not started.
 
 1,968 tests pass.
+
+## 2026-10-21, B: RSI, the EMAs and the tested levels do not pick better days
+
+Six hypotheses, pre-specified and named before anything ran, each tested on the QQQ and
+SPY 0 and 1 DTE tape (656 sessions a symbol, 1,312 symbol-sessions), under both the
+flatten and the hold-to-expiry rule at k=0.5, with every p-value corrected across the
+family by Benjamini-Hochberg and every interval from the study's own week-block
+bootstrap:
+
+  H1  PCS in the bottom RSI tercile beats the top
+  H2  CCS in the top RSI tercile beats the bottom
+  H3  PCS above the EMA20 beats below
+  H4  CCS below the EMA20 beats above
+  H5  PCS within 0.25% of a tested level beats further away
+  H6  CCS within 0.25% of a tested level beats further away
+
+**Nothing survives, and nothing comes close.** Every one of the 24 cells has an interval
+straddling zero, and the corrected q-values run from 0.363 to 0.983. The signs flip
+between 0 and 1 DTE for most of the six, which is the shape of noise rather than of an
+effect that weakens.
+
+The largest gaps are both *against* the hypothesis that motivated them: H2 at 0 DTE
+flatten returns -$2.16 in the top RSI tercile against +$2.93 in the bottom, and H6 at
+0 DTE returns -$6.87 at a level against +$2.82 away from one. Neither is significant
+and neither should be read as a reversed finding; they are the biggest numbers in a
+table of noise, which is what the biggest numbers in a table of noise look like.
+
+**No lookahead.** Every condition is computed with a cursor that advances only past bars
+dated strictly before the session being labelled, the same pattern `trend_labels` uses.
+Entries are at 10:00 on the session itself, so using that session's close would be
+reading the answer.
+
+**What this does not say.** The tercile split tests mild differences, because that is all
+the sample supports: the window does contain a real drawdown (QQQ -22.8%, RSI down to
+23.3) but only **8 QQQ and 7 SPY sessions ever closed below RSI 30**. Fifteen
+symbol-sessions cannot carry a test, so "selling into genuine fear" is **untested rather
+than refuted**. Re-testing it at an extreme threshold after seeing this table would be
+fishing, and the honest route is to wait for tape that contains more of them and pre-
+specify it as its own hypothesis with its own correction.
+
+So the conditioners that have history do not help, and the conditioner that might --
+gamma -- has no history to be tested against. That is the state of step B.
+
+Script kept in the session scratchpad rather than the repo: a null result does not earn
+a command, and `optscan premium` already has the `by_trend` split it would extend.
