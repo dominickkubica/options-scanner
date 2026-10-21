@@ -246,6 +246,27 @@ exit fills the minute after it triggers, because filling at the trigger minute w
 measured $2.50 to $6.60 a condor of noise. Results and their limits in the DECISIONS
 entry of 2026-09-14.
 
+**Exception, authorized 2026-09-17: the iron butterfly in the premium engine.**
+`Structure.IRON_BUTTERFLY`, both shorts on the strike nearest spot. It loses to the
+condor at every wing width and the narrow ones are indistinguishable from zero. Its
+break-even credit is `E[min(|move|, width)]`, which the market pays within pennies of.
+DECISIONS entry of 2026-09-17.
+
+**Exception, authorized 2026-09-17: open interest and gamma levels.**
+`analytics/gex.py` plus `GET /symbols/{symbol}/gex` and a panel on the Key levels tab:
+call and put walls, a pin candidate, max pain, net GEX per strike, and a zero-gamma
+level found by repricing every strike across a +/-3% spot grid. Pure math with every
+threshold an argument, so the scanner can reuse it. **Nothing in it is validated
+against outcomes**, and the dealer sign convention it rests on is not a measurement.
+`SPX` and `XSP` alias to `^SPX` and `^XSP`; the ticker search cannot reach either yet.
+
+**2026-10-21: `run_record` was scoring without an IV history**, so every one of the
+33,571 settled validation rows carries a null IV rank and the study has been grading a
+four-component score while every screen showed five. Fixed with two tests. Nothing
+retroactive is possible: whether the real score separates outcomes cannot be answered
+until newly recorded rows settle. **`optscan validate` is worth re-running around late
+November 2026**, once a month of post-fix rows have expiries behind them.
+
 - **Every threshold was measured before it shipped**, over 44,113 symbol-days (294
   symbols, one session in five across three years). At the defaults the whole universe
   produces roughly 9 signals a day, 2 of them at severity 3 or above. The dump and the
