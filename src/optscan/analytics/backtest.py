@@ -43,8 +43,12 @@ term is exact, because the underlying's path is real stored history. Only the cr
 modelled, and it is modelled with **real vendor implied volatility** from
 `vendor_daily.iv30`.
 
-That history exists for exactly two symbols, so option backtests run on those two and
-refuse elsewhere. The refusal is the important part. The obvious workaround is to
+That history existed for exactly two symbols when this was written. **As of the Market
+Chameleon imports it exists for 24**, most of them from 2014-01-02, so the option modes
+now run on twenty-three liquid names across twelve years rather than on two. The code
+did not change; the data arrived underneath it and nothing re-ran until 2026-10-21.
+Symbols with no stored IV history are still refused, and the refusal is the important
+part. The obvious workaround is to
 substitute realized volatility for implied, and it is not a workaround, it is the
 destruction of the experiment: **the gap between implied and realized vol is the
 variance risk premium, which is precisely the edge a premium seller is trying to

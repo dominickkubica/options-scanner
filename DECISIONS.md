@@ -3471,3 +3471,47 @@ gamma -- has no history to be tested against. That is the state of step B.
 
 Script kept in the session scratchpad rather than the repo: a null result does not earn
 a command, and `optscan premium` already has the `by_trend` split it would extend.
+
+## 2026-10-21, B: longer expiries, and what the data will and will not price
+
+Asked to look at one week, three weeks and three months out. Two of the three cannot be
+done, and the one that can turned out to have twelve times the data anyone thought.
+
+**One week: no.** The option tape is `SUPPORTED_DTES = frozenset({0, 1})` -- it stores
+each session's own expiry and the next, and nothing further. The other engine, which
+prices from `vendor_daily.iv30`, refuses 7 DTE by `TENOR_BAND = (15, 60)`: a thirty day
+quote is not the right price for a seven day contract, and pricing one with the other is
+the tenor mismatch already recorded as the tenth instance of this project's recurring
+bug. Testing a week out needs the tape re-synced at a longer horizon.
+
+**Three months: no**, same rule from the other end. 90 is outside (15, 60).
+
+**Three weeks: yes, and on far more than expected.** `backtest.py` says in its own
+docstring that IV30 history "exists for exactly two symbols". That has been stale since
+the Market Chameleon imports: 24 symbols carry IV30, most from 2014-01-02, about 3,192
+sessions each. The option modes have been able to run on twenty-three liquid names
+across twelve years for weeks and nobody re-ran them. Docstring corrected.
+
+**What 21 DTE says, on 3,316 trades over 155 independent blocks, 23 symbols, 2014-2026:**
+
+| rule | mean/trade | null | edge | p |
+|------|-----------:|-----:|-----:|--:|
+| short put, every bar | +0.113% | +0.184% | **-0.071%** | 0.764 |
+| short call, every bar | -0.680% | -0.713% | +0.033% | 0.483 |
+| short put, RSI below 30 | -0.087% | +0.159% | **-0.246%** | 0.782 |
+
+The put side's raw positive is drift: random entry collects the same premium and
+slightly more of it. The call side loses outright, which twelve years of a rising market
+is enough to explain on its own. Neither is distinguishable from its null.
+
+**The third row is the one worth keeping.** `oversold_bounce` is this project's only
+validated strategy: RSI below 30, held five sessions, +0.71% at p=0.004 on 118 blocks,
++0.46% after real costs. Expressed instead as a twenty-one day short put it makes
+-0.087% and loses to random entry. **A validated directional edge does not transfer to
+the premium-selling expression of the same view.** The plausible reason is tenor: the
+bounce is a five session effect and the put holds for twenty-one, so the edge is spent
+long before expiry while the position keeps the risk. Worth remembering before anyone
+reaches for an option to express a signal that was measured on the stock.
+
+The tool's own survivorship warning applies to all three rows: the universe is symbols
+that are interesting in 2026.
