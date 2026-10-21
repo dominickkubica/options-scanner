@@ -25,10 +25,18 @@ from optscan.analytics.calibration import (
     wilson_interval,
 )
 from optscan.analytics.outcomes import Outcome, intrinsic_value, settle
-from optscan.models import PriceBar
-from optscan.storage import db
+from optscan.config import Settings
+from optscan.jobs.scan import load_iv_history
+from optscan.jobs.validate import run_record
+from optscan.models import ChainSnapshot, PriceBar
+from optscan.models.vendor import VendorDailyBar
+from optscan.screener.config import ScreenConfig
+from optscan.screener.context import analyze_snapshot
+from optscan.screener.scan import scan_analysis
+from optscan.storage import db, write_snapshot
 from optscan.storage import validation as store
-from optscan.storage.validation import LoggedOpportunity
+from optscan.storage.validation import LoggedOpportunity, _short_leg
+from optscan.storage.vendor import import_daily_bars
 
 
 class TestIntrinsic:
@@ -693,3 +701,103 @@ class TestSettlementPrice:
 
         with db.session(settings.sqlite_path) as conn:
             assert store.counts(conn)["resolved"] == 0
+
+
+def _seed_iv_history(conn, symbol: str, upto: date, sessions: int = 400) -> None:
+    """A vendor IV30 history long enough to produce a confident rank.
+
+    Values sweep a wide band so the newest reading lands mid-range rather than at an
+    extreme, which keeps the resulting rank away from 0 and 1 and makes a dropped
+    component distinguishable from a low one.
+    """
+    start = upto - timedelta(days=sessions - 1)
+    bars = []
+    for index in range(sessions):
+        iv = 0.12 + 0.16 * ((index * 7) % 50) / 50.0
+        bars.append(
+            VendorDailyBar(
+                source="marketchameleon",
+                symbol=symbol,
+                session_date=start + timedelta(days=index),
+                open=100.0,
+                high=101.0,
+                low=99.0,
+                close=100.0,
+                iv30=iv,
+            )
+        )
+    import_daily_bars(conn, bars, file_name="seeded.csv")
+
+
+class TestRecordedScoreMatchesTheShownScore:
+    """The study has to grade the score the rest of the app displays.
+
+    It did not until 2026-10-21. `run_record` called `analyze_snapshot` with no IV
+    history, so `score_iv_rank` returned None for every candidate, the component was
+    dropped, and its 0.20 was renormalized across the other four. The dashboard and the
+    CLI scan both load the history and showed a different number for the same
+    candidate -- so the whole calibration, 33,571 settled rows, was grading a score
+    nobody was ever shown. Scans recorded weeks after the Market Chameleon import still
+    logged a null rank, which is why re-running the study could not see the change it
+    was meant to measure.
+    """
+
+    def test_a_recorded_candidate_carries_the_iv_rank(
+        self, tmp_settings: Settings, frozen_snapshot: ChainSnapshot
+    ) -> None:
+        tmp_settings.ensure_dirs()
+        write_snapshot(frozen_snapshot, tmp_settings.snapshot_path)
+        with db.session(tmp_settings.sqlite_path) as conn:
+            db.seed_watchlist(conn, [frozen_snapshot.symbol])
+            _seed_iv_history(conn, frozen_snapshot.symbol, frozen_snapshot.session_date)
+
+        result = run_record(tmp_settings, ScreenConfig(), symbols=[frozen_snapshot.symbol])
+
+        assert result.recorded > 0
+        with db.session(tmp_settings.sqlite_path) as conn:
+            rows = store.all_logged(conn)
+        assert rows, "nothing was logged"
+        assert any(row.iv_rank is not None for row in rows), (
+            "every recorded candidate came back with a null IV rank, so the study is "
+            "grading a score with the IV component dropped"
+        )
+
+    def test_the_recorded_score_is_the_one_the_screener_computes(
+        self, tmp_settings: Settings, frozen_snapshot: ChainSnapshot
+    ) -> None:
+        """Scored twice: once through the record job, once the way the dashboard does
+        it. They must agree, or the study is calibrating a different number."""
+        tmp_settings.ensure_dirs()
+        write_snapshot(frozen_snapshot, tmp_settings.snapshot_path)
+        with db.session(tmp_settings.sqlite_path) as conn:
+            db.seed_watchlist(conn, [frozen_snapshot.symbol])
+            _seed_iv_history(conn, frozen_snapshot.symbol, frozen_snapshot.session_date)
+
+        config = ScreenConfig()
+        run_record(tmp_settings, config, symbols=[frozen_snapshot.symbol])
+        with db.session(tmp_settings.sqlite_path) as conn:
+            rows = store.all_logged(conn)
+
+        history = load_iv_history(tmp_settings, frozen_snapshot.symbol, frozen_snapshot)
+        analysis = analyze_snapshot(
+            frozen_snapshot,
+            rate=tmp_settings.risk_free_rate,
+            iv_history=history or None,
+        )
+        shown = {
+            (o.symbol, o.expiry, o.strategy.value, _short(o), o.width): o.score
+            for o in scan_analysis(analysis, config).opportunities
+        }
+        checked = 0
+        for row in rows:
+            key = (row.symbol, row.expiry, row.strategy, row.short_strike, row.width)
+            if key in shown:
+                assert row.score == pytest.approx(shown[key], abs=1e-9)
+                checked += 1
+        assert checked > 0, "no recorded candidate could be matched back to the screener"
+
+
+def _short(opportunity) -> float | None:
+    """The same short leg the store picks, so the two keys line up."""
+    leg = _short_leg(opportunity)
+    return None if leg is None else leg.strike

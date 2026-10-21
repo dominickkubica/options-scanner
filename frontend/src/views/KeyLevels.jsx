@@ -1,3 +1,4 @@
+import Gex from "./Gex.jsx";
 import Levels from "./Levels.jsx";
 import Signals from "./Signals.jsx";
 
@@ -11,6 +12,11 @@ import Signals from "./Signals.jsx";
 // Both are scoped to the selected symbol here. The signals view is also reachable
 // across the whole watchlist from Trade ideas, which is the "which symbol should I look
 // at" question rather than this one.
+//
+// The gamma panel sits between them and does not need `summary`, which is the point of
+// where it is wired: it fetches its own chain by symbol, so it is the only thing on this
+// tab that works for an index the nightly capture has never touched. `^SPX` has no
+// stored snapshot and never will, and the panel still draws.
 export default function KeyLevels({ symbol, summary }) {
   return (
     <>
@@ -22,6 +28,7 @@ export default function KeyLevels({ symbol, summary }) {
           reads the surface is not available. The price levels below still are.
         </div>
       )}
+      <Gex symbol={symbol} />
       <Signals symbol={symbol} />
     </>
   );

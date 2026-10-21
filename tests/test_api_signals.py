@@ -12,7 +12,7 @@ provider is involved at all.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -137,12 +137,21 @@ def test_stale_symbols_are_reported_in_the_notes(
 
 
 def test_recent_signals_reads_the_record(client: TestClient, tmp_settings: Settings) -> None:
+    """Dated against the real clock rather than this file's frozen TODAY.
+
+    Unlike the signal scan, which measures staleness against the newest session held in
+    the database, `/api/signals/recent` windows on `datetime.now() - 14 days`. A
+    hardcoded fired_at therefore passes on the day it is written and fails once the
+    calendar moves past the window: this test was written against 2026-09-04 and broke
+    on 2026-10-21, forty-seven days later, having never been wrong about the code.
+    """
+    fired = datetime.now(UTC) - timedelta(days=1)
     with db.session(tmp_settings.sqlite_path) as conn:
         conn.execute(
             "INSERT INTO signal_sent "
             "(symbol, kind, session_date, fired_at, severity, price, detail) "
-            "VALUES ('SPY', 'level_break', '2026-09-04', "
-            "'2026-09-04T21:00:00+00:00', 3, 640.0, 'broke a level')"
+            "VALUES ('SPY', 'level_break', ?, ?, 3, 640.0, 'broke a level')",
+            (fired.date().isoformat(), fired.isoformat()),
         )
         conn.commit()
 
@@ -151,7 +160,7 @@ def test_recent_signals_reads_the_record(client: TestClient, tmp_settings: Setti
     row = payload["signals"][0]
     assert row["symbol"] == "SPY"
     assert row["severity"] == 3
-    assert row["fired_at"] == "2026-09-04T21:00:00+00:00"
+    assert row["fired_at"] == fired.isoformat()
     assert payload["counts"] == {"level_break": 1}
 
 

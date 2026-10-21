@@ -243,3 +243,100 @@ class TestExits:
         assert (
             run_exit(put_spread_entry(credit_mid=0.02, half=0.02), path, ExitRule(), k=1.0) is None
         )
+
+
+class TestButterflyEntry:
+    """The body sits on the money, not on a delta, which is what makes it a butterfly."""
+
+    def entry(self, width: float = 2.0) -> Entry:
+        underlying, options = synthetic_tape(minutes=60)
+        marks = build_marks("QQQ", SESSION, underlying, options, close=CLOSE, rate=RATE)
+        entry = select_entry(
+            marks,
+            SESSION,
+            Structure.IRON_BUTTERFLY,
+            EntryRule(minute=30, short_delta=0.2, width=width),
+            SpreadModel(),
+            RATE,
+        )
+        assert isinstance(entry, Entry)
+        return entry
+
+    def test_both_shorts_sit_on_the_strike_nearest_spot(self) -> None:
+        """Spot is flat at 100 in the fixture, so the body is 100 and not a 0.20 delta
+        strike. A butterfly that picked its body by delta would be a condor."""
+        entry = self.entry()
+        shorts = [leg for leg in entry.legs if leg.short]
+
+        assert len(shorts) == 2
+        assert {leg.strike for leg in shorts} == {100.0}
+        assert {leg.is_call for leg in shorts} == {False, True}
+
+    def test_the_wings_sit_a_width_either_side_of_the_body(self) -> None:
+        entry = self.entry(width=3.0)
+        longs = {(leg.is_call, leg.strike) for leg in entry.legs if not leg.short}
+
+        assert longs == {(False, 97.0), (True, 103.0)}
+
+    def test_the_short_delta_rule_is_ignored_rather_than_honoured(self) -> None:
+        """`short_delta` is meaningless here and the entry says so by reporting what the
+        body's delta actually is: about a half, never the 0.20 that was asked for."""
+        entry = self.entry()
+
+        assert all(0.4 < delta < 0.6 for delta in entry.short_deltas)
+
+    def test_the_credit_is_the_straddle_less_the_strangle(self) -> None:
+        entry = self.entry()
+        years = (expiry_seconds(SESSION) - (OPEN + timedelta(minutes=30)).timestamp()) / (
+            365 * 24 * 3600
+        )
+        body = float(
+            bsm_price(False, 100.0, 100.0, years, RATE, SIGMA)
+            + bsm_price(True, 100.0, 100.0, years, RATE, SIGMA)
+        )
+        wings = float(
+            bsm_price(False, 100.0, 98.0, years, RATE, SIGMA)
+            + bsm_price(True, 100.0, 102.0, years, RATE, SIGMA)
+        )
+
+        assert entry.credit_mid == pytest.approx(body - wings, rel=1e-6)
+
+    def test_the_credit_cannot_exceed_the_wing_width(self) -> None:
+        """The no-arbitrage bound on the structure. A credit above the width would be a
+        riskless profit, and finding one means the marks are wrong rather than that the
+        trade is good."""
+        for width in (1.0, 2.0, 5.0):
+            assert self.entry(width=width).credit_mid < width
+
+    def test_a_wing_with_no_mark_is_a_stated_refusal(self) -> None:
+        underlying, options = synthetic_tape(minutes=60)
+        marks = build_marks("QQQ", SESSION, underlying, options, close=CLOSE, rate=RATE)
+        refusal = select_entry(
+            marks,
+            SESSION,
+            Structure.IRON_BUTTERFLY,
+            # The ladder stops at 90 and 110, so a 50 wide wing is not listed.
+            EntryRule(minute=30, width=50.0),
+            SpreadModel(),
+            RATE,
+        )
+
+        assert isinstance(refusal, str) and "wing" in refusal
+
+    def test_settlement_on_the_body_pays_the_whole_credit(self) -> None:
+        """The structure's best case, and the one the study's assignment work is about:
+        it is also the settlement that leaves a short sitting exactly at the money."""
+        entry = self.entry()
+        path = Path(
+            spot=np.array([100.0, 100.0]),
+            price=np.zeros((2, 4)),
+            delta=np.zeros((2, 4)),
+            half=np.zeros((2, 4)),
+            flatten_at=1,
+            settle_spot=100.0,
+            _signs=np.array([leg.sign for leg in entry.legs]),
+        )
+        trade = run_exit(entry, path, ExitRule(settle=True), k=0.0)
+
+        assert trade is not None
+        assert trade.exit_debit == pytest.approx(0.0)

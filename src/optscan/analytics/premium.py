@@ -91,6 +91,10 @@ class Structure(StrEnum):
     PUT_SPREAD = "put_spread"
     CALL_SPREAD = "call_spread"
     IRON_CONDOR = "iron_condor"
+    #: Short straddle at the strike nearest spot, wings a width either side. The one
+    #: structure here whose short strikes are not chosen by delta: its body is the
+    #: money, so `short_delta` does not apply to it and is ignored.
+    IRON_BUTTERFLY = "iron_butterfly"
 
 
 class ExitReason(StrEnum):
@@ -337,28 +341,16 @@ def select_entry(
     spot = float(marks.spot[minute])
     years = float(smile.years[minute])
 
-    sides = {
-        Structure.PUT_SPREAD: (False,),
-        Structure.CALL_SPREAD: (True,),
-        Structure.IRON_CONDOR: (False, True),
-    }[structure]
-    legs: list[Leg] = []
-    short_deltas: list[float] = []
-    for is_call in sides:
-        candidates = np.isfinite(row) & (smile.strikes > spot if is_call else smile.strikes < spot)
-        if not candidates.any():
-            return "no out of the money strikes at the entry minute"
-        deltas = np.abs(
-            bsm_delta(is_call, spot, smile.strikes[candidates], years, rate, row[candidates])
-        )
-        pick = int(np.argmin(np.abs(deltas - rule.short_delta)))
-        short_strike = float(smile.strikes[candidates][pick])
-        long_strike = short_strike + rule.width if is_call else short_strike - rule.width
-        long_column = smile.column(long_strike)
-        if long_column is None or not np.isfinite(long_column[minute]):
-            return f"no mark for the {long_strike:g} wing"
-        legs += [Leg(is_call, short_strike, True), Leg(is_call, long_strike, False)]
-        short_deltas.append(float(deltas[pick]))
+    if structure is Structure.IRON_BUTTERFLY:
+        built = _butterfly_legs(smile, row, minute, spot, years, rate, rule)
+        if isinstance(built, str):
+            return built
+        legs, short_deltas = built
+    else:
+        built = _wing_legs(smile, row, minute, spot, years, rate, rule, structure)
+        if isinstance(built, str):
+            return built
+        legs, short_deltas = built
 
     sigmas = np.array([smile.column(leg.strike)[minute] for leg in legs])
     calls = np.array([leg.is_call for leg in legs])
@@ -382,6 +374,83 @@ def select_entry(
         spot=spot,
         width=rule.width,
     )
+
+
+def _butterfly_legs(
+    smile: Smile,
+    row: np.ndarray,
+    minute: int,
+    spot: float,
+    years: float,
+    rate: float,
+    rule: EntryRule,
+) -> tuple[list[Leg], list[float]] | str:
+    """Both shorts on the strike nearest spot, each wing `width` away from it.
+
+    The body is deliberately the listed strike closest to spot rather than the one
+    closest to a target delta. That is what a butterfly is: the position is a bet that
+    settlement lands on the body, so the body has to be where the money already is. It
+    is also why this structure cannot be compared to a condor at equal delta -- the
+    shorts here are about 0.50 delta each by construction, not 0.20.
+    """
+    listed = np.isfinite(row)
+    if not listed.any():
+        return "no strikes with a mark at the entry minute"
+    available = smile.strikes[listed]
+    body = float(available[int(np.argmin(np.abs(available - spot)))])
+
+    legs: list[Leg] = []
+    short_deltas: list[float] = []
+    for is_call in (False, True):
+        wing = body + rule.width if is_call else body - rule.width
+        column = smile.column(wing)
+        if column is None or not np.isfinite(column[minute]):
+            return f"no mark for the {wing:g} wing"
+        body_sigma = float(smile.column(body)[minute])
+        delta = float(
+            np.abs(bsm_delta(is_call, spot, np.array([body]), years, rate, np.array([body_sigma])))[
+                0
+            ]
+        )
+        legs += [Leg(is_call, body, True), Leg(is_call, wing, False)]
+        short_deltas.append(delta)
+    return legs, short_deltas
+
+
+def _wing_legs(
+    smile: Smile,
+    row: np.ndarray,
+    minute: int,
+    spot: float,
+    years: float,
+    rate: float,
+    rule: EntryRule,
+    structure: Structure,
+) -> tuple[list[Leg], list[float]] | str:
+    """Short strikes chosen by delta, out of the money, with a wing `width` beyond."""
+    sides = {
+        Structure.PUT_SPREAD: (False,),
+        Structure.CALL_SPREAD: (True,),
+        Structure.IRON_CONDOR: (False, True),
+    }[structure]
+    legs: list[Leg] = []
+    short_deltas: list[float] = []
+    for is_call in sides:
+        candidates = np.isfinite(row) & (smile.strikes > spot if is_call else smile.strikes < spot)
+        if not candidates.any():
+            return "no out of the money strikes at the entry minute"
+        deltas = np.abs(
+            bsm_delta(is_call, spot, smile.strikes[candidates], years, rate, row[candidates])
+        )
+        pick = int(np.argmin(np.abs(deltas - rule.short_delta)))
+        short_strike = float(smile.strikes[candidates][pick])
+        long_strike = short_strike + rule.width if is_call else short_strike - rule.width
+        long_column = smile.column(long_strike)
+        if long_column is None or not np.isfinite(long_column[minute]):
+            return f"no mark for the {long_strike:g} wing"
+        legs += [Leg(is_call, short_strike, True), Leg(is_call, long_strike, False)]
+        short_deltas.append(float(deltas[pick]))
+    return legs, short_deltas
 
 
 # --------------------------------------------------------------------------------

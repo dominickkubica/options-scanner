@@ -3160,3 +3160,188 @@ So the +$8 was the pay for pin and overnight gap risk the study did not charge f
 The study's hold-to-expiry rows are optimistic by construction and should be read that
 way; modelling after hours exercise in the engine itself is the fix if they are ever
 relied on. No rule in this study is worth trading.
+
+
+## 2026-09-17: open interest and gamma levels on the Key levels tab
+
+Authorized as new scope. `analytics/gex.py` computes the call and put walls, a pin
+candidate, max pain, net gamma exposure per strike and the zero-gamma level;
+`GET /api/symbols/{symbol}/gex` serves them and a panel on the Key levels tab draws
+them. The module is pure math with every threshold an argument, so the scanner can use
+it later without inheriting the dashboard's defaults.
+
+**The one modelled number is labelled as one.** The walls, the pin and max pain are
+counts of contracts and assume nothing. GEX assumes dealers are long every call and
+short every put, which is the conventional sign rule and is not a measurement: real
+positioning is not published, and one large overwriting programme can flip a strike's
+true sign invisibly. The regime label inherits exactly that much confidence, and the
+panel says so rather than printing "dampened" as a fact.
+
+**Gamma is solved here, not read.** yfinance publishes open interest and an implied vol
+and no greeks. Solving it is also what makes the zero-gamma search possible: the level
+is found by asking what total GEX would be at a hypothetical spot across a +/-3% grid,
+which needs every strike repriced at each grid point. A vendor's gamma is fixed at
+today's spot and the search over it would be measuring the open interest distribution
+and nothing else.
+
+**Not part of the levels payload, and not read from the stored capture.** It costs a
+chain fetch per expiry, so folding it into `/levels` would make every levels request pay
+for open interest most of them never show. Reading the nightly capture instead would
+have been cheaper and would have excluded the index chains entirely: `^SPX` has never
+been captured and never will be, because the capture job walks the watchlist.
+
+**Four things the first live run found, all of them invisible in a synthetic chain:**
+
+- **Zero open interest is not "priced".** Rows with no open interest contribute nothing
+  and were counting as successfully priced, so a chain nobody holds totalled a confident
+  0.0 and the zero-gamma search reported a flip at the first price it tried. It showed on
+  `^SPX`, where Yahoo publishes no open interest for most expiries. A chain of zeroes now
+  reports no gamma at all.
+- **The nearest listed expiry is dead after 16:00.** Vendors keep today's expiry in the
+  list all evening. Every contract on it has zero time to expiry, so no gamma can be
+  computed for any of them and the panel read as a chain with no volatilities; the walls
+  on it are walls on settled contracts. The default now skips an expiry that has stopped
+  trading and says it did.
+- **The heaviest strike is regularly a wing.** "Highest call open interest above spot" is
+  the honest definition and on the first run it returned 13000 for SPX, 70% above spot,
+  and 520 for SPY, 32% below. Both are real counts and neither is a level price will meet,
+  so the number stands and a note says what it is.
+- **Yahoo's index open interest is patchy rather than absent.** `^SPX` had 35,861
+  contracts on one expiry and zero on the two either side of it. The panel reports what is
+  there; there is no second vendor to fall back to.
+
+Spot is the delayed quote feed, falling back to the chain's own underlying for indices,
+which the feed does not carry. Which one was used is on the wire, because they are two
+different prices and a spot a dollar off the header price would be read as a bug in the
+levels. Open interest is dated to the prior session rather than the fetch date: it
+settles overnight, so every level here describes the prior close however fresh the fetch
+looks, and the panel says that on every response rather than only when something looks
+wrong.
+
+Chains are cached five minutes, per symbol and expiry. Far longer than the live chain's
+twenty seconds, and for a property of the data rather than a tuning choice: open interest
+is published once a day, so two fetches a minute apart return the same numbers.
+
+`SPX` and `XSP` are aliased to `^SPX` and `^XSP` from an explicit table. Plain `XSP`
+returns an empty expiry list rather than an error, so without the alias the panel would
+report "no options" for a symbol with a full chain. **The dashboard cannot navigate to
+either yet**: the ticker search offers catalogue symbols only, and neither index is in
+the universe. The endpoint answers for them today.
+
+1,945 tests pass (66 new: 42 on the math, 24 on the endpoint).
+
+
+## 2026-09-17: the butterfly tested, and the survivor's first look out of sample
+
+Two questions, asked together: run the out-of-sample check the entry above calls for, and
+test the iron butterfly, which the study had never covered. `Structure.IRON_BUTTERFLY`
+added to the engine: both shorts on the strike nearest spot, wings a width either side.
+Its body is deliberately chosen by proximity to spot rather than by delta, which is what
+separates it from a condor and why `short_delta` does not apply to it. Seven tests,
+including the no-arbitrage bound that the credit can never exceed the wing width — a
+credit above it would be a riskless profit and means the marks are wrong, not that the
+trade is good.
+
+**The out-of-sample check is a peek, not a test.** The tape now runs to 2026-09-17, which
+is four sessions past the 2026-09-11 cutoff: eight positions per structure. The study
+itself refuses to report a mean on them ("too few sessions to report"), correctly. The raw
+outcomes, held to expiry at k=0.5: the condor made +$28.98 a position with six of eight
+winners, the butterfly -$20.65 with one of eight. The condor did not fall apart. That is
+all eight observations can say, and the real check needs about three months.
+
+**Over the full 659 sessions the butterfly loses to the condor at every width.** 0DTE, held
+to expiry, k=0.5, about 1,300 trades each:
+
+| wings | butterfly | q | win | condor | q | win |
+|-------|-----------|------|-----|--------|------|-----|
+| $1 | -$0.99 [-2.72, +0.85] | 0.45 | 24% | +$3.94 [+1.39, +6.37] | 0.01 | 73% |
+| $2 | +$2.47 [-1.53, +6.86] | 0.54 | 39% | +$8.16 [+3.33, +12.75] | 0.00 | 76% |
+| $5 | +$14.35 [+4.25, +23.93] | 0.03 | 55% | +$18.33 [+9.40, +26.60] | 0.00 | 78% |
+
+The $2 condor's +$8.16 reproduces the +$8.03 of the original study with four sessions added,
+which is the consistency check worth having. The narrow butterflies are indistinguishable
+from zero; only the $5 clears, and it risks $172 a lot.
+
+**Why, arithmetically, and it was predictable without the engine.** A butterfly pays
+`credit - min(|move|, width)`, so its break-even credit is `E[min(|move|, width)]`. Measured
+over 659 sessions from the 10:00 entry to the close, QQQ's median move is $2.32 (0.43%) and
+that expectation is $1.55 at a $2 width. The market pays about $1.60 to $1.75. The structure
+is priced within pennies of fair, which is exactly what the wide intervals above say
+independently. **A fairly priced bet is the null result this project keeps looking for, and
+here two methods agreed on it.**
+
+The base rates behind it, QQQ, 659 sessions, 10:00 to the close: settles within $1 on 21.7%
+of days, within $2 on 44.5%, within $5 on 79.8%. SPY: 25.5%, 49.0%, 86.5%.
+
+**Sizing is what actually decides which structures are available.** Recent QQQ pricing, 63
+sessions, after fills: the $1 butterfly collects $0.92 and risks $8 to win $92; the $2
+butterfly collects $1.75 and risks $25 to win $175; the $1 condor risks $69 to win $31 and
+the $2 condor $145 to win $55. So the only structures that fit a $40 stake are the two with
+no measurable edge, and the edge that does exist needs $69 to $145 a lot to reach. Worth
+remembering whenever a result is reported per position: **the positions are not the same
+size, and the one with the best mean is the one that risks the most.**
+
+
+## 2026-10-21: the calibration was grading a score nobody was ever shown
+
+Asked to re-run the calibration now that IV rank is real. It cannot answer that question,
+because of a bug the re-run exposed: **`run_record` called `analyze_snapshot` without an
+IV history.** `score_iv_rank` therefore returned None on every candidate it ever logged,
+the component was dropped, and its 0.20 was renormalized across the other four. The
+dashboard and the CLI scan both load the history (`api/deps.py`, `jobs/scan.py`); the
+record job was the only one of the three that did not.
+
+So all 33,571 settled rows carry a null IV rank, **including scans recorded weeks after
+the Market Chameleon import made the rank real** -- a scan taken the morning this was
+found still logged nulls. The study has been calibrating a four-component score while
+every screen in the app displayed a five-component one. Fixed, with two tests that fail
+without the fix: one asserts a recorded candidate carries a rank when a history exists,
+the other scores the same snapshot through both paths and requires the two to agree. The
+next scan logged 557 of 557 rows with a rank, and the mean score moved 0.696 to 0.653.
+
+Nothing retroactive is possible. Whether the real score separates outcomes is unanswerable
+until newly recorded rows settle.
+
+### What the re-run does say, and why the old headline was wrong
+
+The sample is now 33,571 resolved rows over **222 independent clusters**, against the 14
+behind the note in CLAUDE.md. The dollar ordering that note reported survives: mean profit
+by score quartile runs +$175, +$162, +$113, +$88 from lowest to highest. The verdict line
+is unchanged: this sample does not show the score separating outcomes.
+
+**But most of that ordering is the denominator.** Mean capital per position by the same
+quartiles: $44,375, $14,210, $3,763, $4,478. The bottom band is 85% cash secured puts, and
+a cash secured put on a $450 underlying risks forty thousand dollars to earn a hundred.
+Per dollar risked, clustered by (symbol, expiry):
+
+| band | clusters | mean $P/L | mean capital | return on capital |
+|------|---------:|----------:|-------------:|------------------:|
+| Q1 (lowest) | 204 | $106.93 | $44,375 | 2.4% +/- 1.3 |
+| Q2 | 174 | $107.19 | $14,210 | 26.5% +/- 5.3 |
+| Q3 | 170 | $95.01 | $3,763 | 23.5% +/- 5.0 |
+| Q4 (highest) | 174 | $42.55 | $4,478 | 9.6% +/- 4.7 |
+
+The relationship is an inverted U, not the monotone anti-correlation the old note claims:
+the lowest-scoring band is the **worst** per dollar risked, not the best. What is true is
+that the top band underperforms the middle two, and the intervals overlap.
+
+**The bands are substantially a strategy sorter.** Q1 is 85% cash secured puts; Q4 is 54%
+iron condors and 32% call credit spreads. Comparing P/L across bands therefore compares
+strategies as much as scores. Controlling for that by splitting within one strategy, the
+score separates nothing: iron condors return 36.4% +/- 7.3 in the bottom half by score
+against 27.4% +/- 5.1 in the top; cash secured puts are 0.2% against 0.2%; call credit
+spreads 0.1% +/- 9.3 against 1.0% +/- 7.4.
+
+**The lesson is the project's own, in a new place.** `effective_sample` was about counting
+the unit of independence; ranking a grid by raw return was about the horizon. This is the
+same shape a third time: **a per-position result compares positions that are not the same
+size.** Any future claim about the score has to be per dollar risked and within strategy,
+or it is measuring the strategy mix.
+
+### Unrelated, found by the same run
+
+`test_recent_signals_reads_the_record` hardcoded a `fired_at` of 2026-09-04 against an
+endpoint whose window is `datetime.now() - 14 days`. It passed on the day it was written
+and started failing 47 days later, having never been wrong about the code. Dated against
+the real clock now. Worth noting that a background run of the suite reported exit 0 while
+its own output contained the failure, so the exit code was not to be trusted either.

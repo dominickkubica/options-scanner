@@ -33,7 +33,8 @@ src/optscan/
   analytics/        greeks.py, iv.py, probability.py, levels.py, projection.py,
                     portfolio.py, triggers.py, signals.py, outcomes.py, calibration.py,
                     backtest.py (engine + nulls), rules.py (rolling indicators, entries),
-                    costs.py (Corwin-Schultz spread from OHLC)
+                    costs.py (Corwin-Schultz spread from OHLC),
+                    gex.py (open interest walls, max pain, dealer gamma, zero gamma)
   screener/         rules/, scoring.py, strategies/
   console.py        terminal colour, and the rules about when not to use it
   jobs/             snapshot.py, schedule.py, manage.py, validate.py, backup.py,
@@ -703,6 +704,15 @@ Two findings from the first real run, both worth re-checking as the sample grows
   score band runs +$478, +$266, +$188, +$102 from the lowest band to the highest. At 14
   clusters over 3 settlement dates that is not a finding, but it is the opposite of
   what the score claims and the Best plays view ranks on it.
+  **Re-run 2026-10-21 at 222 clusters, and the headline above is mostly a denominator.**
+  The dollar ordering holds (+$175, +$162, +$113, +$88) but the bottom band is 85% cash
+  secured puts risking $44,375 a position against the top band's $4,478. Per dollar
+  risked the ordering is not monotone at all: 2.4%, 26.5%, 23.5%, 9.6%, so the lowest
+  scores are the *worst* on return on capital and the middle is the best. The bands are
+  also largely a strategy sorter (Q1 85% cash secured puts, Q4 54% condors and 32% call
+  spreads), so comparing bands compares strategies. Within a single strategy the score
+  separates nothing: condors run 36.4% +/- 7.3 bottom half against 27.4% +/- 5.1 top.
+  **Whenever a result is reported per position, ask what the positions cost.**
 - **14 clusters sit on only 3 settlement dates.** Six symbols expiring on one Friday
   share one market move, so the effective sample is nearer 3 than 14. The report states
   both numbers rather than letting the cluster count stand alone.

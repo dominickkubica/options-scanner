@@ -92,6 +92,14 @@ export const api = {
     request(`/symbols/${encodeURIComponent(symbol)}/news${query({ limit })}`),
   levels: (symbol, days, expiry) =>
     request(`/symbols/${encodeURIComponent(symbol)}/levels${query({ days, expiry })}`),
+  // Its own call rather than part of `levels`, because it costs a chain fetch per
+  // expiry and most levels requests never show it. `expiry` unset means the nearest
+  // one still trading, which the server picks: after 16:00 the vendor still lists
+  // today's expiry and its contracts have all settled.
+  gex: (symbol, { expiry, withinDays } = {}) =>
+    request(
+      `/symbols/${encodeURIComponent(symbol)}/gex${query({ expiry, within_days: withinDays })}`,
+    ),
   // near_miss is opt in on the server because collecting it re-checks every rejected
   // candidate against every gate. Only the Best plays view asks for it.
   scan: (symbols, limit, { nearMiss = false } = {}) =>

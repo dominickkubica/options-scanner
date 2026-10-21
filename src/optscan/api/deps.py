@@ -47,7 +47,7 @@ from optscan.jobs.snapshot import capture_symbol
 from optscan.live import LiveHub
 from optscan.logging import get_logger
 from optscan.market_calendar import SessionState, session_state
-from optscan.models import ChainSnapshot, LiveQuote, PriceBar, SymbolEvents
+from optscan.models import ChainSnapshot, LiveQuote, OptionChain, PriceBar, SymbolEvents
 from optscan.providers import (
     MarketDataProvider,
     NoDataAvailable,
@@ -215,6 +215,15 @@ _QUOTES = _TimedCache(32)
 #: outage costs one request per window rather than one per panel per render.
 _LIVE_CHAINS = _TimedCache(8)
 
+#: Chains fetched for their open interest, keyed by symbol and expiry. Larger than the
+#: live chain cache because the gamma panel can hold several expiries of one symbol at
+#: once, and one entry per expiry is what makes switching between them free.
+_OI_CHAINS = _TimedCache(64)
+
+#: Expiry lists, per symbol. Separate from the chains because it is one cheap request
+#: that every expiry selector needs and no chain fetch can answer.
+_OI_EXPIRIES = _TimedCache(16)
+
 #: One lock per symbol and capture, so concurrent requests for the same chain solve it
 #: once between them instead of once each.
 #:
@@ -261,6 +270,8 @@ def clear_live_caches() -> None:
     _QUOTES.clear()
     _LIVE_CHAINS.clear()
     _HISTORY.clear()
+    _OI_CHAINS.clear()
+    _OI_EXPIRIES.clear()
 
 
 def clear_caches() -> None:
@@ -275,6 +286,8 @@ def clear_caches() -> None:
     _HISTORY.clear()
     _QUOTES.clear()
     _LIVE_CHAINS.clear()
+    _OI_CHAINS.clear()
+    _OI_EXPIRIES.clear()
     with _SOLVE_LOCKS_GUARD:
         _SOLVE_LOCKS.clear()
     screen_config.cache_clear()
@@ -456,6 +469,156 @@ def live_chain(settings: Settings, symbol: str) -> ChainSnapshot | None:
     # retries a dead vendor on every request, which is how an outage becomes a stall.
     _LIVE_CHAINS.put(key, False, expires_at=now + LIVE_CHAIN_TTL_SECONDS)
     return None
+
+
+# --------------------------------------------------------------------------------
+# Open interest chains
+# --------------------------------------------------------------------------------
+
+#: How long a chain fetched for its open interest is reused. Far longer than the live
+#: chain's twenty seconds, and for a reason that is a property of the data rather than
+#: a tuning choice: **open interest is published once a day.** OCC settles overnight and
+#: the figure does not move again until the next morning, so a fetch a second apart and
+#: a fetch five minutes apart return the same numbers. Five minutes is short enough that
+#: the morning's update is never far away and long enough that clicking between Key
+#: levels, the chain and the payoff is one fetch rather than three.
+OI_CHAIN_TTL_SECONDS = 300.0
+
+#: The expiry list moves once a day, when a new one is listed. Fifteen minutes.
+OI_EXPIRIES_TTL_SECONDS = 900.0
+
+#: Ceiling on how many expiries one request may aggregate. Each is a vendor round trip,
+#: so "everything inside 30 days" on a weekly name is otherwise a dozen requests behind
+#: one click. The caller is told when the cap bit rather than being handed a quiet
+#: subset: a gamma total missing half its expiries is wrong by an amount nobody can see.
+MAX_OI_EXPIRIES = 8
+
+#: Index options are listed under a caret on Yahoo and nowhere else in this codebase
+#: needs to know that. An explicit table rather than "try it, then try a caret", because
+#: a silent second attempt would turn an equity ticker that happens to collide with an
+#: index name into the index without anyone noticing.
+#:
+#: XSP is the reason this exists at all: plain `XSP` returns an empty expiry list rather
+#: than an error, so without the alias the panel would report "no options" for a symbol
+#: that has a full chain.
+INDEX_VENDOR_SYMBOLS: dict[str, str] = {
+    "SPX": "^SPX",
+    "XSP": "^XSP",
+    "NDX": "^NDX",
+    "RUT": "^RUT",
+    "VIX": "^VIX",
+}
+
+
+def vendor_symbol(symbol: str) -> str:
+    """What the chain vendor calls this symbol. Identity for everything but indices."""
+    normalized = symbol.strip().upper()
+    return INDEX_VENDOR_SYMBOLS.get(normalized, normalized)
+
+
+def oi_expiries(
+    symbol: str,
+    *,
+    provider_factory: ProviderFactory | None = None,
+) -> tuple[list[date], str | None]:
+    """Every expiry the chain vendor lists for this symbol, cached.
+
+    Returns (expiries, note). A vendor failure is an empty list and a note, never an
+    exception: the panel above this can still draw the stored capture's expiries, and a
+    500 would take the whole tab down over a selector.
+    """
+    normalized = symbol.strip().upper()
+    key = ("oi-expiries", normalized)
+    now = datetime.now(UTC).timestamp()
+    cached = _OI_EXPIRIES.get(key, now)
+    if isinstance(cached, tuple):
+        return cached
+
+    result = _fetch_oi_expiries(normalized, provider_factory)
+    _OI_EXPIRIES.put(key, result, expires_at=now + OI_EXPIRIES_TTL_SECONDS)
+    return result
+
+
+def _fetch_oi_expiries(
+    symbol: str,
+    provider_factory: ProviderFactory | None,
+) -> tuple[list[date], str | None]:
+    factory = provider_factory or (lambda: get_provider(get_settings()))
+    listed = vendor_symbol(symbol)
+    try:
+        expiries = factory().get_expirations(listed)
+    except (ProviderError, OSError, NotImplementedError) as error:
+        log.warning("expiry list unavailable", symbol=symbol, error=str(error))
+        return [], f"Expiries could not be listed: {type(error).__name__}: {error}"
+
+    if not expiries:
+        return [], f"The chain vendor lists no options for {listed}."
+    return sorted(expiries), None
+
+
+def oi_chain(
+    symbol: str,
+    expiry: date,
+    *,
+    provider_factory: ProviderFactory | None = None,
+) -> tuple[OptionChain | None, str | None]:
+    """One expiry's chain, fetched for its open interest and cached for a few minutes.
+
+    Deliberately not `live_chain`. That one declines outside a session, which is right
+    for quotes -- an after-hours mid is thin and wide and worse than the stored capture
+    -- and wrong for open interest, which does not move intraday at all and is the same
+    number at 02:00 as at 14:00. Refusing to serve it after the close would leave this
+    panel empty for the two thirds of the day when someone is most likely to be
+    planning rather than trading.
+
+    Nothing fetched here is written to storage, for the same reason `live_chain` never
+    writes: the IV history has exactly one writer and one sampling time.
+    """
+    normalized = symbol.strip().upper()
+    key = ("oi-chain", normalized, expiry)
+    now = datetime.now(UTC).timestamp()
+
+    cached = _OI_CHAINS.get(key, now)
+    if isinstance(cached, OptionChain):
+        return cached, None
+    if isinstance(cached, str):  # a remembered failure, so a dead vendor costs one try
+        return None, cached
+
+    lock = _solve_lock(key)
+    with lock:
+        cached = _OI_CHAINS.get(key, datetime.now(UTC).timestamp())
+        if isinstance(cached, OptionChain):
+            return cached, None
+        if isinstance(cached, str):
+            return None, cached
+
+        chain, note = _fetch_oi_chain(normalized, expiry, provider_factory)
+        expires_at = datetime.now(UTC).timestamp() + OI_CHAIN_TTL_SECONDS
+        _OI_CHAINS.put(key, chain if chain is not None else (note or "unavailable"), expires_at)
+        _release_solve_lock(key)
+        return chain, note
+
+
+def _fetch_oi_chain(
+    symbol: str,
+    expiry: date,
+    provider_factory: ProviderFactory | None,
+) -> tuple[OptionChain | None, str | None]:
+    factory = provider_factory or (lambda: get_provider(get_settings()))
+    listed = vendor_symbol(symbol)
+    try:
+        chain = factory().get_chain(listed, expiry)
+    except NoDataAvailable:
+        return None, f"{listed} has no chain for {expiry.isoformat()}."
+    except (ProviderError, OSError, NotImplementedError) as error:
+        log.warning(
+            "open interest chain unavailable",
+            symbol=symbol,
+            expiry=expiry.isoformat(),
+            error=str(error),
+        )
+        return None, f"The chain for {expiry.isoformat()} could not be fetched: {error}"
+    return chain, None
 
 
 def solved_symbol(

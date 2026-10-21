@@ -21,6 +21,7 @@ from optscan.analytics.calibration import ValidationReport, validate
 from optscan.analytics.outcomes import settle
 from optscan.config import Settings
 from optscan.jobs.load import latest_snapshot
+from optscan.jobs.scan import load_iv_history
 from optscan.logging import get_logger
 from optscan.market_calendar import is_trading_day, market_local_date, previous_trading_day
 from optscan.models import PriceBar
@@ -93,7 +94,21 @@ def run_record(
                 notes.append(f"No stored snapshot for {symbol}, so it was not scored.")
                 continue
             try:
-                analysis = analyze_snapshot(snapshot, rate=settings.risk_free_rate)
+                # The IV history has to be loaded here, exactly as the scan and the
+                # dashboard load it. Without it `score_iv_rank` returns None, the
+                # component is dropped, and its 0.20 is renormalized across the other
+                # four: a different number from the one every other surface shows.
+                #
+                # It was missing until 2026-10-21, which made the whole validation
+                # study grade a score nobody was ever shown. Every one of the 33,571
+                # rows settled before that date carries a null iv_rank, including scans
+                # recorded weeks after the Market Chameleon import made the rank real,
+                # so the calibration could not see the change at all.
+                analysis = analyze_snapshot(
+                    snapshot,
+                    rate=settings.risk_free_rate,
+                    iv_history=load_iv_history(settings, symbol, snapshot) or None,
+                )
                 combined.merge(scan_analysis(analysis, config))
                 scanned.append(symbol)
             except (ValueError, KeyError) as error:

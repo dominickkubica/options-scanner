@@ -1275,3 +1275,96 @@ class JournalOut(ApiModel):
         description="False when the whole sample is under the cluster minimum for a claim."
     )
     notes: list[str] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------------
+# Open interest and gamma levels
+# --------------------------------------------------------------------------------
+
+
+class GexLevelOut(ApiModel):
+    """One named price level, with how far spot is from it.
+
+    The distances are computed here rather than in the browser so that every level on
+    the card is measured against the same spot. The panel shows five levels and a
+    reader compares them to each other; two of them measured against a price that
+    changed between renders would be a comparison of two different moments.
+    """
+
+    price: float
+    #: Signed dollars from spot. Negative is below.
+    distance: float
+    distance_pct: float
+    #: Contracts held at the level, where the level is a strike. None for max pain and
+    #: the zero-gamma level, which are derived prices rather than places people hold.
+    open_interest: int | None = None
+
+
+class GexStrikeOut(ApiModel):
+    """One strike's open interest either side, and its gamma exposure."""
+
+    strike: float
+    call_oi: int
+    put_oi: int
+    call_gex: float | None = None
+    put_gex: float | None = None
+    net_gex: float | None = Field(
+        default=None,
+        description="Null when no side of this strike could be priced. Never 0.0 for unknown.",
+    )
+
+
+class ExpiryChoiceOut(ApiModel):
+    """An expiry the selector may offer, with the DTE it would be traded at."""
+
+    expiry: date
+    dte: int
+
+
+class GexOut(ApiModel):
+    """Open interest structure and dealer gamma for one expiry selection.
+
+    Two ages again, and they are further apart here than anywhere else in the app.
+    Spot is seconds old. **Open interest is a settlement figure published overnight**,
+    so every level built from it describes where contracts stood at the prior close,
+    however fresh the chain fetch around it looks. `open_interest_as_of` is the session
+    the counts belong to and the panel says so in words.
+    """
+
+    symbol: str
+    #: What the chain vendor was asked for. Differs for an index: SPX is listed as ^SPX.
+    vendor_symbol: str
+    spot: float
+    spot_source: str = Field(
+        description="Which price this is: the delayed quote feed, or the chain's own underlying."
+    )
+    expiry: date
+    dte: int
+    #: Every expiry the vendor lists, for the selector.
+    expiries: list[ExpiryChoiceOut] = Field(default_factory=list)
+    #: Set when the request aggregated a window rather than a single expiry.
+    within_days: int | None = None
+    #: The expiries actually folded in, which is what the levels describe.
+    expiries_used: list[date] = Field(default_factory=list)
+
+    strikes: list[GexStrikeOut] = Field(default_factory=list)
+    total_gex: float | None = Field(
+        default=None,
+        description="Net dealer gamma in dollars per 1% move. Null when nothing could be priced.",
+    )
+    call_wall: GexLevelOut | None = None
+    put_wall: GexLevelOut | None = None
+    pin: GexLevelOut | None = None
+    max_pain: GexLevelOut | None = None
+    zero_gamma: GexLevelOut | None = None
+    regime: str = Field(description="dampened, volatile, or unknown.")
+
+    priced_oi: int = 0
+    total_oi: int = 0
+
+    chain_provenance: Provenance
+    #: The session the open interest counts belong to, which is the prior close.
+    open_interest_as_of: date | None = None
+    quote_as_of: datetime | None = None
+    market_state: str = Field(description="The session state when this was built.")
+    notes: list[str] = Field(default_factory=list)

@@ -33,8 +33,12 @@ from optscan.api.schemas import (
     DayPointOut,
     DistributionOut,
     EstimateOut,
+    ExpiryChoiceOut,
     ExpirySummaryOut,
     GapOut,
+    GexLevelOut,
+    GexOut,
+    GexStrikeOut,
     HistogramBinOut,
     HistoryOut,
     IntervalOut,
@@ -850,4 +854,101 @@ def journal_view(report, book: BookOut | None = None, view=None) -> JournalOut:
         by_score=[breakdown_view(item) for item in report.by_score],
         reportable=report.reportable,
         notes=report.notes,
+    )
+
+
+def gex_level_view(
+    price: float | None,
+    spot: float,
+    *,
+    open_interest: int | None = None,
+) -> GexLevelOut | None:
+    """One level and its distance from spot, or None when there is no level.
+
+    None here is load bearing: "no zero-gamma level inside the band" and "the
+    zero-gamma level is at spot" are opposite findings, and a zero would render as
+    the second.
+    """
+    if price is None:
+        return None
+    return GexLevelOut(
+        price=price,
+        distance=price - spot,
+        distance_pct=(price - spot) / spot if spot else 0.0,
+        open_interest=open_interest,
+    )
+
+
+def gex_view(
+    *,
+    symbol: str,
+    vendor: str,
+    profile,
+    expiry: date,
+    dte: int,
+    expiries: list[tuple[date, int]],
+    within_days: int | None,
+    expiries_used: list[date],
+    spot_source: str,
+    chain_provenance,
+    open_interest_as_of: date | None,
+    quote_as_of: datetime | None,
+    market_state: str,
+    notes: list[str],
+) -> GexOut:
+    """The gamma panel's payload, levels and caveats together.
+
+    The notes from the profile and the notes from the fetch are one list on the wire.
+    The reader does not care whether a gap came from a thin chain or a vendor that
+    failed; they care that a number on the card is weaker than it looks, and splitting
+    the two would let a panel show one and hide the other.
+    """
+    spot = profile.spot
+    walls = {
+        "call_wall": profile.call_wall,
+        "put_wall": profile.put_wall,
+        "pin": profile.pin,
+    }
+    levels = {
+        name: gex_level_view(
+            wall.strike if wall else None,
+            spot,
+            open_interest=wall.open_interest if wall else None,
+        )
+        for name, wall in walls.items()
+    }
+
+    return GexOut(
+        symbol=symbol,
+        vendor_symbol=vendor,
+        spot=spot,
+        spot_source=spot_source,
+        expiry=expiry,
+        dte=dte,
+        expiries=[ExpiryChoiceOut(expiry=item, dte=days) for item, days in expiries],
+        within_days=within_days,
+        expiries_used=expiries_used,
+        strikes=[
+            GexStrikeOut(
+                strike=item.strike,
+                call_oi=item.call_oi,
+                put_oi=item.put_oi,
+                call_gex=item.call_gex,
+                put_gex=item.put_gex,
+                net_gex=item.net_gex,
+            )
+            for item in profile.strikes
+        ],
+        total_gex=profile.total_gex,
+        max_pain=gex_level_view(profile.max_pain, spot),
+        zero_gamma=gex_level_view(profile.zero_gamma, spot),
+        regime=profile.regime,
+        priced_oi=profile.priced_oi,
+        total_oi=profile.total_oi,
+        chain_provenance=chain_provenance,
+        open_interest_as_of=open_interest_as_of,
+        quote_as_of=quote_as_of,
+        market_state=market_state,
+        notes=[*notes, *profile.notes],
+        **levels,
     )
