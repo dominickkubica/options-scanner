@@ -283,6 +283,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--offset", type=float, default=0.05, help="Option mode: how far out of the money."
     )
     backtest.add_argument(
+        "--width",
+        type=float,
+        default=0.05,
+        help=(
+            "Spread modes: distance between the strikes, as a fraction of spot. In the "
+            "spread modes --horizon caps the sessions held, --target closes once that "
+            "share of the stake is captured and --stop once that share is lost, both "
+            "filled the session after the trigger rather than on it."
+        ),
+    )
+    backtest.add_argument(
         "--slippage",
         type=float,
         default=0.05,
@@ -1145,6 +1156,7 @@ def _strategy_from(args: argparse.Namespace):
         mode=args.mode,
         dte=args.dte,
         offset=args.offset,
+        width=args.width,
         slippage=args.slippage,
         draws=args.draws,
         seed=args.seed,

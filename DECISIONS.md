@@ -3515,3 +3515,65 @@ reaches for an option to express a signal that was measured on the stock.
 
 The tool's own survivorship warning applies to all three rows: the universe is symbols
 that are interesting in 2026.
+
+## 2026-10-21, B: vertical spreads, managed, and what the 50% target is actually worth
+
+`spread_trades` models a two legged vertical opened, managed and closed: put or call,
+credit or debit, with a profit target, a stop and a horizon. Modes `put_credit_spread`,
+`call_credit_spread` and `call_debit_spread` run it through the existing null and
+reporting path, so `--target`, `--stop` and `--horizon` mean capture, loss and sessions
+held, and `--width` sets the distance between strikes.
+
+**A week out is still refused, by design.** `TENOR_BAND` is (15, 60) and the error now
+names the case, because it keeps being asked for: a thirty day implied vol is not the
+right quote for a seven day structure, and the only honest route to one is the option
+tape re-synced at a longer horizon.
+
+**Two things keep a managed exit honest.** A trigger seen at one close is filled at the
+**next**; filling on the bar that produced it was worth $2.50 to $6.60 a condor in the
+premium study. And a trade that reaches expiry settles at **exact intrinsic**, so the
+unmanaged case keeps the exactness `short_option_trades` had. Everything else is a
+modelled exit and the docstring says so.
+
+### The holding period trap, caught twice in one session
+
+A first probe compared a five day hold against a twenty-one day target and reported the
+target worth +7.5 points. It was mostly theta: the two rules held for different lengths
+of time. Fixed by capping every rule at the same horizon.
+
+It then reappeared in a subtler form. With overlap refused, an earlier exit frees
+capital for more entries, so the target rule traded 6,089 times against the control's
+3,316 -- a different entry set, and mean-per-trade not comparable between them. The
+comparison that means something holds the entries fixed.
+
+### On identical entries, 50,961 of them, max hold 21 sessions
+
+| rule | mean | win | worst | p5 | days held | per day |
+|------|-----:|----:|------:|---:|----------:|--------:|
+| control | 3.05% | 83% | -100.0% | -100.0% | 14.5 | 0.21% |
+| target 50% | 2.65% | 85% | -106.9% | -100.0% | 7.3 | **0.36%** |
+| stop at 100% of credit | 0.31% | 62% | -109.7% | -64.3% | 11.0 | 0.03% |
+| both | 0.16% | 67% | -109.7% | -55.6% | 4.9 | 0.03% |
+
+**The 50% target is worth taking, for a different reason than the usual one.** It makes
+*less* per trade, 2.65% against 3.05%. What it does is halve the time the capital is
+tied up, so the return per day held goes from 0.21% to 0.36%. The case for it is
+capital velocity, not expectancy.
+
+**The stop costs far more than it buys.** It gives up 2.74 points of mean to move the
+fifth percentile from -100% to -64%. That is a real purchase and not a free one. It
+also does **not** improve the worst case, which gets slightly worse: a stop seen at one
+close fills at the next, and a gap is already through it by then. What caps the tail is
+the long wing, which is there whether or not a stop is.
+
+**None of this is an edge.** Every variant's own random-entry null matches it: the
+control's +3.05% against a +3.28% null, edge -0.33% at p=0.639. These are management
+choices on a position whose *entry* has no demonstrated edge, and arranging the exits
+of a zero-edge trade more efficiently leaves it a zero-edge trade.
+
+One cell did clear: a 50% target capped at five sessions beat its null by +0.77% at
+p=0.010. It is still **negative in absolute terms** (-0.84% a trade), it is one of six
+configurations tried, and with every-bar entries the shifted null differs only in which
+calendar days the exit cadence happened to select. Not a finding.
+
+1,990 tests pass.

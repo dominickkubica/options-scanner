@@ -1262,3 +1262,290 @@ def every_bar(bars: Sequence[PriceBar]) -> list[int]:
     any rule is involved.
     """
     return list(range(len(bars)))
+
+
+# --------------------------------------------------------------------------------
+# Two legged structures, managed before expiry
+# --------------------------------------------------------------------------------
+
+#: The structures this models. A credit kind is opened for a credit and closed by
+#: buying it back; a debit kind is the reverse. The near strike is the one nearer the
+#: money, which is the short leg of a credit spread and the long leg of a debit one.
+SPREAD_KINDS = ("put_credit", "call_credit", "call_debit", "put_debit")
+
+
+@dataclass(frozen=True, slots=True)
+class SpreadTrade:
+    """One two legged structure, opened, managed and closed.
+
+    ## What is exact here and what is modelled
+
+    `short_option_trades` has an exact payoff: it holds to expiry, where the value of
+    an option is `max(spot - strike, 0)` against a stored close and no model is needed.
+    Only the entry credit is modelled.
+
+    This is weaker by construction, and the weakness has to travel with the number. A
+    structure closed before expiry has to be **priced** to be closed, so a managed exit
+    is a modelled exit, and a profit target is a rule about a model output rather than
+    about a trade. That is the same shape as the premium study's finding that a target
+    filled at its trigger minute was worth $2.50 to $6.60 a condor of pure noise.
+
+    Two things hold the line. A trigger seen at one close is filled at the **next**
+    one, never the bar that produced it. And a trade that reaches expiry settles at
+    **exact intrinsic**, so the unmanaged case keeps the exactness it had before.
+    """
+
+    symbol: str
+    kind: str
+    entry_date: date
+    exit_date: date
+    near_strike: float
+    far_strike: float
+    spot_at_entry: float
+    spot_at_exit: float
+    entry_vol: float
+    #: None when the trade settled at expiry, where no volatility is needed.
+    exit_vol: float | None
+    #: Credit taken for a credit kind, debit paid for a debit kind. Always positive.
+    opened: float
+    #: Paid to close for a credit kind, received for a debit kind.
+    closed: float
+    profit: float
+    capital: float
+    net_return: float
+    #: Profit as a share of what was staked, which is what a 50% target is defined
+    #: against. Not the same as `net_return`, whose denominator is capital at risk.
+    capture: float
+    dte: int
+    bars_held: int
+    reason: str
+    entry_index: int
+
+    @property
+    def year(self) -> int:
+        return self.exit_date.year
+
+
+def _legs(kind: str, spot: float, offset: float, width: float):
+    """(right, near, far). Near is the strike closer to the money."""
+    if kind == "put_credit":
+        near = spot * (1 - offset)
+        return "put", near, spot * (1 - offset - width)
+    if kind == "call_credit":
+        near = spot * (1 + offset)
+        return "call", near, spot * (1 + offset + width)
+    if kind == "call_debit":
+        near = spot * (1 + offset)
+        return "call", near, spot * (1 + offset + width)
+    near = spot * (1 - offset)
+    return "put", near, spot * (1 - offset - width)
+
+
+def _spread_value(
+    right: str,
+    near: float,
+    far: float,
+    spot: float,
+    years: float,
+    rate: float,
+    vol: float,
+) -> float:
+    """Mid value of the near leg less the far leg. Always positive for a real spread."""
+    return bsm_price(right, spot, near, years, rate, vol) - bsm_price(
+        right, spot, far, years, rate, vol
+    )
+
+
+def _spread_intrinsic(right: str, near: float, far: float, spot: float) -> float:
+    """Exact value at expiry. No model, no volatility."""
+    if right == "put":
+        return max(near - spot, 0.0) - max(far - spot, 0.0)
+    return max(spot - near, 0.0) - max(spot - far, 0.0)
+
+
+def spread_trades(  # noqa: PLR0912, PLR0915
+    symbol: str,
+    bars: Sequence[PriceBar],
+    implied: dict[date, float],
+    entry_indices: Sequence[int],
+    *,
+    kind: str = "put_credit",
+    dte: int = 21,
+    offset: float = 0.05,
+    width: float = 0.05,
+    hold: int | None = None,
+    target: float | None = None,
+    stop: float | None = None,
+    rate: float = 0.043,
+    slippage: float = 0.05,
+    allow_overlap: bool = False,
+) -> list[SpreadTrade]:
+    """Open a vertical, manage it, and close it at a target, a stop, a horizon or expiry.
+
+    `target` and `stop` are fractions of what was staked: 0.5 closes a credit spread
+    once half the credit has been captured, and 1.0 as a stop closes it once the loss
+    equals the credit taken. Both are read at a close and filled at the next one.
+
+    `hold` caps the number of sessions. **Compare rules only at equal `hold`.** A
+    managed rule allowed to run longer than its control is being credited with the
+    extra theta, which is how a table ends up ranking the holding period rather than
+    the management: the mistake is recorded in `search.py` and it is easy to repeat.
+    """
+    if kind not in SPREAD_KINDS:
+        raise ValueError(f"kind must be one of {SPREAD_KINDS}, not {kind!r}")
+    if not TENOR_BAND[0] <= dte <= TENOR_BAND[1]:
+        raise ValueError(
+            f"dte {dte} is outside {TENOR_BAND}, where a 30 day implied vol stops being "
+            "the right quote for the contract. This is the tenor mismatch recorded in "
+            "screener/context.py, and it is why a seven day structure cannot be tested "
+            "on this data at all."
+        )
+    if width <= 0:
+        raise ValueError("width must be positive")
+
+    credit_kind = kind.endswith("_credit")
+    by_date = {bar.ts.date(): index for index, bar in enumerate(bars)}
+    trades: list[SpreadTrade] = []
+    busy_until = -1
+
+    for index in sorted(set(entry_indices)):
+        if not allow_overlap and index <= busy_until:
+            continue
+        fill = index + 1
+        if fill >= len(bars):
+            continue
+
+        entry_bar = bars[fill]
+        entry_day = entry_bar.ts.date()
+        entry_vol = implied.get(entry_day)
+        spot = entry_bar.open
+        if not entry_vol or entry_vol <= 0 or spot <= 0:
+            continue
+
+        right, near, far = _legs(kind, spot, offset, width)
+        mid = _spread_value(right, near, far, spot, dte / 365.0, rate, entry_vol)
+        if credit_kind:
+            opened = mid * (1.0 - slippage)  # a seller receives the bid
+        else:
+            opened = -mid * (1.0 + slippage) if mid < 0 else mid * (1.0 + slippage)
+            opened = abs(opened)
+        if opened <= 0:
+            continue
+
+        spread_width = abs(near - far)
+        capital = (spread_width - opened) if credit_kind else opened
+        if capital <= 0:
+            continue
+
+        expiry_index = _first_session_on_or_after(bars, by_date, entry_day.toordinal() + dte)
+        if expiry_index is None:
+            continue
+        horizon = expiry_index if hold is None else min(expiry_index, fill + hold)
+
+        pending: tuple[int, str] | None = None
+        closed_at: tuple[int, float, str, float | None] | None = None
+
+        for position in range(fill + 1, horizon + 1):
+            bar = bars[position]
+            day = bar.ts.date()
+
+            if position == expiry_index:
+                value = _spread_intrinsic(right, near, far, bar.close)
+                cost = value  # exact, and no spread is paid on an expiring structure
+                closed_at = (position, cost, "expiry", None)
+                break
+
+            vol = implied.get(day)
+            if not vol or vol <= 0:
+                continue
+            years_left = max((day - entry_day).days, 0)
+            years_left = max((dte - years_left) / 365.0, 1.0 / 365.0)
+            value = _spread_value(right, near, far, bar.close, years_left, rate, vol)
+            cost = value * (1.0 + slippage) if credit_kind else value * (1.0 - slippage)
+            running = (opened - cost) if credit_kind else (cost - opened)
+            capture = running / opened
+
+            if pending is not None:
+                closed_at = (position, cost, pending[1], vol)
+                break
+            if target is not None and capture >= target:
+                pending = (position, "target")
+                continue
+            if stop is not None and capture <= -stop:
+                pending = (position, "stop")
+                continue
+            if position == horizon:
+                closed_at = (position, cost, "horizon", vol)
+                break
+
+        if closed_at is None:
+            continue
+
+        exit_index, exit_cost, reason, exit_vol = closed_at
+        profit = (opened - exit_cost) if credit_kind else (exit_cost - opened)
+        trades.append(
+            SpreadTrade(
+                symbol=symbol,
+                kind=kind,
+                entry_date=entry_day,
+                exit_date=bars[exit_index].ts.date(),
+                near_strike=near,
+                far_strike=far,
+                spot_at_entry=spot,
+                spot_at_exit=bars[exit_index].close,
+                entry_vol=entry_vol,
+                exit_vol=exit_vol,
+                opened=opened,
+                closed=exit_cost,
+                profit=profit,
+                capital=capital,
+                net_return=profit / capital,
+                capture=profit / opened,
+                dte=dte,
+                bars_held=exit_index - fill,
+                reason=reason,
+                entry_index=fill,
+            )
+        )
+        busy_until = exit_index
+
+    return trades
+
+
+def spread_trades_as_trades(trades: Sequence[SpreadTrade]) -> list[Trade]:
+    """Adapt onto the shared Trade shape, keeping the return computed against capital."""
+    return [
+        Trade(
+            symbol=t.symbol,
+            entry_date=t.entry_date,
+            exit_date=t.exit_date,
+            entry_price=t.opened,
+            exit_price=t.closed,
+            direction=Direction.SHORT if t.kind.endswith("_credit") else Direction.LONG,
+            reason=ExitReason(t.reason),
+            entry_index=t.entry_index,
+            bars_held=t.bars_held,
+            net_return=t.net_return,
+        )
+        for t in trades
+    ]
+
+
+def spread_forward_return_table(
+    symbol: str,
+    bars: Sequence[PriceBar],
+    implied: dict[date, float],
+    **kwargs,
+) -> list[float | None]:
+    """Return of opening the structure on every bar, for the null to shift over.
+
+    Same reasoning as `option_forward_return_table`: the null replays the strategy's own
+    entry pattern at a different point in history, so one pricing model values both
+    sides and what the model gets wrong largely cancels out of the comparison.
+    """
+    out: list[float | None] = [None] * len(bars)
+    for index in range(len(bars)):
+        found = spread_trades(symbol, bars, implied, [index], allow_overlap=True, **kwargs)
+        if found:
+            out[index] = found[0].net_return
+    return out

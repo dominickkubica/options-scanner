@@ -58,6 +58,9 @@ from optscan.analytics.backtest import (
     shift_null,
     short_option_trades,
     simulate,
+    spread_forward_return_table,
+    spread_trades,
+    spread_trades_as_trades,
     summarize,
     sweep,
     yearly,
@@ -79,7 +82,15 @@ MAX_LEVEL_SYMBOLS = 60
 #: Rules whose cost is a level rebuild rather than a single pass.
 EXPENSIVE_RULES = frozenset({"level_break", "level_approach"})
 
-MODES = ("underlying", "short_put", "short_call")
+SPREAD_MODES = ("put_credit_spread", "call_credit_spread", "call_debit_spread")
+MODES = ("underlying", "short_put", "short_call", *SPREAD_MODES)
+
+#: Mode name to the engine's structure name.
+SPREAD_KIND = {
+    "put_credit_spread": "put_credit",
+    "call_credit_spread": "call_credit",
+    "call_debit_spread": "call_debit",
+}
 
 COST_MODELS = ("flat", "estimated")
 
@@ -115,6 +126,8 @@ class Strategy:
     #: Option mode only.
     dte: int = 30
     offset: float = 0.05
+    #: Spread modes only: distance between the two strikes, as a fraction of spot.
+    width: float = 0.05
     slippage: float = 0.05
     rate: float = 0.043
     #: Statistics.
@@ -334,19 +347,30 @@ def run(settings: Settings, strategy: Strategy) -> BacktestResult:
             except MissingImpliedVol as error:
                 result.skipped[symbol] = str(error)
                 continue
-            found = option_trades_as_trades(
-                short_option_trades(
-                    symbol,
-                    bars,
-                    implied,
-                    entries,
-                    right="put" if strategy.mode == "short_put" else "call",
-                    dte=strategy.dte,
-                    offset=strategy.offset,
-                    rate=strategy.rate,
-                    slippage=strategy.slippage,
+            if strategy.mode in SPREAD_MODES:
+                found = spread_trades_as_trades(
+                    spread_trades(
+                        symbol,
+                        bars,
+                        implied,
+                        entries,
+                        **_spread_kwargs(strategy),
+                    )
                 )
-            )
+            else:
+                found = option_trades_as_trades(
+                    short_option_trades(
+                        symbol,
+                        bars,
+                        implied,
+                        entries,
+                        right="put" if strategy.mode == "short_put" else "call",
+                        dte=strategy.dte,
+                        offset=strategy.offset,
+                        rate=strategy.rate,
+                        slippage=strategy.slippage,
+                    )
+                )
 
         if found:
             trades.extend(found)
@@ -445,6 +469,26 @@ def run_sweep(
     return sweep(cells, nulls, block_bars=strategy.block_bars)
 
 
+def _spread_kwargs(strategy) -> dict:
+    """Engine arguments for a spread mode, shared by the run and by its null.
+
+    One function so the two cannot drift. A null priced with a different width or a
+    different target from the strategy it is the null for would be measuring the
+    difference between two structures rather than between two entry timings.
+    """
+    return {
+        "kind": SPREAD_KIND[strategy.mode],
+        "dte": strategy.dte,
+        "offset": strategy.offset,
+        "width": strategy.width,
+        "hold": strategy.horizon,
+        "target": strategy.target,
+        "stop": strategy.stop,
+        "rate": strategy.rate,
+        "slippage": strategy.slippage,
+    }
+
+
 def _null(
     settings: Settings,
     strategy: Strategy,
@@ -476,20 +520,32 @@ def _null(
             block_bars=strategy.block_bars,
         )
 
-    tables = {
-        symbol: option_forward_return_table(
-            symbol,
-            series[symbol],
-            load_implied(settings, symbol),
-            right="put" if strategy.mode == "short_put" else "call",
-            dte=strategy.dte,
-            offset=strategy.offset,
-            rate=strategy.rate,
-            slippage=strategy.slippage,
-        )
-        for symbol, indices in fired.items()
-        if indices
-    }
+    if strategy.mode in SPREAD_MODES:
+        tables = {
+            symbol: spread_forward_return_table(
+                symbol,
+                series[symbol],
+                load_implied(settings, symbol),
+                **_spread_kwargs(strategy),
+            )
+            for symbol, indices in fired.items()
+            if indices
+        }
+    else:
+        tables = {
+            symbol: option_forward_return_table(
+                symbol,
+                series[symbol],
+                load_implied(settings, symbol),
+                right="put" if strategy.mode == "short_put" else "call",
+                dte=strategy.dte,
+                offset=strategy.offset,
+                rate=strategy.rate,
+                slippage=strategy.slippage,
+            )
+            for symbol, indices in fired.items()
+            if indices
+        }
     positions, span = session_positions(series)
     return shift_null(
         tables,
