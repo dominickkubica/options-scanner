@@ -264,6 +264,8 @@ call debit spread plan)
 **Outside `src/`** — `scripts/studies/` (pre-registered research studies + results;
 `scripts/studies/harness.py` is the shared plumbing every new study should use),
 `scripts/check.ps1` (lint + format + suite, summary only; full logs in `data/logs/check-*`),
+`scripts/package_friend.ps1` + `packaging/friend/` (the clean zip for someone else: built from
+an allowlist of committed paths, refuses on personal identifiers or licensed data),
 `scripts/coverage_floor.py`, `screen.yaml` (screener thresholds), `universe.yaml`
 (symbol groups), `DECISIONS.md` (why), `CLAUDE.md` (rules and current phase).
 
