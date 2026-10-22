@@ -3577,3 +3577,86 @@ configurations tried, and with every-bar entries the shifted null differs only i
 calendar days the exit cadence happened to select. Not a finding.
 
 1,990 tests pass.
+
+## 2026-10-21, overnight: looking for an entry edge, and the one lead that came back
+
+Asked to spend the night finding an entry edge. Six pre-registered studies, all in
+`scripts/studies/` with their results in `scripts/studies/results/`. Every one names its
+hypotheses, thresholds and holdout-selection rule in its docstring before running, uses
+the backtester's own circular-shift null through `job.run`, splits time into DEV
+(2014-2021) and HOLDOUT (2022-02 on, a month of margin), and corrects with BH.
+
+### What did not work, which is most of it
+
+- **Selling premium when vol is rich** (`vrp_study`, `vrp_delta_study`). IV30 against
+  realized vol, IV rank, and IV spikes, each in its top dev tercile, plus oversold-and-rich.
+  Every edge negative in both designs, q 0.98, nothing reached the holdout. The first design
+  was confounded -- a fixed 5% offset is three times the delta at 80% IV that it is at 12%
+  -- so `spread_trades` gained `in_sigmas` and the study was re-run at a constant ~20
+  delta. Same answer. On this data, selling after vol gets rich sells into the clustered
+  moves that follow.
+- **Filtering the oversold bounce** (`bounce_study`). Bull regime, idiosyncratic-only, and
+  rich-vol filters each *shrank* the base rule's dev edge. None went forward. The bull
+  filter doing worst suggests the bounce lives in stressed markets; that was not
+  pre-registered and is a hypothesis only.
+- **Indicator-confluence switches** (`switch_study`). A 50 day mean cross with RSI on the
+  right side and 1.5x volume, long and short, 10 and 21 sessions. Every edge within noise,
+  q 0.475. Median moves of 4-6% over 21 sessions, about what an at-the-money monthly
+  option costs, so buying calls or puts on these signals pays premium for a coin flip.
+
+### The base edge re-confirmed
+
+`oversold_bounce` on the stock held again on the holdout: **+0.96% over its null at
+p=0.017** across all symbols with real per-symbol costs, +1.37% at p=0.043 on the 23 IV
+names. Not a clean out-of-sample test -- the original validation used every date on the
+non-tech names -- but it is the period nothing here was tuned on.
+
+### The lead: the bounce, expressed as a call debit spread
+
+`bounce_spread_study` pre-registered two ways to trade the bounce with options, matched to
+its five session horizon: a put credit spread and a call debit spread, both 15 DTE (the
+shortest tenor IV30 may price), closed after five sessions.
+
+| cell | dev edge | dev p (q) | holdout edge | holdout p |
+|------|---------:|----------:|-------------:|----------:|
+| stock (reference) | +0.88% | 0.216 | +1.37% | 0.043 |
+| put credit spread | +0.11% | 0.591 (0.591) | +2.63% | 0.100 |
+| **call debit spread** | **+14.0%** | **0.073 (0.146)** | **+16.5%** | **0.027** |
+
+**It missed the pre-registered gate** (dev q 0.146 against 0.10), so by the rule fixed
+before the run the holdout figure is a record and not a confirmation, and choosing it after
+seeing both option cells' holdouts roughly doubles its p. It is a lead, not a finding.
+
+It survived a fragility sweep (`cds_sensitivity`, full period, one knob at a time): edge
+over the null +8% to +18% in every variant of slippage, tenor, width and hold, and
+**+18.2% held to expiry with an exact payoff**, so it does not depend on the modelled
+five-day exit. The same spread entered on every bar earns +0.5%, p=0.322: the edge is the
+timing, not the structure. On the ten most liquid names it was stronger -- +20.9% at 5%
+slippage, the stock itself +1.47% at p=0.010 -- consistent with the original validation's
+note that the bounce is best on liquid names.
+
+**It is mechanically coherent**, which is the reason to take it seriously. A 15 DTE
+at-the-money call spread 0.84 sigmas wide costs about 1.4% of spot on SPY and carries
+about 0.3 delta, so the stock's ~1.6% five-day edge levers to roughly +30% on the debit
+before theta and lands near the +25% observed. It is the bounce at about 15x, not a
+separate effect.
+
+**What decides whether it makes money is the fill.** The edge over the null barely moves
+with slippage, but the mean goes +11.7%, +1.0%, -8.8% at 5%, 10% and 15% of the debit
+given up each way. And it was flat to negative in 2018, 2020 and 2022.
+
+**Next step is a forward test, not more backtesting.** Every period and every symbol with
+stored IV has now been looked at. `optscan ideas` already lists `oversold_bounce`
+triggers daily; logging real call debit spread fills on those, on liquid names, through the
+journal, is the only remaining way to get both an untouched sample and the slippage figure
+this trade turns on.
+
+### A probe that ran on the wrong universe
+
+The scratchpad spread probe of earlier tonight looked IV up with `iv30_series(conn,
+symbol, source=preferred_source(...))`. `preferred_source` is the *price* series' source,
+which is Alpaca for 20 of the 23 names, and Alpaca has no IV30 -- so the probe silently ran
+on BE, MRNA and RCL alone, three of the most volatile names held. That is why it showed
+this trade at -5% and why its management tables disagreed with the engine. Everything
+committed came from the engine path, which uses `load_implied` and finds all 23. **To get
+a symbol's IV, use `load_implied`, never the price series' preferred source.**

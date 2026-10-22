@@ -97,6 +97,10 @@ ignore = [
     "SIM117",   # nesting `pytest.raises` around the block under test is what it reads as
 ]
 "src/optscan/providers/*" = ["TID251"]        # the one place vendor SDKs are allowed
+# Pre-registered research studies. Their inline thresholds ARE the hypotheses, written
+# where a reader auditing the pre-registration expects to find them; moving each into a
+# named constant would make the registration harder to check, not easier.
+"scripts/studies/*" = ["PLR2004", "E501"]
 # Deferred imports, deliberately: the CLI stays fast to start and a broker SDK is only
 # imported by someone who configured that broker.
 #
