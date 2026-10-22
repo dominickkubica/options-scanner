@@ -128,6 +128,9 @@ class Strategy:
     offset: float = 0.05
     #: Spread modes only: distance between the two strikes, as a fraction of spot.
     width: float = 0.05
+    #: Spread modes only: read offset and width in standard deviations of the move to
+    #: expiry instead of fractions of spot, so the strike is a constant delta.
+    in_sigmas: bool = False
     slippage: float = 0.05
     rate: float = 0.043
     #: Statistics.
@@ -486,6 +489,7 @@ def _spread_kwargs(strategy) -> dict:
         "stop": strategy.stop,
         "rate": strategy.rate,
         "slippage": strategy.slippage,
+        "in_sigmas": strategy.in_sigmas,
     }
 
 

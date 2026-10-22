@@ -211,3 +211,60 @@ class TestAdapter:
         adapted = spread_trades_as_trades(trades)
 
         assert adapted[0].reason == "horizon"
+
+
+class TestStrikesInSigmas:
+    """A fixed percentage offset is a different delta in every vol regime."""
+
+    def test_the_offset_scales_with_volatility(self) -> None:
+        bars = series([100.0] * 120)
+        calm = spread_trades(
+            "TEST", bars, vols(bars, 0.15), [10], dte=21, offset=0.84, width=0.84, in_sigmas=True
+        )[0]
+        wild = spread_trades(
+            "TEST", bars, vols(bars, 0.60), [10], dte=21, offset=0.84, width=0.84, in_sigmas=True
+        )[0]
+
+        assert (100.0 - wild.near_strike) == pytest.approx(4 * (100.0 - calm.near_strike))
+
+    def test_the_short_strike_sits_at_the_same_delta_in_any_regime(self) -> None:
+        """The reason the option exists. At 0.84 sigmas the short put is near 20 delta
+        whether the stock is sleepy or panicking."""
+        from optscan.analytics.greeks import bsm_greeks
+
+        bars = series([100.0] * 120)
+        deltas = []
+        for vol in (0.12, 0.30, 0.80):
+            trade = spread_trades(
+                "TEST", bars, vols(bars, vol), [10], dte=21, offset=0.84, width=0.84, in_sigmas=True
+            )[0]
+            deltas.append(
+                abs(bsm_greeks("put", 100.0, trade.near_strike, 21 / 365, 0.043, vol).delta)
+            )
+
+        assert max(deltas) - min(deltas) < 0.03
+        assert all(0.15 < d < 0.25 for d in deltas)
+
+    def test_a_fixed_offset_is_not_a_fixed_delta(self) -> None:
+        """The confound this exists to remove, demonstrated rather than asserted."""
+        from optscan.analytics.greeks import bsm_greeks
+
+        bars = series([100.0] * 120)
+        deltas = []
+        for vol in (0.12, 0.80):
+            trade = spread_trades("TEST", bars, vols(bars, vol), [10], dte=21, offset=0.05)[0]
+            deltas.append(
+                abs(bsm_greeks("put", 100.0, trade.near_strike, 21 / 365, 0.043, vol).delta)
+            )
+
+        assert deltas[1] > 3 * deltas[0]
+
+
+def test_a_structure_with_an_unlisted_strike_is_skipped_not_priced() -> None:
+    """At 400% IV a 1.68 sigma put spread's long leg would sit below zero."""
+    bars = series([100.0] * 120)
+    found = spread_trades(
+        "TEST", bars, vols(bars, 4.0), [10], dte=21, offset=0.84, width=0.84, in_sigmas=True
+    )
+
+    assert found == []

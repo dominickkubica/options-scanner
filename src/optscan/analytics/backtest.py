@@ -1379,6 +1379,7 @@ def spread_trades(  # noqa: PLR0912, PLR0915
     rate: float = 0.043,
     slippage: float = 0.05,
     allow_overlap: bool = False,
+    in_sigmas: bool = False,
 ) -> list[SpreadTrade]:
     """Open a vertical, manage it, and close it at a target, a stop, a horizon or expiry.
 
@@ -1390,6 +1391,13 @@ def spread_trades(  # noqa: PLR0912, PLR0915
     managed rule allowed to run longer than its control is being credited with the
     extra theta, which is how a table ends up ranking the holding period rather than
     the management: the mistake is recorded in `search.py` and it is easy to repeat.
+
+    `in_sigmas` reads `offset` and `width` in standard deviations of the move to expiry,
+    `entry_vol * sqrt(dte / 365)`, rather than as fractions of spot. That is how strikes
+    are actually chosen -- by delta -- and it matters most exactly where it is easiest to
+    miss: a fixed 5% offset is a far-out strike in a calm market and a near one in a
+    wild market, so any comparison between the two regimes made with fixed offsets is
+    also a comparison between two different strikes. 0.84 sigmas is about a 20 delta.
     """
     if kind not in SPREAD_KINDS:
         raise ValueError(f"kind must be one of {SPREAD_KINDS}, not {kind!r}")
@@ -1422,7 +1430,17 @@ def spread_trades(  # noqa: PLR0912, PLR0915
         if not entry_vol or entry_vol <= 0 or spot <= 0:
             continue
 
-        right, near, far = _legs(kind, spot, offset, width)
+        if in_sigmas:
+            unit = entry_vol * math.sqrt(dte / 365.0)
+            right, near, far = _legs(kind, spot, offset * unit, width * unit)
+        else:
+            right, near, far = _legs(kind, spot, offset, width)
+        # A strike at or below zero is not listed anywhere. In sigma units it happens on
+        # the wildest days -- above roughly 250% IV a 1.7 sigma put sits under zero --
+        # and pricing it would be pricing a contract that does not exist. Skipped, not
+        # clamped: a clamped strike is a different structure from the one asked for.
+        if near <= 0 or far <= 0:
+            continue
         mid = _spread_value(right, near, far, spot, dte / 365.0, rate, entry_vol)
         if credit_kind:
             opened = mid * (1.0 - slippage)  # a seller receives the bid
