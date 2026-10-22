@@ -1,5 +1,12 @@
 # Project: Options Selling Scanner
 
+**Read `MAP.md` before tracing anything.** It is the wiring map: every vendor, table,
+data directory, scheduled job, CLI command, route, cache and view, what writes and reads
+each, and the lookups that have bitten before. **Update it in the same commit as any
+change to that wiring.** `tests/test_map.py` fails the suite (and so the pre-commit hook)
+until every module, table, route and view is named in it; whether the arrows are still
+true is not testable, and is on whoever changes them.
+
 ## Stack
 Python 3.12, FastAPI, DuckDB + SQLite, pydantic v2, py_vollib, httpx, pytest, ruff.
 Frontend: React + Vite + lightweight-charts. Windows dev environment.
