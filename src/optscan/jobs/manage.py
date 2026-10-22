@@ -151,7 +151,12 @@ def _load_analyses(
             analyses[symbol] = None
             continue
         try:
-            analyses[symbol] = analyze_snapshot(snapshot, rate=settings.risk_free_rate)
+            # No IV history, on purpose: marking a held position needs greeks and
+            # prices, and nothing here reads the rank. Stated so tests/test_traps.py can
+            # tell a choice from the omission that once cost the validation study.
+            analyses[symbol] = analyze_snapshot(
+                snapshot, rate=settings.risk_free_rate, iv_history=None
+            )
         except ValueError as error:
             analyses[symbol] = None
             notes.append(f"{symbol} could not be solved: {error}")

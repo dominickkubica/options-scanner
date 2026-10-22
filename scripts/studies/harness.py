@@ -71,6 +71,17 @@ RESULTS = Path(__file__).parent / "results"
 #: Below this many bars inside a window a symbol is dropped rather than half-tested.
 MIN_WINDOW_BARS = 260
 
+#: The share of requested symbols a run may lose (no bars, too few in the window, no
+#: IV for an option mode) before it refuses instead of reporting. A probe on 2026-10-21
+#: read IV from the price source and ran on 3 of its 23 symbols without a word, and its
+#: table looked like every other table. A study that means to run on fewer passes
+#: `max_missing` and says so.
+MAX_MISSING = 0.5
+
+
+class TooFewSymbols(RuntimeError):
+    """A run lost more of its symbols than it allowed."""
+
 
 def oversold(bars):
     """The validated `oversold_bounce` trigger: RSI(14) at or below 30, as a state."""
@@ -86,6 +97,8 @@ class Study:
         self.settings = get_settings()
         self._original_load = job.load_series
         self._range = FULL
+        self._requested: set[str] = set()
+        self._kept: set[str] = set()
         job.load_series = self._windowed
 
     def _windowed(self, settings_, symbols):
@@ -96,6 +109,7 @@ class Study:
             inside = [bar for bar in bars if lo <= bar.ts.date() <= hi]
             if len(inside) > MIN_WINDOW_BARS:
                 kept[symbol] = inside
+        self._requested, self._kept = set(symbols), set(kept)
         return kept, skipped
 
     def full_history(self, symbols: Sequence[str]):
@@ -115,12 +129,28 @@ class Study:
         """Register an entry rule for this process. Never written to the real registry."""
         rules.REGISTRY[name] = {"fn": fn, "params": {}, "label": name}
 
-    def run(self, label: str, **strategy) -> dict:
-        """One `job.run`, summarised. Defaults: 300 null draws, seed 0, so it repeats."""
+    def run(self, label: str, *, max_missing: float = MAX_MISSING, **strategy) -> dict:
+        """One `job.run`, summarised. Defaults: 300 null draws, seed 0, so it repeats.
+
+        Raises `TooFewSymbols` when more than `max_missing` of the requested symbols
+        never reached the test.
+        """
         strategy.setdefault("draws", 300)
+        self._requested, self._kept = set(), set()
         result = job.run(self.settings, job.Strategy(name=label, **strategy))
+        used = self._kept - set(result.skipped)
+        if self._requested:
+            missing = 1 - len(used) / len(self._requested)
+            if missing > max_missing:
+                lost = sorted(self._requested - used)
+                raise TooFewSymbols(
+                    f"{label}: ran on {len(used)} of {len(self._requested)} symbols "
+                    f"({missing:.0%} missing, allowed {max_missing:.0%}). Lost: "
+                    f"{', '.join(lost[:12])}{' ...' if len(lost) > 12 else ''}. "
+                    f"Reasons: {dict(list(result.skipped.items())[:3])}"
+                )
         if result.stats is None or result.edge is None:
-            return {"label": label, "trades": 0}
+            return {"label": label, "trades": 0, "symbols": len(used)}
         stats, edge = result.stats, result.edge
         return {
             "label": label,
@@ -133,6 +163,7 @@ class Study:
             "edge": edge.edge,
             "p": edge.p_value,
             "years": [(y.year, y.trades, y.mean_return) for y in result.by_year],
+            "symbols": len(used),
         }
 
     @staticmethod

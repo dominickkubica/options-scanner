@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 420" role="img" aria-label="Facts come from the code; people write only the meaning" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="13">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" fill="#8a8f98"/>
+    </marker>
+  </defs>
+  <rect width="760" height="420" fill="#ffffff"/>
+  <text x="24" y="34" font-size="15" font-weight="600" fill="#1f2328">Facts come from the code; people write only the meaning</text>
+  <g fill="none" stroke="#8a8f98" stroke-width="1.25">
+    <path d="M224 108H278" marker-end="url(#arrow)"/>
+    <path d="M480 100H534" marker-end="url(#arrow)"/>
+    <path d="M636 136V158" marker-end="url(#arrow)"/>
+    <path d="M636 232V286" marker-end="url(#arrow)"/>
+    <path d="M124 152V286" marker-end="url(#arrow)"/>
+  </g>
+  <g text-anchor="middle">
+    <rect x="24" y="64" width="200" height="88" rx="8" fill="none" stroke="#8a8f98" stroke-width="1.25"/>
+    <text x="124" y="88" font-weight="600" fill="#1f2328">Code: source of truth</text>
+    <text x="124" y="104" font-size="11.5" fill="#59636e">source tree, migrations</text>
+    <text x="124" y="120" font-size="11.5" fill="#59636e">routers, job definitions</text>
+    <text x="124" y="136" font-size="11.5" fill="#59636e">dashboard API calls</text>
+
+    <rect x="280" y="64" width="200" height="88" rx="8" fill="none" stroke="#8a8f98" stroke-width="1.25"/>
+    <text x="380" y="88" font-weight="600" fill="#1f2328">optscan map generate</text>
+    <text x="380" y="104" font-size="11.5" fill="#59636e">reads the code, writes</text>
+    <text x="380" y="120" font-size="11.5" fill="#59636e">names, writers, readers,</text>
+    <text x="380" y="136" font-size="11.5" fill="#59636e">schedules, calls</text>
+
+    <rect x="536" y="64" width="200" height="72" rx="8" fill="#e6effc" stroke="#2f6fde" stroke-width="2"/>
+    <text x="636" y="88" font-weight="600" fill="#1f2328">map/generated/</text>
+    <text x="636" y="104" font-size="11.5" fill="#59636e">one file per section</text>
+    <text x="636" y="120" font-size="11.5" fill="#59636e">never edited by hand</text>
+
+    <rect x="536" y="160" width="200" height="72" rx="8" fill="none" stroke="#8a8f98" stroke-width="1.25"/>
+    <text x="636" y="184" font-weight="600" fill="#1f2328">map/notes.md</text>
+    <text x="636" y="200" font-size="11.5" fill="#59636e">purposes and traps,</text>
+    <text x="636" y="216" font-size="11.5" fill="#59636e">each pinned to a fact hash</text>
+  </g>
+  <text x="646" y="152" font-size="11.5" fill="#59636e">keyed by item</text>
+  <text x="132" y="224" font-size="11.5" fill="#59636e">re-derived on every run</text>
+  <rect x="24" y="288" width="712" height="108" rx="8" fill="#f3f4f6" stroke="#8a8f98" stroke-width="1.25"/>
+  <text x="40" y="310" font-weight="600" fill="#1f2328">Checks: on every commit and in CI</text>
+  <g text-anchor="middle">
+    <rect x="40" y="324" width="158" height="56" rx="8" fill="#ffffff" stroke="#8a8f98" stroke-width="1.25"/>
+    <text x="119" y="348" font-weight="600" fill="#1f2328">Drift</text>
+    <text x="119" y="364" font-size="11.5" fill="#59636e">matches fresh output</text>
+    <rect x="214" y="324" width="158" height="56" rx="8" fill="#ffffff" stroke="#8a8f98" stroke-width="1.25"/>
+    <text x="293" y="348" font-weight="600" fill="#1f2328">Both directions</text>
+    <text x="293" y="364" font-size="11.5" fill="#59636e">every key still exists</text>
+    <rect x="388" y="324" width="158" height="56" rx="8" fill="#ffffff" stroke="#8a8f98" stroke-width="1.25"/>
+    <text x="467" y="348" font-weight="600" fill="#1f2328">Freshness</text>
+    <text x="467" y="364" font-size="11.5" fill="#59636e">hash changed: re-read</text>
+    <rect x="562" y="324" width="158" height="56" rx="8" fill="#ffffff" stroke="#8a8f98" stroke-width="1.25"/>
+    <text x="641" y="348" font-weight="600" fill="#1f2328">Traps and size</text>
+    <text x="641" y="364" font-size="11.5" fill="#59636e">guard tests, budgets</text>
+  </g>
+</svg>

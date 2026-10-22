@@ -3702,6 +3702,36 @@ default and would otherwise have reached Yahoo from inside the suite.
 2,016 tests pass.
 
 
+## 2026-10-22: the map's facts are generated, its notes pinned
+
+The hand-written map's test checked that every name was listed, but the defects that
+motivated it were wrong facts, which a listed name does not catch. Now:
+
+- **`optscan map generate`** (`repomap.py`) writes `map/generated/` from the code:
+  modules, table writers and readers (SQL literals scanned), routes with what each
+  endpoint reaches and which dashboard files call it, caches, views, the schedule, and
+  commands. `tests/test_map.py` fails on any drift.
+- **`map/notes.md`** holds only meaning. Each note is pinned to a hash of its item's
+  facts, not its file, so it is flagged when its item is rewired and not on unrelated
+  edits; `optscan map stamp <key>` after re-reading. Every table and job needs one.
+- **Traps are tests** where possible (`tests/test_traps.py`): every `analyze_snapshot`
+  call states its `iv_history` (`jobs/manage.py` now passes `None` explicitly); no
+  function reads IV alongside `preferred_source`; the study harness raises
+  `TooFewSymbols` when a run loses more than half its symbols.
+- **A `map` pre-commit hook on every commit**, because the pytest hook runs only on
+  Python changes and a view or note can change the map alone. **CI**
+  (`.github/workflows/tests.yml`, Windows) runs lint, format, the map check and the
+  suite on push; unverified until the first push.
+- `MAP.md` is a 4.5 KB index (budget 6 KB; notes 10 KB).
+
+Generation immediately showed what the hand map had missed: `cli.py` reads
+`vendor_daily`, migration code writes `fill_time` and reads `broker_txn`, and `/gaps` is
+served but no dashboard file calls it.
+
+**Documents describe the present.** The design doc is `docs/design/project-map.md`;
+`scripts/build_doc.py` builds the PDF into `dist/` from it. No "v1/v2" or change history
+in documents an assistant loads: those words are context to read and discard.
+
 ## Archived from CLAUDE.md, 2026-10-22
 
 Moved verbatim when CLAUDE.md was trimmed for token cost. CLAUDE.md keeps every rule as a

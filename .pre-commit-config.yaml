@@ -29,3 +29,11 @@ repos:
         language: system
         pass_filenames: false
         types: [python]
+      # On every commit, not only Python ones: a view, a route call in api.js or a note
+      # can change the map without touching a .py file, and the suite above would not run.
+      - id: map
+        name: map check
+        entry: cmd /c "venv\Scripts\python.exe -m optscan map check"
+        language: system
+        pass_filenames: false
+        always_run: true

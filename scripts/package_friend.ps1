@@ -30,7 +30,7 @@ $Allow = @(
     ".env.example", "scripts/optscan.ico", "data/.gitkeep"
 )
 $Forbidden = @(
-    "tests", "DECISIONS.md", "CLAUDE.md", "MAP.md", "scripts/studies", ".claude", ".env"
+    "tests", "DECISIONS.md", "CLAUDE.md", "MAP.md", "map", "docs", "scripts/studies", ".claude", ".env"
 )
 $ForbiddenPatterns = @("*.sqlite", "*.sqlite-*", "*.parquet", "*marketchameleon*.csv", "*.jsonl")
 # Identifiers that must never appear in a shipped file. Lower case; matched case-blind.

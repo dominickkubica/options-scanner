@@ -652,6 +652,29 @@ def build_parser() -> argparse.ArgumentParser:
 
     prices_sub.add_parser("groups", help="List the universe groups and their sizes.")
 
+    map_cmd = sub.add_parser(
+        "map",
+        help="Regenerate or check the wiring map (MAP.md, map/).",
+        description=(
+            "The facts half of the map is generated from the code into map/generated/; "
+            "the notes in map/notes.md are pinned to a hash of each item's facts. "
+            "tests/test_map.py runs the same checks as `map check`."
+        ),
+    )
+    map_sub = map_cmd.add_subparsers(dest="map_command", required=True)
+    map_sub.add_parser("generate", help="Rewrite map/generated/ from the code.")
+    map_sub.add_parser("check", help="Report stale, missing or dead map entries.")
+    map_stamp = map_sub.add_parser(
+        "stamp",
+        help="Mark notes as re-read: rewrite their fact hash to the current one.",
+    )
+    map_stamp.add_argument("keys", nargs="*", help="Note keys, e.g. table:daily_condition.")
+    map_stamp.add_argument(
+        "--all",
+        action="store_true",
+        help="Stamp every stale note. Only after reading every one of them.",
+    )
+
     premium = sub.add_parser(
         "premium",
         help="The short premium study: credit spreads and condors on intraday option trades.",
@@ -1525,6 +1548,38 @@ def _print_backtest(console, strategy, result, *, show_trades: bool) -> None:
     print()
     for note in result.notes:
         print(console.warn(note))
+
+
+def _cmd_map(settings: Settings, args: argparse.Namespace) -> int:
+    from optscan import repomap
+
+    repo_map = repomap.generate()
+    if args.map_command == "generate":
+        changed = repomap.write(repo_map)
+        print(f"map/generated: {', '.join(changed) if changed else 'already current'}")
+        return 0
+    if args.map_command == "stamp":
+        if not args.keys and not args.all:
+            print("Name the notes you re-read, or pass --all.")
+            return 2
+        stamped = repomap.stamp(args.keys, repo_map, every=args.all)
+        print(f"Stamped: {', '.join(stamped) if stamped else 'nothing was stale'}")
+        return 0
+    stale_files = [
+        name
+        for name, text in repo_map.files.items()
+        if not (repomap.GENERATED / name).exists()
+        or (repomap.GENERATED / name).read_text(encoding="utf-8") != text
+    ]
+    found = {"generated files out of date": stale_files} | repomap.problems(
+        repo_map, repomap.load_notes()
+    )
+    bad = {check: keys for check, keys in found.items() if keys}
+    for check, keys in bad.items():
+        print(f"{check}: {', '.join(keys)}")
+    if not bad:
+        print("Map is current.")
+    return 1 if bad else 0
 
 
 def _cmd_premium(settings: Settings, args: argparse.Namespace) -> int:
@@ -2529,6 +2584,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "import-history": _cmd_import_history,
         "prices": _cmd_prices,
         "premium": _cmd_premium,
+        "map": _cmd_map,
         "history": _cmd_history,
         "trades": _cmd_trades,
         "import-fill-times": _cmd_import_fill_times,

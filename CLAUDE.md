@@ -1,11 +1,12 @@
 # Project: Options Selling Scanner
 
-**Read `MAP.md` before tracing anything.** It is the wiring map: every vendor, table,
-data directory, scheduled job, CLI command, route, cache and view, what writes and reads
-each, and the lookups that have bitten before. **Update it in the same commit as any
-change to that wiring.** `tests/test_map.py` fails the suite (and so the pre-commit hook)
-until every module, table, route and view is named in it; whether the arrows are still
-true is not testable, and is on whoever changes them.
+**Read `MAP.md` before tracing anything.** It is a short index into the wiring map: the
+facts (modules, tables with their writers and readers, routes, caches, views, jobs,
+commands) are generated into `map/generated/`, and what they cannot say (why a table
+exists, the traps) is in `map/notes.md`. Open only the file the question needs. **After
+any wiring change, run `optscan map generate` and commit the result with it**; if
+`optscan map check` reports a note as stale, re-read it, fix it, then `optscan map stamp
+<key>`. `tests/test_map.py` and the pre-commit `map` hook enforce all of it.
 
 ## Stack
 Python 3.12, FastAPI, DuckDB + SQLite, pydantic v2, py_vollib, httpx, pytest, ruff.
@@ -29,7 +30,7 @@ The system default `python` on this machine is 3.13 and is not what this project
 - Secrets come from .env via optscan.config only. Nothing else reads os.environ.
 
 ## Layout
-See `MAP.md`, section 8, for every module and what it does, and sections 1-7 for how
+See `map/generated/modules.md` for every module and what it does, and `MAP.md` for how
 they connect. Short version: `providers/` reach vendors, `storage/` reaches disk,
 `analytics/` and `screener/` are pure, `jobs/` and `api/deps.py` orchestrate,
 `frontend/` is React over `/api`.
@@ -213,7 +214,7 @@ under "Archived from CLAUDE.md, 2026-10-22"):
 | 2026-09-13 | the short premium study (`optscan premium`, 0-1 DTE QQQ/SPY option tape) |
 | 2026-09-17 | iron butterfly in the premium engine; open interest and gamma levels |
 | 2026-10-21 | validation metric is return on capital within strategy; `optscan conditions` (forward gamma record); managed vertical spreads + `in_sigmas` in the backtester; overnight entry-edge studies in `scripts/studies/` |
-| 2026-10-22 | call debit spread plans on oversold bounce ideas; `MAP.md` + `tests/test_map.py`; study harness; `scripts/check.ps1` |
+| 2026-10-22 | call debit spread plans on oversold bounce ideas; study harness; `scripts/check.ps1`; generated wiring map (`optscan map`, `map/`), trap tests, CI workflow, `docs/` + `scripts/build_doc.py` |
 
 ### Where things stand (2026-10-22)
 
