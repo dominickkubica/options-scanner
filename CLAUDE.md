@@ -29,41 +29,10 @@ The system default `python` on this machine is 3.13 and is not what this project
 - Secrets come from .env via optscan.config only. Nothing else reads os.environ.
 
 ## Layout
-```
-src/optscan/
-  config.py         settings, the only reader of environment variables
-  logging.py        structlog setup
-  cli.py            command line entry point
-  providers/        market data adapters, one per vendor
-  models/           pydantic: Quote, Chain, Contract, Snapshot, Opportunity, Position
-  storage/          sqlite + duckdb writers, migrations
-  analytics/        greeks.py, iv.py, probability.py, levels.py, projection.py,
-                    portfolio.py, triggers.py, signals.py, outcomes.py, calibration.py,
-                    backtest.py (engine + nulls), rules.py (rolling indicators, entries),
-                    costs.py (Corwin-Schultz spread from OHLC),
-                    gex.py (open interest walls, max pain, dealer gamma, zero gamma)
-  screener/         rules/, scoring.py, strategies/
-  console.py        terminal colour, and the rules about when not to use it
-  jobs/             snapshot.py, schedule.py, manage.py, validate.py, backup.py,
-                    launcher.py, health.py, prices.py, signals.py, backtest.py,
-                    search.py (grid search, holdout, multiplicity),
-                    ideas.py (validated strategies + what is triggering today)
-  live/             the polling refresh loop and its delta encoder
-  alerts.py         alert sinks, and once-per-condition delivery. Carries both a
-                    position Trigger and a market Signal; position_id is None for
-                    the latter
-  api/              schemas, deps, views, app, routers/
-  imports/          broker statement parsers, one module per broker
-frontend/           React app: src/views, src/components, gitignored node_modules and dist
-                    Two levels of navigation. The sidebar holds account-level views
-                    (Home, Browse, Trade ideas, Backtest, Positions, Journal); every
-                    per-symbol view is a tab inside that symbol's page (Chart, Options
-                    chain, News, Information, Key levels, Best plays, Payoff). Adding a
-                    view means deciding which of the two it belongs to.
-scripts/            coverage_floor.py, the per module coverage gate
-tests/              mirrors src layout; fixtures/ holds frozen chains
-data/               gitignored: snapshots, sqlite db
-```
+See `MAP.md`, section 8, for every module and what it does, and sections 1-7 for how
+they connect. Short version: `providers/` reach vendors, `storage/` reaches disk,
+`analytics/` and `screener/` are pure, `jobs/` and `api/deps.py` orchestrate,
+`frontend/` is React over `/api`.
 
 ## Commands
 ```
@@ -232,573 +201,98 @@ and `optscan-web` entries in `.claude/launch.json`.
 **Phases 0 to 9 are complete and committed.** The roadmap ends at 9. Anything further is
 new scope and is **not authorized**: ask first.
 
-**Exception, authorized 2026-09-07: the broker ledger.** `optscan import` reads a
-Robinhood activity export, `optscan trades` reports what the account actually did.
-`models/broker.py`, `imports/robinhood.py`, `analytics/ledger.py`,
-`storage/ledger.py`, migration 6. Full reasoning in the DECISIONS entry of that date.
-
-**Exception, authorized 2026-09-08: market signals.** `optscan signals` evaluates every
-symbol with fresh stored bars and delivers what is new through the existing alert sinks.
-`analytics/signals.py`, `jobs/signals.py`, `storage/signals.py`, `api/routers/signals.py`,
-`frontend/src/views/Signals.jsx`, migration 9.
-
-**Exception, authorized 2026-09-13: the short premium study.** `optscan premium sync`
-caches QQQ and SPY 0 to 1 DTE option minute trades from Alpaca (February 2024 on,
-`data/option_tape`); `premium study` replays spreads and condors on them under every
-stop, target and fill assumption; `premium reconcile` prices the account's own 0DTE
-fills at the same marks. `storage/option_tape.py`, `jobs/option_tape.py`,
-`analytics/premium.py`, `analytics/premium_stats.py`, `analytics/vector_bsm.py`,
-`jobs/premium.py`. Trade prints, never quotes: marks are a per minute smile and every
-exit fills the minute after it triggers, because filling at the trigger minute was a
-measured $2.50 to $6.60 a condor of noise. Results and their limits in the DECISIONS
-entry of 2026-09-14.
-
-**Exception, authorized 2026-09-17: the iron butterfly in the premium engine.**
-`Structure.IRON_BUTTERFLY`, both shorts on the strike nearest spot. It loses to the
-condor at every wing width and the narrow ones are indistinguishable from zero. Its
-break-even credit is `E[min(|move|, width)]`, which the market pays within pennies of.
-DECISIONS entry of 2026-09-17.
-
-**Exception, authorized 2026-09-17: open interest and gamma levels.**
-`analytics/gex.py` plus `GET /symbols/{symbol}/gex` and a panel on the Key levels tab:
-call and put walls, a pin candidate, max pain, net GEX per strike, and a zero-gamma
-level found by repricing every strike across a +/-3% spot grid. Pure math with every
-threshold an argument, so the scanner can reuse it. **Nothing in it is validated
-against outcomes**, and the dealer sign convention it rests on is not a measurement.
-`SPX` and `XSP` alias to `^SPX` and `^XSP`; the ticker search cannot reach either yet.
-
-**2026-10-21: `run_record` was scoring without an IV history**, so every one of the
-33,571 settled validation rows carries a null IV rank and the study has been grading a
-four-component score while every screen showed five. Fixed with two tests. Nothing
-retroactive is possible: whether the real score separates outcomes cannot be answered
-until newly recorded rows settle. **`optscan validate` is worth re-running around late
-November 2026**, once a month of post-fix rows have expiries behind them.
-
-- **Every threshold was measured before it shipped**, over 44,113 symbol-days (294
-  symbols, one session in five across three years). At the defaults the whole universe
-  produces roughly 9 signals a day, 2 of them at severity 3 or above. The dump and the
-  sweep are reproducible: see the module docstring.
-- **The squeeze is bands-inside-channels, not a fixed band width.** A fixed 4% cut fires
-  on 0% of days for the tenth-percentile symbol and 12% for the ninetieth, so it reports
-  which symbol it is looking at rather than what that symbol is doing. Comparing the
-  spread of closes to the same symbol's own ATR normalises itself.
-- **Only levels with a p-value can raise an alert.** Round numbers, volume nodes and
-  value areas have nothing to have survived. That also settles a question the module
-  could otherwise only answer badly, since `value_area_low` and `value_area_high` share
-  one `LevelKind` and cannot be told apart from the level alone.
-- **Suppression is keyed (symbol, kind, session)**, not (position_id, kind). A break in
-  March and another in July are two events. `signal_sent` is a separate table for that
-  reason; a sentinel position_id would have meant a foreign key pointing at nothing.
-- **The dashboard route evaluates but never delivers or records.** A page refresh that
-  consumed the once-per-session suppression would leave the scheduled run silent, which
-  is the worst failure an alerting tool has: it still looks like it is working.
-- The composites are only *approximately* independent. Measured lift over independence
-  is 1.4x and 1.6x, because the decline that carves a swing low is the same decline that
-  depresses RSI. Mild, and stated rather than assumed.
-
-**Exception, authorized 2026-09-08: the backtester.** `optscan backtest` and a Backtest
-tab. `analytics/backtest.py`, `analytics/rules.py`, `jobs/backtest.py`,
-`api/routers/backtest.py`, `frontend/src/views/Backtest.jsx`. No migration: nothing is
-stored, every run is computed from `vendor_daily`.
-
-- **What can honestly be tested is set by the data, not by the UI.** 294 symbols and ten
-  years of daily bars support underlying rules fully. Historical implied vol exists for
-  QQQ and AAPL only, so the option modes run there and refuse elsewhere. The nine stored
-  chain captures are nowhere near enough to backtest on real option quotes, and nothing
-  pretends otherwise.
-- **Option payoffs are exact; only the entry credit is modelled.** Held to expiry, profit
-  is `credit - intrinsic`, and the underlying's path at expiry is real stored history.
-  The null prices its entries with the same model, so the *comparison* survives the model
-  being wrong even though the absolute return does not.
-- **Measured, and the answer was no.** None of the indicator rules beat the null on the
-  tech group at a 21 day horizon: `rsi_below` came closest at +0.79% over a null whose
-  5th-95th range was +0.86% to +4.59%, p=0.244. Short 5% OTM 30 DTE puts on QQQ and AAPL
-  won 88% of the time for +0.12% of collateral per trade, and turned negative at 15%
-  slippage. The tool's own signals do not currently show a tradable edge, which is a
-  finding worth keeping rather than tuning away.
-- Rolling indicators in `rules.py` are a second implementation of `levels.py`'s scalar
-  ones (the scalar form per bar is quadratic). `tests/test_rules.py` pins them together
-  at several points in the series, the same way `levels.py` is pinned to `compute.js`.
-
-**Exception, authorized 2026-09-08: the strategy search.** `optscan search` and
-`jobs/search.py`. Grid over rules, parameters, horizons and directions; ranked on a
-training period; the top few tested on a holdout that nothing has touched.
-
-- **Market-neutralising returns was tried and rejected on measurement.** Subtracting the
-  contemporaneous universe return shrinks the null's spread (rsi_below 1.97% to 1.31%)
-  but shrinks the observed mean by the same factor, so z barely moves and in one case got
-  worse. The shift null already neutralises the market factor, because both sides
-  experience the same drift. Do not rebuild this without new evidence.
-- **The first genuine lead in the project.** Short-horizon oversold mean reversion.
-  Formed on the tech group's search, then tested *pre-specified* on the 188 symbols
-  outside it: RSI<25 at 5 days returned +0.98% over its null (p=0.005, 107 blocks),
-  RSI<30 at 5 days +0.71% (p=0.004, 118 blocks). It **survives real costs** — the edge is
-  unchanged and the net drops to +0.46% a trade — and is *strongest on liquid names*,
-  netting +1.03% at p=0.001 on the ETF and large-cap subset where spreads are 30-47 bp.
-  It is `oversold_bounce` in `jobs/ideas.py`, the registry's only SUPPORTED entry.
-- **A 184 cell search over the liquid universe found nothing that survived.** Its
-  in-sample winner, `gap_down(0.04) short 1d`, scored z=7.70 against a multiplicity bar
-  of 3.23 on 76 blocks, then returned **-0.34% out of sample**; its two sibling cells
-  returned -1.70% and -1.23%. All three reversed sign. Shorting gap-downs worked while
-  gaps continued and stopped when they began filling. Kept as `gap_down_continuation`,
-  status RETIRED, because it is the clearest example here of an in-sample winner that was
-  nothing.
-- Documented patterns added to the rule registry and tested: internal bar strength,
-  consecutive up/down closes, gap down, 52-week-high proximity, turn of month. Only the
-  RSI family survived. Turn-of-month is in the grid as a second control alongside
-  `every_bar`: a calendar rule ranking highly is information about the search.
-
-- **Rows are stored raw and positions are derived.** Exports overlap, so a re-import
-  must be a no-op. Identity is `(source, digest, dup_index)`: the index is there
-  because two identical fills on one day are two trades and a hash cannot tell them
-  apart.
-- **The trailing `S` on an expiring leg is captured and never decoded.** It sat on the
-  bought leg in all three reference spreads and on the higher strike in all three, and
-  three cases cannot separate those rules. An expiration's direction comes from the
-  holding the ledger says was open. `signed_quantity` returns None rather than guessing.
-- **Fees are measured, options only.** 4 cents a contract on buys, 6 on sells. On
-  shares the same arithmetic went negative on 14 of 34 rows because Robinhood rounds the
-  displayed price while the amount is exact, so equity fees are None, not zero.
-- **An unknown transaction code raises.** Assignment and exercise move real contracts,
-  and a skipped row is a profit figure with a hole and nothing to say so.
-
-**Every chart that is not a time series draws on `chart/plot.jsx`.** Payoff, skew and
-term structure are profit-vs-price, vol-vs-strike and vol-vs-days; a time series library
-would need its axis lied to. The shared plot gives them the price chart's *behaviour*
-instead: measured width, a readout in a fixed header rather than a floating tooltip
-(a tooltip covers what you are pointing at), horizontal gridlines, no axis rule.
-**Width is measured in a layout effect, not only by ResizeObserver** - the observer
-alone leaves the first frame at the fallback and reports nothing for a container that
-is not being laid out.
-
-**Fourteen indicators; only one lower-pane indicator at a time.** RSI is bounded 0-100
-and MACD is unbounded and centred on zero, so sharing an axis would draw one against the
-other's scale. Enabling a second replaces the first. Overlays stack freely. Maths lives
-in `chart/compute.js`, and every function emits a point **only where the full window
-exists** - RSI and ATR use Wilder's recursive smoothing, not a rolling mean, which is
-the error that makes an RSI disagree with other platforms by the point or two nobody
-investigates.
-
-**A bare `ON` in universe.yaml is the boolean `True`.** YAML 1.1 does this to ON, OFF,
-YES, NO, Y and N. ON Semiconductor was silently absent from every price sync because
-`str(True).upper()` is the ticker `"TRUE"`, which the vendor answered with nothing and
-the report blamed on a delisting. Symbols are quoted in the file, and **the loader now
-refuses a non-string rather than coercing it**, which is the half that stops the next
-one being invisible.
-
-**`prices` (16:05) refreshes daily bars for the universe; without it the price history
-silently stops moving**, which is invisible on a chart that still draws. Ten day window,
-~7s for 286 symbols, because a re-import of a held session is a no-op. Like `capture`
-it is `default_install=False`: neither runs without Alpaca keys.
-
-**Delisted tickers are commented out with their last session, not deleted.** Their
-stored history is real. Leaving them in the request list prints failures every day, and
-a warning that fires daily is one nobody reads.
-
-**`resolve` is scheduled at 05:00 local and this machine wakes around 11:30**, with
-`WakeToRun` false. It has missed five days. Fix is either `WakeToRun` or moving
-`resolve_time_local` to after the close, where it would settle through today's expiry
-rather than yesterday's.
-
-**Tradier and Schwab were removed on 2026-09-08.** Providers are now `yfinance` and
-`alpaca`. Tradier implemented four of the interface's nine methods, had **no corporate
-calendar** (`get_events` was never implemented), had a measured-unusable `mid_iv`, and a
-token expiring ~2026-10. Schwab never had an adapter at all: it was in the provider
-literal with two credential fields and `get_provider` raised "arrives later".
-`snapshot_history_days` went too, declared and never read.
-
-**The docstrings that mention Tradier stay on purpose.** They record why an IV history
-belongs to one vendor, why the live feed polls, why a missing calendar weakens two
-triggers, and why a vendor's IV is stored and never used. Deleting the code did not make
-those false.
-
-**The live SSE hub is verified working against Alpaca and is still off by default.** It
-was disabled because yfinance throttles silently; Alpaca publishes 200/min and the hub
-costs ~32/min at worst (4 symbols, 15s, idles out after 60s). Driven by hand it went
-idle to live with a 394-contract cycle. `OPTSCAN_LIVE_ENABLED=true` turns it on. It now
-reports `delay_minutes: 15` for Alpaca's indicative feed, which `quote_delay_minutes`
-previously only knew how to say about Tradier.
-
-**Vendor value coercion lives in `providers/parsing.py`, once.** Three adapters had
-their own copy and disagreed about zero, which is the case the first convention in this
-file is about. `non_negative` for a **quote** (a 0.00 bid is real: measured, 57 of 642
-SPY contracts had one against a real ask, and none had both sides zero), `positive` for
-a **derived** value like an implied vol (a zero there is a solver that gave up, which is
-what Tradier's `mid_iv` taught), `whole` for counts. Picking the wrong one is quiet in
-both directions: `positive` on a bid loses the wings, `non_negative` on an IV turns a
-clamp into a data point.
-
-**PowerShell is invoked through `jobs/powershell.py`.** Four call sites had their own
-copy. The flags are the reason it is centralised: `-NoProfile` stops a user profile
-running first, `-NonInteractive` stops a scheduled task hanging on an invisible prompt.
-
-**Exception, authorized 2026-09-08: capturing every universe symbol.** `optscan
-snapshot --universe [GROUP...] --provider alpaca`, plus a `capture` scheduled job at
-15:50 market time. Full reasoning in the DECISIONS entry of that date.
-
-- **`get_chains` is on the provider interface with a default that loops `get_chain`.**
-  Every adapter works the day it is written; only one that cares about request count
-  overrides it. Alpaca's override uses the expiry range both option endpoints accept.
-  Measured: **50 requests per symbol before, 5-10 after**; 293 symbols is ~9 minutes and
-  ~30MB a day rather than an hour and 14,000 requests.
-- **`default_install=False`,** like `manage`. It is the only job needing a specific
-  vendor's credentials, and nine minutes over 300 symbols is a decision not a default.
-- **Capturing is not screening, and they stay separate.** The watchlist stays at six.
-  Best plays reports the top candidate across what it scans, so 293 symbols makes that a
-  maximum over ~50x more draws and would look better with nothing having improved.
-  Capture is irreversible if skipped; ranking can be fixed later.
-- **`--force` writes stale marks under a session that has not happened.** 19 such
-  captures were made while building this and had to be deleted. Delete anything it
-  writes before it reaches an IV history.
-
-**Exception, authorized 2026-09-08: charts for any symbol, and intraday drill-in.**
-Full reasoning in the DECISIONS entry of that date.
-
-- **The Underlying view no longer requires a stored option snapshot.** It did, which
-  made every unpinned ticker a dead page while thousands of its daily bars sat in the
-  database. The price panel renders from the symbol alone; volatility panels are
-  conditional.
-- **`price_history` reads stored bars first**, provider second. That is what makes a
-  chart open for a symbol nothing has captured.
-- **Intraday comes from `get_intraday_provider`, not `OPTSCAN_PROVIDER`.** That setting
-  chooses what captures chains and switching it restarts every IV rank from zero. A
-  minute candle carries no such history. Prices only, nothing stored.
-- **Intraday bars are keyed by epoch seconds, daily by ISO date, and never mixed.** A
-  date identifies a session, so date-keyed intraday collapses 78 candles onto one point.
-- **Do not infer which from the timestamp.** Alpaca stamps *daily* bars at 04:00Z, so
-  "has a time of day" misclassifies every provider-served symbol. The caller passes it.
-- **Never call `applyOptions` from a `useEffect` of its own.** It outlives the chart's
-  creation effect, fires after `chart.remove()`, and `Value is null` blanks the page.
-- A session drill-in is bounded to the calendar day, not market hours: extended-hours
-  bars are often why somebody opened that day.
-
-**Two servers on one port is a real trap and `optscan serve` now warns about it.**
-Binding `0.0.0.0` succeeds while another process holds `127.0.0.1` on the same port.
-Windows routes localhost to the older process and the network address to the newer one,
-so the same URL serves different code. The symptom is new endpoints returning the SPA's
-HTML while `/api/health` works, which reads as a router bug and is not. Measured
-2026-09-08 with servers from 16:13 and 21:50 on port 8000. Also: introspecting
-`app.routes` is useless for this, since included routers appear as `_IncludedRouter`
-with `path=None`; use `TestClient` instead.
-
-**`--lan` is safe on a network you own and unsafe on one you share, and the flag cannot
-tell the difference.** This machine is on `10.128.106.55/24`, a shared building network,
-so the port stays shut and the firewall rule was removed. Check
-`Get-NetConnectionProfile` before trusting any firewall rule: both profiles here are
-`Public`, so a `-Profile Private` rule never applied at all. For phone access on a
-shared network, bind a private-mesh interface with `--host`, never `--lan`.
-
-**Exception, authorized 2026-09-08: phone access.** Two independent problems, fixed
-separately. Full reasoning in the DECISIONS entry of that date.
-
-- **`optscan serve --lan`** binds every interface and prints the phone URL plus the
-  firewall rule. **The default stays `127.0.0.1` and a test pins it.** There is no login
-  on this app, so going on the network exposes positions, journal and broker P/L to
-  everyone on it; that deserves a flag, not a config default.
-- The firewall command is **printed, never run**: it needs elevation and changes a
-  system security setting. Scoped `-Profile Private -RemoteAddress LocalSubnet` so it
-  cannot follow a laptop onto public wifi.
-- **The stylesheet had no layout breakpoints at all** before this. Below 860px the
-  sidebar is an off-canvas drawer, not a stacked nav: stacking costs most of the first
-  viewport for the thing needed least often. Scroll goes on the three table wrappers,
-  never on `.panel`, which would clip the search dropdown.
-- Verified on all ten views at 375px: no horizontal page scroll anywhere.
-
-**Exception, authorized 2026-09-08: a home page, search, and pinning.** `catalogue.py`,
-`api/routers/catalogue.py`, `views/Home.jsx`, `views/Browse.jsx`,
-`components/SymbolSearch.jsx`. Home is now the default view. Full reasoning in the
-DECISIONS entry of that date.
-
-- **Three data states, never conflated.** In a group (a label), has price history
-  (chartable, **not screenable**), has captured chains (the only screenable one).
-  Currently 293 / 293 / **6**. Every search row shows a status phrase, not a checkmark.
-- **Pinning does not capture a chain.** It makes the *next* snapshot run fetch one, and
-  every add says so. A pinned card with no capture is drawn **outlined rather than
-  filled** - the same signal Best plays uses for a blocked near miss, reused on purpose
-  so the app has one vocabulary for "real, but not ready".
-- **Unpinning deletes nothing.** A chain from a day that has passed cannot be captured
-  again.
-- **The watchlist is the only thing this API writes.** Justified because it decides what
-  the capture job fetches; idempotent, so a double click is not an error.
-- **Two vendors on one symbol broke two numbers, both found by reading the page.** The
-  daily change was computed between two vendors' *same* session and rendered +0.00% on
-  exactly AAPL and QQQ, the only dual-sourced symbols. Session counts were summed across
-  vendors, reporting 5,699 for a symbol with 3,188. Pick one source first;
-  `COUNT(DISTINCT session_date)`. Neither is visible in a test that seeds one vendor.
-
-**Not done, and next:** pinning is now one click, and Best plays reports the top
-candidate across the watchlist, so a large watchlist makes that a maximum over far more
-draws and the list will look better with nothing having improved. The guard belongs in
-the ranking, not the button.
-
-**Exception, authorized 2026-09-07: bulk price history and a symbol universe.**
-`optscan prices sync` fills `vendor_daily` for many symbols at once; `universe.yaml`
-and `universe.py` hold the named groups. Migration 8. First run stored **293 of 294
-symbols, 693,974 sessions, 2016-09-09 to 2026-09-04.** Full reasoning in the DECISIONS
-entry of that date.
-
-- **The same table serves both vendors and never pools them.** AAPL holds 2,511 Alpaca
-  sessions and 3,188 Market Chameleon ones side by side, keyed
-  `(source, symbol, session_date)`.
-- **Three volume fields, not one.** Shares, trade count and VWAP. Volume alone cannot
-  tell 30 million shares in 500,000 prints from the same volume in 5,000;
-  `average_trade_size` is the ratio and needs the count.
-- **Batching is the feature.** 58 symbols in one request in 0.7s against ~35s the naive
-  way. `get_daily_bars_bulk` sits outside `MarketDataProvider` on purpose.
-- **A symbol that returns nothing is named, never dropped.** The vendor omits what it
-  does not know with no error. A hole in a price history is invisible in every chart
-  drawn over it. **No OTC name can ever sync** (`403 ... querying OTC data`).
-- **`universe.yaml` is curated and says so.** No vendor here publishes sector or index
-  data, so somebody typed these lists. `sp500_large` is not the S&P 500: it is the
-  constituents somebody remembered to type, which is exactly the set that did not get
-  dropped for performing badly. Every aggregate over it carries that survivorship.
-
-**Not done, and the thing to weigh before doing it:** none of this is pointed at the
-screener, and the watchlist is still six symbols. Expanding the *screen* to hundreds of
-symbols is a different decision, because Best plays reports the top candidate and the
-best of 600 symbols is a maximum over 100x more draws than the best of 6. That is a
-selection effect that will make the list look better with nothing having improved.
-`calibration.py` already holds the cluster reasoning for this shape of problem and it
-has not been applied here.
-
-**Exception, authorized 2026-09-07: the Alpaca adapter.** `providers/alpaca.py`,
-selected with `OPTSCAN_PROVIDER=alpaca` and a key pair in `.env`. Free Basic plan.
-Full reasoning in the DECISIONS entry of that date; five things there were measured
-against the live API because the documentation is wrong about them and every one fails
-silently with a 200:
-
-- **Two hosts, on purpose.** Data is on `data.alpaca.markets`; **open interest exists
-  only on the trading host** at `/v2/options/contracts`, so a chain joins the two.
-- **The feed name differs per endpoint.** Bars take `sip`, snapshots take
-  `delayed_sip`, and each is an error on the other. `feed=iex` is the trap: 200 OK with
-  1.8% of consolidated volume and no indication of it.
-- **Never omit `expiration_date_gte`/`lte` on `/v2/options/contracts`.** Without them
-  it answers for exactly 4 expiries, 200, no page token, and paging at limit=100 walks
-  17 pages to the same truncated set. With bounds, two years gives 33.
-- **Greeks and IV are on the free feed.** Stored as `vendor_iv`, still unused: this
-  project solves its own vol, same rule as Tradier's unusable `mid_iv`.
-- **`403 OPRA agreement is not signed`** is a signature, not a subscription, and is
-  reported separately from a bad key.
-
-**What it cannot do.** No historical option quotes at all (`/v1beta1/options/quotes` is
-a 404; only `/latest` exists), and historical option trades are recent-only. Option
-*bars* do go back to ~2024-01-18 including minute bars on 0DTE contracts, so historical
-option data is **trade priced, never mid priced**. Historical *stock* NBBO quotes, by
-contrast, are full tick depth. Stocks are richly served; options are not.
-
-**`get_events` is half a calendar and says so.** Ex-dividend comes from
-`/v1/corporate-actions` and serves `exclude_early_assignment_risk`. `earnings_date`
-stays None and is never guessed, because `exclude_earnings` is the heavier filter and a
-screen that believes it checked earnings and did not is worse than one that knows it
-could not.
-
-**Exception, authorized 2026-09-07: downloaded vendor volatility history.** `optscan
-import-history` reads a Market Chameleon daily export, `optscan history` reports what is
-held. `models/vendor.py`, `imports/marketchameleon.py`, `storage/vendor.py`, migration 7.
-Full reasoning in the DECISIONS entry of that date.
-
-**This is what finally makes IV rank real.** One export is 3,188 sessions back to 2014
-carrying the vendor's own IV30, against the 8 daily captures this project had managed
-for itself. `component_iv_rank` was null on all 10,020 recorded candidates and is not
-any more: QQQ now ranks 0.181 at percentile 0.194 on 252 observations, confidence high.
-Held for QQQ and AAPL only. **The trial allows 2 downloads per 24 hours; SPY and IWM are
-the next two.**
-
-Four rules came out of it and none are cosmetic:
-
-- **The format has no symbol column.** The ticker is in the filename and nowhere else,
-  so a renamed file imports the wrong instrument under the right name and nothing
-  contradicts it. The symbol is a required argument, never inferred silently, and an
-  import that disagrees with stored sessions is **counted and refused, never applied**.
-  Verified by importing AAPL as QQQ: 3,188 of 3,188 conflicted and nothing was written.
-- **IV30 is in vol points and this project stores decimals.** 17.19 becomes 0.1719, once,
-  in the parser, with a test on it. A hundredfold vol error is obvious in a payoff
-  diagram and invisible in a rank, which is the only place it goes.
-- **Two vendors' series are chosen between, never merged**, and the *current* value must
-  come from the same vendor as the range it is ranked inside. Ranking a locally solved
-  vol in a downloaded range is the pooling rule broken in a new place: measured, the two
-  disagree by -3.2% on QQQ and +2.9% on AAPL, in opposite directions, and QQQ's rank came
-  out 0.14 that way against 0.181 done properly.
-- **Absent is not zero.** Three sessions have no IV30 in every ticker (they are holes in
-  the vendor's pipeline, not the symbol's), and open interest starts 2018-01-30.
-
-**Trap ten: a rank must read today's vol at the history's own tenor.** `analyze_snapshot`
-used to rank `expiries[0].atm_iv`, the front expiry, against a 30 day history. Short
-dated ATM vol is mechanically elevated: the front expiry solves to 43 vol points on QQQ
-and 83 on AAPL at 0 DTE against 30 day points of 17.2 and 25.5. It never fired only
-because no history was long enough to produce a rank, so importing one is exactly what
-would have made it live. `atm_iv_near_dte` returns None outside a half-to-double band
-rather than the nearest expiry, and `SymbolAnalysis.iv_rank_note` carries the reason so
-the gauge explains itself instead of rendering blank.
-
-**Trap eleven: a cross-symbol ranking may only use components every candidate has.**
-`composite` renormalizes a missing component onto the others, which is right within one
-symbol and badly wrong across them, because it silently replaces the missing value with
-the average of that candidate's other components. Measured on the live config: **below an
-IV rank of 0.939, having imported a history LOWERS a symbol's score.** QQQ's honest 0.18
-cost it 0.152 and dropped it out of Best plays for the sole reason that its data exists.
-
-`scoring.harmonize_scores` rescores a to-be-ranked list over the **intersection** of what
-its members share, and every affected row says what was dropped. It is called from the
-scan router and the CLI display, and deliberately **not** from `jobs/validate.py`: a
-recorded score must depend only on the candidate, never on which symbols shared its
-batch, or the study calibrates a number that moves for reasons the market did not.
-Downloading the other four tickers is what widens the intersection back.
-
-**What it does not do.** IV30 is one number, not a surface. No skew, no term structure,
-no per strike vol. It supports a rank, an IV/HV comparison and vol regime context; it
-cannot price a 20 delta put and cannot touch 0DTE, so it does not on its own enable a
-backtest with modelled credits.
-
-**The screener's DTE band is now 0 to 45**, in `screen.yaml` and in the `DteFilter`
-defaults so the two cannot drift. It was 21 to 60, and the imported ledger showed 337 of
-380 option legs expiring the day they were opened: the screen had never once surfaced a
-trade this account would take.
-
-**Scoring below about five days is not trustworthy yet, and widening the band did not
-cause it.** `annualized_return` is undefined at 0 DTE so those candidates fall into the
-branch written for undefined risk positions and take a 0.75 discount for it, and
-`min_annualized_return` stops applying there because the value it compares against is
-None.
-
-**Measured against all 10,020 recorded candidates, three of the five score components
-carry no information.** `component_premium` is exactly 1.000 for 88.6% of rows because
-the annualized return ramp ceiling of 0.25 is about 30x below what a credit spread
-produces. `component_event_risk` is 1.000 for 100% of rows, stdev 0.0000, because
-`exclude_earnings` removes every case it would penalise before scoring runs. `iv_rank`
-was null throughout, and is now real for any symbol with an imported history (see
-above). Only liquidity and probability actually vary, so the composite is
-roughly 5/8 liquidity and 3/8 probability of profit, which is the most likely
-explanation for the score being anti-correlated with profit. **Not yet fixed.**
-
-**Exception, authorized 2026-09-07: the price chart.** `frontend/src/components/chart/`
-replaces the old `Candles.jsx`. Intervals 1D, 1W and 1M, windows per interval, candles
-or area, and MA20/MA50/MA200 toggleable and off by default. Full reasoning in the
-DECISIONS entry of the same date. Five things there should survive future edits:
-
-- **No floating tooltip.** Hovered values go in the fixed header above the canvas. A
-  tooltip covers the candles the reader is pointing at.
-- **No vertical gridlines, no axis borders, and the price axis is locked to autoscale.**
-  The lock is not fussiness: dragging the axis can flatten a thirty percent move into a
-  straight line, which is the chart lying because of a slip of the mouse.
-- **The wheel belongs to the page.** A chart may capture it when it owns the screen.
-  This one is a panel among five, and capturing it blocked page scrolling and silently
-  drifted the view off the latest bar.
-- **`days` on the history endpoint is a bar count, not calendar days.** Measured:
-  `days=730` returns 730 sessions starting 2023-10-09. Window sizes come from
-  `SESSIONS_PER_YEAR` so the label matches the span. The first version got this wrong in
-  the same direction on every window, which is why it looked consistent.
-- **A partial moving average is never drawn**, and an indicator that cannot draw says
-  why on its chip instead of disappearing. Same rule as the vol solver and IV rank.
-
-Indicators live in a registry at `chart/indicators.js`. Adding one means adding an entry
-there and touching nothing else; an entry may declare several plots, which is what lets
-a Bollinger band or MACD arrive without reopening the chart component. Intraday
-intervals are deliberately deferred, see the DECISIONS entry.
-
-**Visual pass, 2026-09-05.** Surfaces, radii, spacing and type were re-based on
-measured values rather than taste: page `#101626`, panel `#1d2333`, raised `#2e3446`,
-12px on cards, 8px on controls, Inter at 14px/500 self hosted through
-`@fontsource-variable/inter` so a cold dashboard has no font request and no flash.
-
-Two rules came out of it and should survive future edits:
-
-- **Panels carry no border.** Separation is surface contrast plus space. Four panels a
-  screen meant four more lines competing with the numbers inside them, and removing
-  them is most of what made the app feel calmer. The remaining consequence is worth
-  keeping: a blocked near-miss card is now the only card on any screen with a border
-  at all, which makes that distinction stronger than when everything had one.
-- **The accent stays blue.** Green already means profit here, so a green primary
-  button sitting next to a green P/L figure would be one signal doing two jobs.
-
-`.btn.primary` is now filled rather than outlined; before this every button in the app
-was the same outlined grey and the one that mattered had to be found by reading.
-
-**Exception, authorized 2026-09-05: the Journal view.** A trade journal's report
-surface - KPI tiles, equity curve, calendar P/L, and breakdowns by strategy, symbol,
-DTE and score - built over settled `opportunity_outcome` rows at `GET /api/journal`.
-
-It is **not** a record of trades taken. Nothing in it has been to a broker, and the
-banner above the numbers says so. It measures the screen held to expiry, with no fill,
-no slippage and no early management. `analytics/journal.py` carries the reasoning; the
-short version is that a calendar and an equity curve are the two most persuasive
-objects this app can draw and neither knows what it is drawing, so every aggregate
-carries its cluster count and `reportable` is false until the sample clears the
-`calibration.py` minimum.
-
-Two findings from the first real run, both worth re-checking as the sample grows:
-
-- **The composite score is currently anti-correlated with profit.** Mean profit by
-  score band runs +$478, +$266, +$188, +$102 from the lowest band to the highest. At 14
-  clusters over 3 settlement dates that is not a finding, but it is the opposite of
-  what the score claims and the Best plays view ranks on it.
-  **Re-run 2026-10-21 at 222 clusters, and the headline above is mostly a denominator.**
-  The dollar ordering holds (+$175, +$162, +$113, +$88) but the bottom band is 85% cash
-  secured puts risking $44,375 a position against the top band's $4,478. Per dollar
-  risked the ordering is not monotone at all: 2.4%, 26.5%, 23.5%, 9.6%, so the lowest
-  scores are the *worst* on return on capital and the middle is the best. The bands are
-  also largely a strategy sorter (Q1 85% cash secured puts, Q4 54% condors and 32% call
-  spreads), so comparing bands compares strategies. Within a single strategy the score
-  separates nothing: condors run 36.4% +/- 7.3 bottom half against 27.4% +/- 5.1 top.
-  **Whenever a result is reported per position, ask what the positions cost.**
-- **14 clusters sit on only 3 settlement dates.** Six symbols expiring on one Friday
-  share one market move, so the effective sample is nearer 3 than 14. The report states
-  both numbers rather than letting the cluster count stand alone.
-
-**Exception, authorized 2026-09-05: the Best plays view.** A landing screen that ranks
-the whole watchlist instead of the selected symbol, plus near miss collection behind
-`GET /api/scan?near_miss=true`. Three constraints hold it together and none are
-cosmetic:
-
-- It scans the watchlist, never the sidebar selection. "Best play available" that
-  silently meant "best in NVDA" would be the most misleading screen in the app.
-- Near misses are scored by the same function as passing candidates and **routinely
-  outscore them**, because the gate that blocked them is not an input to the score. In
-  the first run against real captures the top blocked candidate scored 0.976 against
-  0.956 for the best that passed. They are drawn outlined and dimmed and always carry
-  their blocker, and that separation is load bearing, not styling.
-- The score bar is length only. A colour ramp would assert that some threshold is good,
-  and `optscan validate` is still under its own cluster minimum, so no threshold here
-  has earned that.
-
-`enters_screen_in_days` is populated only for a DTE ceiling blocker, because that is the
-only gate that clears by waiting. Everything else needs the market to move, and dating
-that would be inventing a number.
-
-### The state that matters most right now
-
-**The validation study is running and it is empty.** 903 real candidates were logged on
-2026-08-01 and the earliest of them expires 2026-08-21, so `optscan validate` correctly
-reports nothing until then. That is the study working, not a bug.
-
-**Four jobs are now registered with Windows** and `optscan schedule` prints them and
-their live state: `snapshot` 15:45, `record` 16:15, `backup` 16:30, `resolve` 08:00, all
-market time. `manage` is deliberately not installed; see the Phase 9 DECISIONS entry.
-
-**Recording has to keep running, for the same reason the snapshot job does.** A
-candidate that was never logged when it was scored cannot be settled later, and there is
-no way to reconstruct what the screen would have surfaced last Tuesday. Every day
-`optscan record` does not run is a permanent hole.
-
-**The backup default is on the same drive as the data.** `optscan backup` says so every
-run. Pointing `OPTSCAN_BACKUP_DIR` at another disk or a synced folder is a one line
-change and the only thing that makes it a real backup.
-
-### What Phase 8 built
-
-```
-src/optscan/
-  analytics/outcomes.py       settling a short position at expiry, arithmetic only
-  analytics/calibration.py    buckets, Wilson intervals, reliability, Brier
-  storage/validation.py       the append only log and the outcome table
-  jobs/validate.py            record, resolve, report
-```
-
-```
-optscan record      # score the watchlist and log every candidate
-optscan resolve     # settle logged candidates whose expiry has passed
-optscan validate    # the report, or a refusal to give one
-```
+Authorized since, each with its reasoning in the DECISIONS entry of that date (the
+long-form notes that used to live here are archived verbatim at the end of DECISIONS.md,
+under "Archived from CLAUDE.md, 2026-10-22"):
+
+| date | scope |
+|---|---|
+| 2026-09-05 | Journal view; Best plays view |
+| 2026-09-07 | broker ledger (`optscan import`, `trades`); bulk price history + `universe.yaml`; Alpaca adapter; Market Chameleon IV history; price chart |
+| 2026-09-08 | market signals; backtester; strategy search; universe-wide capture; charts for any symbol + intraday; phone access; home page, search, pinning |
+| 2026-09-13 | the short premium study (`optscan premium`, 0-1 DTE QQQ/SPY option tape) |
+| 2026-09-17 | iron butterfly in the premium engine; open interest and gamma levels |
+| 2026-10-21 | validation metric is return on capital within strategy; `optscan conditions` (forward gamma record); managed vertical spreads + `in_sigmas` in the backtester; overnight entry-edge studies in `scripts/studies/` |
+| 2026-10-22 | call debit spread plans on oversold bounce ideas; `MAP.md` + `tests/test_map.py`; study harness; `scripts/check.ps1` |
+
+### Where things stand (2026-10-22)
+
+- **The only validated edge is `oversold_bounce` on the stock**: RSI(14) <= 30, long five
+  sessions. Re-confirmed on the 2022-26 holdout at +0.96% over its null, p=0.017.
+- **Its call debit spread expression is a lead under forward test, not a finding.** 15
+  DTE, long ATM, short 0.84 sigmas above, closed after five sessions: +14.0% dev edge,
+  +16.5% holdout, but it missed its pre-registered gate. Robust across a fragility sweep;
+  the fill decides profit (+11.7% / -8.8% a trade at 5% / 15% slippage). Plans for it are
+  on the ideas list, labelled as a lead. The forward test is the user logging real fills.
+- **Nothing else tested has an edge**: vol-timed premium selling, RSI/EMA/level filters on
+  the 0-1 DTE tape, indicator-confluence switches, the composite score within strategy.
+- **The composite score does not rank within a strategy.** The old "anti-correlated with
+  profit" claim was mostly position size; see DECISIONS 2026-10-21.
+- **Gamma cannot be backtested** (no historical per-strike open interest exists for this
+  project). `optscan conditions` records it forward and **is not yet in the schedule**.
+- **Re-run `optscan validate` around late November 2026**, once rows recorded with an IV
+  rank (fixed 2026-10-21) have settled.
+
+### Area rules
+
+Rules that only bite when you touch a particular area. One line each; the reasoning is
+in the archived notes and the DECISIONS entry of the same date.
+
+**Data and vendors**
+- Never omit `expiration_date_gte`/`lte` on Alpaca's `/v2/options/contracts`.
+- Alpaca uses two hosts on purpose, and the feed name differs per endpoint.
+- One table serves several vendors and never pools them; choose between two vendors'
+  series, never merge them. Absent is not zero.
+- Market Chameleon files have no symbol column (the symbol is a required argument, never
+  inferred) and quote IV30 in vol points; this project stores decimals. A disagreeing
+  import is counted and refused, never applied.
+- A symbol a vendor returns nothing for is named, never dropped.
+- Intraday bars are keyed by epoch seconds and daily bars by ISO date, never mixed; do
+  not infer which from the timestamp (Alpaca stamps daily bars at 04:00Z).
+- `days` on the history endpoint is a bar count, not calendar days.
+- Intraday comes from `get_intraday_provider`, not `OPTSCAN_PROVIDER`.
+- A symbol's IV history comes from `load_implied`, never from the price series' source.
+
+**Ranking and scoring**
+- A rank must read today's vol at the history's own tenor (trap ten).
+- A cross-symbol ranking may only use components every candidate has (trap eleven).
+- Compare a result per dollar risked and within strategy, never in raw dollars across
+  positions of different size.
+
+**Screens, charts and the dashboard**
+- The dashboard route evaluates signals but never delivers or records them.
+- The watchlist is the only thing the API writes; pinning does not capture a chain and
+  unpinning deletes nothing.
+- Keep three data states distinct: in a group, has price history, has a captured chain.
+- Never call `applyOptions` from a `useEffect` of its own.
+- A partial moving average is never drawn. No floating tooltip, no vertical gridlines,
+  the wheel belongs to the page, panels carry no border, the accent stays blue.
+- Colour is never the only carrier of meaning.
+
+**Jobs and operations**
+- Recording has to keep running: a candidate not logged when scored cannot be settled
+  later. Same for the 15:45 snapshot, which is the IV history's only writer.
+- Capturing is not screening, and they stay separate. `--force` writes stale marks under
+  a session that has not happened.
+- The backup default is on the same drive as the data; point `OPTSCAN_BACKUP_DIR`
+  elsewhere for a real backup.
+- For phone access on the shared network, bind a private-mesh interface with `--host`,
+  never `--lan`. The firewall command is printed, never run.
+
+**The broker ledger**
+- Rows are stored raw and positions are derived. An unknown transaction code raises.
+- The trailing `S` on an expiring leg is captured and never decoded.
+
+**Research**
+- Option payoffs held to expiry are exact; only the entry credit is modelled. A managed
+  exit is a modelled exit, and a trigger fills on the session after it fires.
+- The tenor band is 15 to 60 DTE; a thirty day IV cannot price a 7 or 90 day contract.
+- Pre-register hypotheses, thresholds and the holdout gate before running; use
+  `scripts/studies/harness.py`.
+- Market-neutralising returns was tried and rejected on measurement (the shift null
+  already neutralises the market); do not rebuild it without new evidence.
+- The 184 cell strategy search found nothing that survived its holdout; its finalists
+  are recorded as RETIRED in `jobs/ideas.py`, not deleted.
 
 ### The thing to understand before touching calibration.py
 

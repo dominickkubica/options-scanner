@@ -103,8 +103,8 @@ That single fact decides what can be backtested (see section 9).
 | `capture` | snapshot + 5 min | universe-wide chain capture | `snapshots/` |
 | `prices` | snapshot + 20 min | `jobs/prices.py` (+ vol indices) | `vendor_daily`, `vol_index` |
 | `signals` | snapshot + 35 min | `jobs/signals.py` | `signal_sent`, alerts |
-| `record` | record time | `jobs/validate.py` `run_record` | `scan_run`, `opportunity_log` |
-| `backup` | record + 15 min | `jobs/backup.py` | backup copies |
+| `record` | 16:15 | `jobs/validate.py` `run_record` | `scan_run`, `opportunity_log` |
+| `backup` | 16:30 | `jobs/backup.py` | backup copies |
 | `resolve` | 08:00 | `jobs/validate.py` `run_resolve` | `opportunity_outcome` |
 | `manage` | market open | `jobs/manage.py` | `alert_sent`, alerts |
 

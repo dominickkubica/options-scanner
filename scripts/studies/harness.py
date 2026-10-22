@@ -166,5 +166,5 @@ class Study:
     def save(self, data: dict) -> Path:
         RESULTS.mkdir(exist_ok=True)
         path = RESULTS / f"{self.name}.json"
-        path.write_text(json.dumps(data, indent=1, default=str), encoding="utf-8")
+        path.write_text(json.dumps(data, indent=1, default=str) + "\n", encoding="utf-8")
         return path
