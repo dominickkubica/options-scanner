@@ -34,7 +34,9 @@ $Forbidden = @(
 )
 $ForbiddenPatterns = @("*.sqlite", "*.sqlite-*", "*.parquet", "*marketchameleon*.csv", "*.jsonl")
 # Identifiers that must never appear in a shipped file. Lower case; matched case-blind.
-$Personal = @("kubic", "dominick", "@gmail.com", "robinhood account", "account number")
+# Specific to the owner, not generic phrases: "robinhood account" was tried and fired on
+# the importer's docstring describing the export format, which is code, not data.
+$Personal = @("kubic", "dominick", "@gmail.com")
 
 $dirty = git status --porcelain -- $Allow packaging/friend
 if ($dirty) {
