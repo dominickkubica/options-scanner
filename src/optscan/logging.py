@@ -59,6 +59,10 @@ def attach_log_when_windowless(settings: Settings, command: str | None = None) -
     return path
 
 
+#: Third-party loggers that narrate every request at INFO.
+QUIET_LOGGERS = ("httpx", "httpcore", "urllib3", "yfinance", "peewee")
+
+
 def configure_logging(settings: Settings) -> None:
     """Configure structlog and the stdlib root logger. Safe to call more than once."""
     # First, before anything below reads sys.stdout. See attach_log_when_windowless.
@@ -71,6 +75,13 @@ def configure_logging(settings: Settings) -> None:
         level=level,
         force=True,
     )
+    # httpx logs every request at INFO. Over a study or a universe-wide fetch that is
+    # hundreds of lines per run, burying the handful that say something, and every
+    # reader -- person or session -- ends up filtering them out by hand. Kept at WARNING
+    # unless DEBUG is asked for, where seeing each request is the point.
+    vendor_level = logging.DEBUG if level <= logging.DEBUG else logging.WARNING
+    for noisy in QUIET_LOGGERS:
+        logging.getLogger(noisy).setLevel(vendor_level)
 
     renderer: structlog.types.Processor
     if settings.log_format == "json":

@@ -261,7 +261,9 @@ call debit spread plan)
 `routers/scan.py` · `routers/signals.py` · `routers/symbols.py` ·
 `routers/watchlist.py`
 
-**Outside `src/`** — `scripts/studies/` (pre-registered research studies + results),
+**Outside `src/`** — `scripts/studies/` (pre-registered research studies + results;
+`scripts/studies/harness.py` is the shared plumbing every new study should use),
+`scripts/check.ps1` (lint + format + suite, summary only; full logs in `data/logs/check-*`),
 `scripts/coverage_floor.py`, `screen.yaml` (screener thresholds), `universe.yaml`
 (symbol groups), `DECISIONS.md` (why), `CLAUDE.md` (rules and current phase).
 

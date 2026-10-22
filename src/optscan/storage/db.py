@@ -637,7 +637,7 @@ def migrate(conn: sqlite3.Connection) -> int:
             if conn.in_transaction:
                 conn.rollback()
             raise
-        log.info("applied migration", version=version)
+        log.debug("applied migration", version=version)
         current = version
     return current
 
