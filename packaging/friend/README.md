@@ -10,9 +10,12 @@ and Alpaca if you add a key).
 
 ## Install (Windows)
 
-1. Unzip this folder somewhere permanent, for example `Documents\optscan`.
-2. Double-click **`Install optscan.cmd`** and answer the questions.
-3. Open the **optscan dashboard** shortcut on your desktop.
+1. Before unzipping, right-click the zip, choose **Properties**, tick **Unblock** at the
+   bottom and press OK. Windows otherwise flags every file inside as downloaded and
+   may stop the installer with a warning.
+2. Unzip this folder somewhere permanent, for example `Documents\optscan`.
+3. Double-click **`Install optscan.cmd`** and answer the questions.
+4. Open the **optscan dashboard** shortcut on your desktop.
 
 The installer needs no admin rights. It uses Python 3.12 if you have it, and otherwise
 offers to install `uv` (a small tool from astral.sh) to provide one.
