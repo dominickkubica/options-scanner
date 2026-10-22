@@ -14,9 +14,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Query
 
-from optscan.api.deps import SettingsDep
+from optscan.api.deps import ProviderFactoryDep, SettingsDep
 from optscan.api.schemas import IdeasOut
-from optscan.jobs.ideas import DEFAULT_FRESHNESS_DAYS, as_report, find_ideas
+from optscan.jobs.ideas import DEFAULT_FRESHNESS_DAYS, as_report, find_ideas, spread_plans
 
 router = APIRouter(tags=["ideas"])
 
@@ -28,9 +28,17 @@ MAX_FRESHNESS_DAYS = 30
 @router.get("/ideas", response_model=IdeasOut)
 def trade_ideas(
     settings: SettingsDep,
+    provider_factory: ProviderFactoryDep,
     freshness: int = Query(DEFAULT_FRESHNESS_DAYS, ge=0, le=MAX_FRESHNESS_DAYS),
     provisional: bool = Query(False),
+    plans: bool = Query(True),
 ) -> IdeasOut:
-    """Symbols triggering a validated strategy, with that strategy's record attached."""
+    """Symbols triggering a validated strategy, with that strategy's record attached.
+
+    Oversold bounce triggers also carry a call debit spread plan, from chains fetched
+    through the cached loaders. `plans=false` skips the fetch for a caller that only
+    wants the list.
+    """
     ideas, notes = find_ideas(settings, freshness=freshness, include_provisional=provisional)
-    return IdeasOut(**as_report(ideas, notes))
+    attached = spread_plans(settings, ideas, provider_factory=provider_factory) if plans else None
+    return IdeasOut(**as_report(ideas, notes, plans=attached))

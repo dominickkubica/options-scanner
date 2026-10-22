@@ -264,6 +264,43 @@ class StrategyOut(ApiModel):
     evidence: EvidenceOut | None = None
 
 
+class SpreadPlanOut(ApiModel):
+    """The call debit spread to buy for an oversold bounce trigger.
+
+    A lead under forward test, not a validated trade, and `status` says so on every
+    plan. Prices are per share; `max_loss` and `max_gain` are dollars per spread.
+    """
+
+    status: str
+    symbol: str
+    signal_session: str
+    entry_session: str
+    exit_session: str
+    expiry: str
+    dte: int
+    spot: float
+    iv: float
+    long_strike: float
+    long_contract: str | None = None
+    short_strike: float
+    short_contract: str | None = None
+    width: float
+    #: Mid of the spread from quotes when both legs have a two sided market, else a
+    #: model estimate, and `quoted` says which.
+    debit: float
+    quoted: bool
+    #: Long ask less short bid. Null without quotes.
+    natural: float | None = None
+    #: Mid + 5%, the study's base fill. Above `walk_away`, mid + 10%, the study's mean
+    #: trade was about flat.
+    limit: float
+    walk_away: float
+    max_loss: float
+    max_gain: float
+    market_too_wide: bool
+    notes: list[str] = Field(default_factory=list)
+
+
 class IdeaOut(ApiModel):
     """One symbol currently triggering one validated strategy."""
 
@@ -280,6 +317,9 @@ class IdeaOut(ApiModel):
     cost_bp: float = 0.0
     horizon: int = 0
     direction: str = "long"
+    #: Oversold bounce triggers only: what to buy, or why there is nothing to buy.
+    spread_plan: SpreadPlanOut | None = None
+    spread_plan_note: str | None = None
 
 
 class IdeasOut(ApiModel):

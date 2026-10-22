@@ -318,10 +318,22 @@ def client(seeded: Settings):
     from fastapi.testclient import TestClient
 
     from optscan.api.app import create_app
-    from optscan.api.deps import clear_caches
+    from optscan.api.deps import clear_caches, provider_factory_dep
+    from optscan.providers.errors import ProviderUnavailable
+    from tests.conftest import FakeProvider
+
+    class Offline(FakeProvider):
+        """The route now fetches chains for bounce triggers' spread plans. Without this
+        override that fetch would reach Yahoo from inside an offline suite; with it,
+        every plan comes back as a stated refusal instead."""
+
+        def get_expirations(self, symbol):
+            raise ProviderUnavailable("offline test")
 
     clear_caches()
-    return TestClient(create_app(seeded))
+    app = create_app(seeded)
+    app.dependency_overrides[provider_factory_dep] = lambda: Offline
+    return TestClient(app)
 
 
 def test_the_endpoint_returns_evidence_in_the_same_payload_as_the_symbols(client) -> None:

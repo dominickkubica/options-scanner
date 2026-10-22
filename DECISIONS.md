@@ -3660,3 +3660,43 @@ on BE, MRNA and RCL alone, three of the most volatile names held. That is why it
 this trade at -5% and why its management tables disagreed with the engine. Everything
 committed came from the engine path, which uses `load_implied` and finds all 23. **To get
 a symbol's IV, use `load_implied`, never the price series' preferred source.**
+
+## 2026-10-22: the bounce's spread plan, on the ideas list
+
+Every `oversold_bounce` trigger on the ideas list -- CLI, `/api/ideas` and the Trade
+ideas view -- now carries the call debit spread to buy, built by
+`analytics/bounce_spread.py` from a live chain fetched through the gamma panel's cached
+loaders. The rule is the one studied overnight, translated to listed contracts: enter at
+the next session's open, buy the listed call nearest spot, sell the one nearest
+0.84 sigmas above it at the chain's own ATM vol, choose the listed expiry nearest 15 days
+that lands after the exit, and close at the fifth session's close with no target or stop.
+
+**Every plan says it is a lead under forward test.** The bounce is validated on the stock;
+this expression missed its pre-registered gate. The status string travels on the plan
+itself rather than in a caption, because a row that reads "buy this" reads as a
+recommendation whatever the page around it says.
+
+**The fill guidance is printed as prominently as the strikes.** The overnight study found
+the fill decides whether this trade makes money -- +11.7% a trade at 5% of the debit given
+up each way, -8.8% at 15% -- so each plan gives a limit at mid + 5% (the study's base
+assumption), a walk-away price at mid + 10% (about breakeven), and flags a quoted market
+whose natural price is already past the walk-away. Quotes taken outside regular hours
+are labelled as such, since they are reliably wider than what the open will show.
+
+Three translation choices, each made from evidence rather than taste:
+
+- **The expiry window is 10 to 31 days, not just 15.** Names that list only monthlies
+  (RIO, REMX on the first run) would otherwise never get a plan. The fragility sweep had
+  measured longer tenors -- +10% over the null at 21 days, +8% at 30 against +12% at
+  15 -- so a monthly gets a plan with its tenor named on it rather than a refusal on a
+  cutoff the data does not support.
+- **Without a two-sided quote the debit is a model estimate at the chain's IV, and says
+  so**, rather than no plan at all.
+- **A trigger whose entry open has passed is labelled**, including an age-0 trigger
+  viewed mid-session. A later fill is not the trade that was tested.
+
+`/api/ideas?plans=false` and `optscan ideas --no-plans` skip the chain fetches. The ideas
+route tests now override the provider with an offline one, because the route fetches by
+default and would otherwise have reached Yahoo from inside the suite.
+
+2,016 tests pass.

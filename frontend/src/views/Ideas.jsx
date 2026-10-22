@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { api } from "../api.js";
 import { ErrorBox, Note, Notes, Panel, useAsync } from "../components/common.jsx";
 import { num } from "../format.js";
@@ -140,7 +140,8 @@ export default function Ideas({ onSelect }) {
               </thead>
               <tbody>
                 {rows.map((row) => (
-                  <tr key={`${row.symbol}:${row.strategy}`}>
+                  <Fragment key={`${row.symbol}:${row.strategy}`}>
+                  <tr>
                     <td className="left">
                       <button
                         type="button"
@@ -163,6 +164,14 @@ export default function Ideas({ onSelect }) {
                     <td>{row.horizon}d</td>
                     <td className="left muted">{row.strategy}</td>
                   </tr>
+                  {(row.spread_plan || row.spread_plan_note) && (
+                    <tr>
+                      <td colSpan={6} className="left">
+                        <SpreadPlan plan={row.spread_plan} note={row.spread_plan_note} />
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
@@ -191,5 +200,42 @@ export default function Ideas({ onSelect }) {
         ))}
       </Panel>
     </>
+  );
+}
+
+
+// The call debit spread for one oversold bounce trigger, written as the order to place.
+//
+// The fill guidance sits on the same line as the strikes, not in a footnote, because the
+// overnight study found the fill and not the signal decides whether this trade makes
+// money: +11.7% a trade at 5% of the debit given up each way, -8.8% at 15%. A plan that
+// showed strikes and buried the walk-away price would be showing the less important half.
+function SpreadPlan({ plan, note }) {
+  if (!plan) {
+    return <div className="chart-note">No spread plan: {note}</div>;
+  }
+  return (
+    <div className="chart-note">
+      <div>
+        <strong>
+          Buy {num(plan.long_strike, plan.long_strike % 1 ? 1 : 0)}C / sell{" "}
+          {num(plan.short_strike, plan.short_strike % 1 ? 1 : 0)}C, exp {plan.expiry} (
+          {plan.dte}d)
+        </strong>{" "}
+        at the {plan.entry_session} open. Debit {num(plan.debit)} (
+        {plan.quoted ? "mid" : "model estimate"}), limit {num(plan.limit)}, walk away above{" "}
+        {num(plan.walk_away)}. Max loss ${plan.max_loss.toFixed(0)}. Close at the{" "}
+        {plan.exit_session} close, win or lose.
+      </div>
+      {plan.market_too_wide && (
+        <div className="neg">
+          Quoted market too wide: paying it costs {num(plan.natural)}.
+        </div>
+      )}
+      {plan.notes.map((item) => (
+        <div key={item}>- {item}</div>
+      ))}
+      <div className="muted">{plan.status}</div>
+    </div>
   );
 }

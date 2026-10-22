@@ -388,6 +388,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print the full record for every strategy, including the retired ones.",
     )
     ideas.add_argument("--json", action="store_true")
+    ideas.add_argument(
+        "--no-plans",
+        action="store_true",
+        help="Skip the call debit spread plans, and the chain fetches they need.",
+    )
 
     position = sub.add_parser("position", help="Track positions you actually hold.")
     position_sub = position.add_subparsers(dest="position_command", required=True)
@@ -1167,7 +1172,7 @@ def _cmd_ideas(settings: Settings, args: argparse.Namespace) -> int:
     import json as json_module
 
     from optscan.console import Console
-    from optscan.jobs.ideas import REGISTRY, Status, as_report, find_ideas
+    from optscan.jobs.ideas import REGISTRY, Status, as_report, find_ideas, spread_plans
 
     console = Console.for_stream(settings.color_mode)
     ideas, notes = find_ideas(
@@ -1177,8 +1182,10 @@ def _cmd_ideas(settings: Settings, args: argparse.Namespace) -> int:
         include_provisional=args.provisional,
     )
 
+    plans = None if args.no_plans else spread_plans(settings, ideas)
+
     if args.json:
-        print(json_module.dumps(as_report(ideas, notes), indent=2))
+        print(json_module.dumps(as_report(ideas, notes, plans=plans), indent=2))
         return 0
 
     if args.evidence:
@@ -1210,7 +1217,16 @@ def _cmd_ideas(settings: Settings, args: argparse.Namespace) -> int:
                 f"{idea.price:>9.2f} {idea.cost * 10_000:>6.0f}bp "
                 f"{idea.horizon:>4}d  {idea.strategy_key}"
             )
+            _print_spread_plan((plans or {}).get(idea.symbol), console)
         print()
+        if plans:
+            print(
+                console.dim(
+                    "  Spread plans are a lead under forward test, not a validated trade: "
+                    "the bounce is validated on the stock, and this expression missed its "
+                    "pre-registered gate. Max loss is the whole debit."
+                )
+            )
 
     for note in notes:
         print(console.warn(note))
@@ -1230,6 +1246,33 @@ def _cmd_ideas(settings: Settings, args: argparse.Namespace) -> int:
             )
         )
     return 0
+
+
+def _print_spread_plan(plan: dict | None, console) -> None:
+    """One trigger's call debit spread, as the order you would place.
+
+    The fill guidance is printed as prominently as the strikes because the overnight
+    study found the fill, not the signal, decides whether this trade makes money.
+    """
+    if plan is None:
+        return
+    if "refused" in plan:
+        print(console.dim(f"           no spread plan: {plan['refused']}"))
+        return
+    source = "mid" if plan["quoted"] else "model est."
+    print(
+        f"           BUY {plan['long_strike']:g}C / SELL {plan['short_strike']:g}C "
+        f"exp {plan['expiry']} ({plan['dte']}d)  at the {plan['entry_session']} open"
+    )
+    print(
+        f"           debit {plan['debit']:.2f} ({source})  limit {plan['limit']:.2f}  "
+        f"walk away above {plan['walk_away']:.2f}  max loss ${plan['max_loss']:,.0f}"
+    )
+    print(f"           close at the {plan['exit_session']} close, win or lose")
+    if plan["market_too_wide"]:
+        print(console.warn(f"           quoted market too wide: natural {plan['natural']:.2f}"))
+    for note in plan["notes"]:
+        print(console.dim(f"           - {note}"))
 
 
 def _walk_forward(settings: Settings, args: argparse.Namespace, template, console) -> int:

@@ -415,18 +415,136 @@ def find_ideas(
     return ideas, notes
 
 
+#: The strategy whose triggers get a call debit spread plan attached.
+SPREAD_PLAN_STRATEGY = "oversold_bounce"
+
+
+def spread_plans(
+    settings: Settings,
+    ideas: Sequence[Idea],
+    *,
+    provider_factory=None,
+) -> dict[str, dict[str, object]]:
+    """A call debit spread plan, or the reason there is none, per bounce trigger.
+
+    Keyed by symbol. Each value is either a plan's `as_dict()` or `{"refused": reason}`,
+    so a row with no plan still says why, which is the difference between "nothing to
+    buy" and "the chain could not be fetched". The plan is a lead under forward test:
+    see `analytics/bounce_spread.py` for its status and the reasoning behind each leg.
+
+    Chains come through the same cached loaders as the gamma panel, so a dashboard
+    refresh within five minutes costs no vendor request.
+    """
+    # Deferred: the loaders live with the API's caches, and importing them at module
+    # level would make the CLI pay for the web stack to list a few tickers.
+    from optscan.analytics.bounce_spread import (  # noqa: PLC0415
+        HOLD_SESSIONS,
+        SpreadPlan,
+        choose_expiry,
+        next_session,
+        plan_spread,
+        session_after,
+    )
+    from optscan.api.deps import oi_chain, oi_expiries  # noqa: PLC0415
+    from optscan.market_calendar import (  # noqa: PLC0415
+        SessionState,
+        is_trading_day,
+        market_local_date,
+        session_state,
+    )
+
+    now = datetime.now(UTC)
+    state = session_state(now, settings.market_calendar, settings.market_timezone)
+    outside = state is not SessionState.OPEN
+    today = market_local_date(now, settings.market_timezone)
+    open_has_passed = state in (SessionState.OPEN, SessionState.POST)
+
+    def trading(day):
+        return is_trading_day(day, settings.market_calendar)
+
+    plans: dict[str, dict[str, object]] = {}
+    for idea in ideas:
+        if idea.strategy_key != SPREAD_PLAN_STRATEGY or idea.symbol in plans:
+            continue
+        entry = next_session(idea.session, trading)
+        exit_ = session_after(entry, HOLD_SESSIONS, trading)
+
+        listed, note = oi_expiries(idea.symbol, provider_factory=provider_factory)
+        if not listed:
+            plans[idea.symbol] = {"refused": note or f"No options listed for {idea.symbol}."}
+            continue
+        expiry = choose_expiry(listed, entry, exit_)
+        if expiry is None:
+            plans[idea.symbol] = {
+                "refused": (
+                    f"No listed expiry 10 to 25 days after {entry} that lands after the "
+                    f"{exit_} exit, so there is no contract close to the one studied."
+                )
+            }
+            continue
+        chain, note = oi_chain(idea.symbol, expiry, provider_factory=provider_factory)
+        if chain is None:
+            plans[idea.symbol] = {"refused": note or f"No chain for {expiry}."}
+            continue
+
+        plan = plan_spread(
+            idea.symbol,
+            chain,
+            idea.price,
+            idea.session,
+            entry,
+            exit_,
+            rate=settings.risk_free_rate,
+            quoted_outside_session=outside,
+        )
+        if not isinstance(plan, SpreadPlan):
+            plans[idea.symbol] = {"refused": plan}
+            continue
+        row = plan.as_dict()
+        if idea.age == 0 and entry == today and open_has_passed:
+            row["notes"] = [
+                "The study filled at today's open, which has passed. Entering now is a "
+                "later fill than the one tested.",
+                *row["notes"],  # type: ignore[misc]
+            ]
+        if idea.age > 0:
+            row["notes"] = [
+                f"Triggered {idea.age} session(s) ago. The study entered at the next open, "
+                f"{entry}, which has passed; a later entry is not the trade that was tested.",
+                *row["notes"],  # type: ignore[misc]
+            ]
+        plans[idea.symbol] = row
+    return plans
+
+
 def as_report(
-    ideas: Sequence[Idea], notes: Sequence[str], *, now: datetime | None = None
+    ideas: Sequence[Idea],
+    notes: Sequence[str],
+    *,
+    now: datetime | None = None,
+    plans: dict[str, dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """The whole surface as plain data, evidence included.
 
     The evidence travels with the ideas rather than being available on request. A list of
     tickers with no numbers attached is exactly the artefact this module exists to avoid
-    producing.
+    producing. So does the spread plan, when one was asked for.
     """
+    rows = []
+    for idea in ideas:
+        row = idea.as_dict()
+        attached = (
+            (plans or {}).get(idea.symbol) if idea.strategy_key == SPREAD_PLAN_STRATEGY else None
+        )
+        if attached is not None:
+            if "refused" in attached:
+                row["spread_plan_note"] = attached["refused"]
+            else:
+                row["spread_plan"] = attached
+        rows.append(row)
     return {
         "generated_at": (now or datetime.now(UTC)).isoformat(),
-        "ideas": [idea.as_dict() for idea in ideas],
+        "ideas": rows,
         "strategies": [item.as_dict() for item in REGISTRY],
         "notes": list(notes),
     }
