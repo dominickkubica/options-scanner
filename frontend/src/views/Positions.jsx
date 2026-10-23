@@ -103,7 +103,11 @@ function PositionPanel({ position }) {
       }
     >
       <div className="stats">
-        <Stat label="entry credit" value={money(position.entry_credit, 2)} />
+        <Stat
+          label={position.entry_credit < 0 ? "entry debit" : "entry credit"}
+          value={money(Math.abs(position.entry_credit), 2)}
+        />
+        {position.exit_on && <Stat label="exit at the close of" value={position.exit_on} />}
         <Stat
           label="unrealized"
           value={money(position.unrealized, 2)}

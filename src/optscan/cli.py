@@ -7,6 +7,7 @@ module that is testable without a terminal.
 from __future__ import annotations
 
 import argparse
+import json
 from collections import Counter
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
@@ -21,7 +22,17 @@ from optscan.screener.config import ScreenConfig
 #: happened. Exactly the scheduled jobs: logging `status` or `config` would bury the
 #: rows that matter under rows nobody asked about.
 TRACKED_JOBS = frozenset(
-    {"snapshot", "capture", "prices", "record", "resolve", "backup", "manage", "signals"}
+    {
+        "snapshot",
+        "capture",
+        "prices",
+        "record",
+        "resolve",
+        "backup",
+        "manage",
+        "signals",
+        "conditions",
+    }
 )
 
 
@@ -421,6 +432,33 @@ def build_parser() -> argparse.ArgumentParser:
     pos_add.add_argument("--commission", type=float, default=0.0, help="Paid to open.")
     pos_add.add_argument("--strategy", default=None, help="Optional label, e.g. cash_secured_put.")
     pos_add.add_argument("--note", default=None)
+    pos_add.add_argument(
+        "--exit-on", default=None, help="Session whose close the plan exits at, YYYY-MM-DD."
+    )
+    pos_add.add_argument(
+        "--from-idea",
+        action="store_true",
+        help=(
+            "Attach today's spread plan for this symbol from the ideas list: labels it "
+            "call_debit_spread, sets the planned exit, and keeps the plan for the "
+            "forward test. Refuses when the symbol has no current plan."
+        ),
+    )
+
+    sub.add_parser(
+        "forward-test",
+        help="The spread plans you actually took: fills and outcomes against the plan.",
+    )
+
+    pos_plan = position_sub.add_parser(
+        "plan", help="Attach a strategy, a planned exit or a plan to a stored position."
+    )
+    pos_plan.add_argument("id", type=int)
+    pos_plan.add_argument("--strategy", default=None)
+    pos_plan.add_argument("--exit-on", default=None, help="YYYY-MM-DD.")
+    pos_plan.add_argument(
+        "--plan-json", type=Path, default=None, help="A JSON file holding the plan as printed."
+    )
 
     pos_close = position_sub.add_parser("close", help="Mark a position closed.")
     pos_close.add_argument("id", type=int)
@@ -1918,6 +1956,30 @@ def _parse_leg(spec: str, expiry: date, quantity: int):
     )
 
 
+def _cmd_forward_test(settings: Settings, args: argparse.Namespace) -> int:
+    from optscan.jobs.forward_test import forward_trades, report_lines
+
+    for line in report_lines(forward_trades(settings)):
+        print(line)
+    return 0
+
+
+def _idea_plan(settings: Settings, symbol: str) -> dict | None:
+    """Today's spread plan for one symbol from the ideas list, or None with the reason."""
+    from optscan.jobs.ideas import find_ideas, spread_plans
+
+    ideas, _ = find_ideas(settings, [symbol.upper()])
+    if not ideas:
+        print(f"{symbol.upper()} is not on the ideas list now, so there is no plan to attach.")
+        return None
+    plan = spread_plans(settings, ideas).get(symbol.upper())
+    if not plan or "refused" in plan:
+        reason = plan["refused"] if plan else "no plan was built"
+        print(f"No spread plan for {symbol.upper()}: {reason}")
+        return None
+    return {**plan, "attached_at": datetime.now(UTC).isoformat()}
+
+
 def _cmd_position(settings: Settings, args: argparse.Namespace) -> int:
     from optscan.models.position import Position
     from optscan.storage import db
@@ -1929,31 +1991,73 @@ def _cmd_position(settings: Settings, args: argparse.Namespace) -> int:
             if not held:
                 print("No open positions. Add one with `optscan position add`.")
                 return 0
-            print(f"{'id':>4}  {'symbol':<6} {'expiry':<10} {'legs':>4}  {'credit':>9}  note")
+            print(
+                f"{'id':>4}  {'symbol':<6} {'expiry':<10} {'opened for':>14}  "
+                f"{'exit at close':<13}  legs"
+            )
             for item in held:
                 legs = ", ".join(f"{leg.action}:{leg.right}:{leg.strike:g}" for leg in item.legs)
+                kind = "credit" if item.entry_credit > 0 else "debit"
+                opened = f"{abs(item.entry_credit):.2f} {kind}"
+                exit_on = str(item.exit_on) if item.exit_on else "-"
                 print(
-                    f"{item.id:>4}  {item.symbol:<6} {item.expiry}  {len(item.legs):>4}  "
-                    f"{item.entry_credit:>9.2f}  {legs}"
+                    f"{item.id:>4}  {item.symbol:<6} {item.expiry}  {opened:>14}  "
+                    f"{exit_on:<13}  {legs}"
                 )
             return 0
 
         if args.position_command == "add":
             expiry = date.fromisoformat(args.expiry)
             legs = tuple(_parse_leg(spec, expiry, args.quantity) for spec in args.leg)
+            strategy, exit_on, plan = args.strategy, args.exit_on, None
+            if args.from_idea:
+                plan = _idea_plan(settings, args.symbol)
+                if plan is None:
+                    return 1
+                strategy = strategy or "call_debit_spread"
+                exit_on = exit_on or str(plan["exit_session"])
             stored = store.add_position(
                 conn,
                 Position(
                     symbol=args.symbol,
                     legs=legs,
                     opened_at=datetime.now(UTC),
-                    strategy=args.strategy,
+                    strategy=strategy,
                     commission_open=args.commission,
                     note=args.note,
+                    exit_on=date.fromisoformat(exit_on) if exit_on else None,
+                    plan=plan,
                 ),
             )
+            kind = "credit" if stored.entry_credit > 0 else "debit"
             print(f"Recorded position {stored.id}: {stored.symbol} {stored.expiry}")
-            print(f"  entry credit {stored.entry_credit:+.2f}, net {stored.net_credit:+.2f}")
+            print(
+                f"  opened for a {kind} of {abs(stored.entry_credit):.2f}, "
+                f"{abs(stored.net_credit):.2f} after commission"
+            )
+            if stored.exit_on:
+                print(f"  planned exit: the {stored.exit_on} close")
+            return 0
+
+        if args.position_command == "plan":
+            plan = (
+                json.loads(args.plan_json.read_text(encoding="utf-8")) if args.plan_json else None
+            )
+            updated = store.set_plan(
+                conn,
+                args.id,
+                strategy=args.strategy,
+                exit_on=date.fromisoformat(args.exit_on) if args.exit_on else None,
+                plan=plan,
+            )
+            if updated is None:
+                print(f"No position {args.id}.")
+                return 1
+            print(
+                f"Position {args.id}: strategy {updated.strategy or '-'}, "
+                f"exit at the {updated.exit_on or '-'} close, "
+                f"plan {'kept' if updated.plan else '-'}"
+            )
             return 0
 
         if args.position_command == "close":
@@ -2585,6 +2689,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "prices": _cmd_prices,
         "premium": _cmd_premium,
         "map": _cmd_map,
+        "forward-test": _cmd_forward_test,
         "history": _cmd_history,
         "trades": _cmd_trades,
         "import-fill-times": _cmd_import_fill_times,

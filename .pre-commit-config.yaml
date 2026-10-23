@@ -1,3 +1,8 @@
+# Commits run the fast checks; the full suite runs on push, here and again in CI
+# (.github/workflows/tests.yml). `pre-commit install` sets up both hook types.
+default_install_hook_types: [pre-commit, pre-push]
+default_stages: [pre-commit]
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -23,12 +28,19 @@ repos:
       # Wrapped in cmd because Windows resolves a bare relative exe path against the
       # system directory, which starts the venv python with a wrong sys.prefix and
       # then cannot find pytest. cmd resolves it against the repo root correctly.
-      - id: pytest
-        name: pytest
-        entry: cmd /c "venv\Scripts\python.exe -m pytest"
+      - id: quick-tests
+        name: map and trap tests
+        entry: cmd /c "venv\Scripts\python.exe -m pytest tests/test_map.py tests/test_traps.py"
         language: system
         pass_filenames: false
         types: [python]
+      - id: pytest
+        name: full suite
+        entry: cmd /c "venv\Scripts\python.exe -m pytest"
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
       # On every commit, not only Python ones: a view, a route call in api.js or a note
       # can change the map without touching a .py file, and the suite above would not run.
       - id: map

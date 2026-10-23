@@ -11,6 +11,7 @@ From `jobs/schedule.py` `jobs()`, at the shipped default times (market time). Th
 | `prices` | 16:05 | once | no | yes | `optscan prices sync --provider alpaca --days 10` |
 | `record` | 16:15 | once | yes | yes | `optscan record` |
 | `signals` | 16:20 | once | no | yes | `optscan signals` |
+| `conditions` | 16:25 | once | no | yes | `optscan conditions` |
 | `backup` | 16:30 | once | yes | no | `optscan backup` |
 | `resolve` | 08:00 | once | yes | no | `optscan resolve` |
 | `manage` | 09:30 | every 15 min for 390 min | no | yes | `optscan manage` |

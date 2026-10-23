@@ -88,6 +88,11 @@ PRICE_REFRESH_DAYS = 10
 #: put this job's writes either side of the copy depending on which finished first.
 SIGNALS_DELAY_MINUTES = PRICES_DELAY_MINUTES + 15
 
+#: The forward gamma record runs after `record` and before `backup`, so the day's row is
+#: in the copy. Open interest is published once a day, overnight, so any time after the
+#: close reads the same numbers; this slot keeps its chain fetches off the 15:45 capture.
+CONDITIONS_DELAY_MINUTES = 10
+
 MINUTES_PER_HOUR = 60
 MINUTES_PER_DAY = 24 * MINUTES_PER_HOUR
 
@@ -250,6 +255,21 @@ def jobs(settings: Settings) -> tuple[ScheduledJob, ...]:
             # Off by default. It depends on the price sync, which is itself off by
             # default because it needs Alpaca keys, and a scan of bars nobody is
             # refreshing would quietly report the same stale day forever.
+            default_install=False,
+        ),
+        ScheduledJob(
+            key="conditions",
+            task_name="OptscanDailyConditions",
+            arguments="-m optscan conditions",
+            at=shift(settings.record_time, CONDITIONS_DELAY_MINUTES),
+            summary=(
+                "Record each watchlist symbol's gamma regime, walls, levels and "
+                "indicators for the day. No vendor sells historical per-strike open "
+                "interest, so this record is the only gamma history there will be, and "
+                "a skipped day is a permanent gap."
+            ),
+            # Off by default: one chain fetch per expiry per symbol from a vendor that
+            # throttles silently. Worth it, but a decision rather than a default.
             default_install=False,
         ),
         ScheduledJob(

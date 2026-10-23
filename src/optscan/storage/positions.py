@@ -11,6 +11,7 @@ nobody could explain.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, date, datetime
 
@@ -43,6 +44,8 @@ def _row_to_position(row: sqlite3.Row, legs: list[PositionLeg]) -> Position:
         closed_at=datetime.fromisoformat(row["closed_at"]) if row["closed_at"] else None,
         close_value=row["close_value"],
         note=row["note"],
+        exit_on=date.fromisoformat(row["exit_on"]) if row["exit_on"] else None,
+        plan=json.loads(row["plan"]) if row["plan"] else None,
     )
 
 
@@ -52,8 +55,8 @@ def add_position(conn: sqlite3.Connection, position: Position) -> Position:
         """
         INSERT INTO position
             (symbol, strategy, opened_at, commission_open, commission_close,
-             status, closed_at, close_value, note)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             status, closed_at, close_value, note, exit_on, plan)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             position.symbol,
@@ -65,6 +68,8 @@ def add_position(conn: sqlite3.Connection, position: Position) -> Position:
             position.closed_at.astimezone(UTC).isoformat() if position.closed_at else None,
             position.close_value,
             position.note,
+            position.exit_on.isoformat() if position.exit_on else None,
+            json.dumps(position.plan, sort_keys=True) if position.plan else None,
         ),
     )
     identifier = int(cursor.lastrowid or 0)
@@ -178,6 +183,41 @@ def close_position(
     )
     conn.commit()
     return closed
+
+
+def set_plan(
+    conn: sqlite3.Connection,
+    identifier: int,
+    *,
+    strategy: str | None = None,
+    exit_on: date | None = None,
+    plan: dict | None = None,
+) -> Position | None:
+    """Attach a strategy label, a planned exit or a plan to a stored position.
+
+    Only the fields given change. For a position entered before its plan was known,
+    or entered from a version that could not label it.
+    """
+    position = get_position(conn, identifier)
+    if position is None:
+        return None
+    update = {
+        key: value
+        for key, value in (("strategy", strategy), ("exit_on", exit_on), ("plan", plan))
+        if value is not None
+    }
+    updated = Position.model_validate({**position.model_dump(), **update})
+    conn.execute(
+        "UPDATE position SET strategy = ?, exit_on = ?, plan = ? WHERE id = ?",
+        (
+            str(updated.strategy) if updated.strategy else None,
+            updated.exit_on.isoformat() if updated.exit_on else None,
+            json.dumps(updated.plan, sort_keys=True) if updated.plan else None,
+            identifier,
+        ),
+    )
+    conn.commit()
+    return updated
 
 
 def delete_position(conn: sqlite3.Connection, identifier: int) -> int:

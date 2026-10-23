@@ -45,5 +45,7 @@ def generators_for(names: tuple[str, ...]) -> list[StrategyGenerator]:
         except ValueError as error:
             known = ", ".join(sorted(s.value for s in Strategy))
             raise ValueError(f"unknown strategy {name!r}. Known strategies: {known}") from error
+        if strategy not in GENERATORS:
+            raise ValueError(f"{name!r} is a position type, not one the screener builds")
         resolved.append(GENERATORS[strategy])
     return resolved

@@ -140,6 +140,11 @@ class Position(UserRecord):
     #: than derived so a closed position's P/L is history and not a re-marked estimate.
     close_value: float | None = None
     note: str | None = None
+    #: The session whose close the plan says to exit at. `manage` raises it on the day.
+    exit_on: date | None = None
+    #: The plan as the ideas list printed it, kept so a forward test compares the fill
+    #: and the outcome with what was planned rather than with what anyone remembers.
+    plan: dict | None = None
 
     @model_validator(mode="after")
     def _closed_positions_say_when(self) -> Self:

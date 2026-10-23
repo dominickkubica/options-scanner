@@ -99,6 +99,7 @@ Every module under `src/optscan`, with its docstring's first line.
 | `jobs/backtest.py` | Running a strategy against stored history, and saying what the answer is worth. |
 | `jobs/backup.py` | Backing up the two things in `data/` that cannot be rebuilt. |
 | `jobs/conditions.py` | Record every condition a future study might filter on, once per session. |
+| `jobs/forward_test.py` | The forward test of the bounce's spread plan: real fills against the plan they came from. |
 | `jobs/health.py` | Whether the recurring jobs are actually running. |
 | `jobs/ideas.py` | Trade ideas: strategies that survived validation, and what is triggering them today. |
 | `jobs/launcher.py` | Opening the dashboard without a terminal. |

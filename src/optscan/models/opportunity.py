@@ -31,6 +31,9 @@ class Strategy(StrEnum):
     CALL_CREDIT_SPREAD = "call_credit_spread"
     IRON_CONDOR = "iron_condor"
     SHORT_STRANGLE = "short_strangle"
+    #: Held, never screened: the oversold bounce's spread plan is built by
+    #: `analytics/bounce_spread.py`, and positions opened from it are labelled with this.
+    CALL_DEBIT_SPREAD = "call_debit_spread"
 
     @property
     def defined_risk(self) -> bool:
@@ -44,7 +47,13 @@ class Strategy(StrEnum):
             Strategy.PUT_CREDIT_SPREAD,
             Strategy.CALL_CREDIT_SPREAD,
             Strategy.IRON_CONDOR,
+            Strategy.CALL_DEBIT_SPREAD,
         }
+
+
+#: Shapes a held position can have that the screener never builds. The screener's
+#: registry must cover every other member, so a new screened shape cannot be forgotten.
+POSITION_ONLY = frozenset({Strategy.CALL_DEBIT_SPREAD})
 
 
 class Action(StrEnum):

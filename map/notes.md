@@ -50,7 +50,9 @@ The settlement of each logged candidate once its expiry has passed.
 
 ### table:position
 fact: c2684b94cfc6
-Positions entered by hand with `optscan position add`.
+Positions entered by hand with `optscan position add`. A position opened from a spread
+plan carries `exit_on` (the close `manage` raises on the day) and `plan` (the plan as
+printed), which `optscan forward-test` reads back against the fill.
 
 ### table:position_leg
 fact: c2684b94cfc6
@@ -106,7 +108,7 @@ Every look at a held-out period, so a holdout is spent knowingly.
 fact: 65799ccff487
 Per-symbol daily gamma regime and indicators, recorded forward by `optscan conditions`.
 No vendor sells historical per-strike open interest, so this record is the only gamma
-history there will ever be. Not scheduled: see the gap in `MAP.md`.
+history there will ever be. Written by the `conditions` job once the user installs it.
 
 ## Scheduled jobs
 
@@ -134,6 +136,12 @@ scores the stored snapshot.
 fact: 8f4de6101cdd
 Evaluates stored bars for level breaks, squeezes and volume surges. Off by default
 because it depends on `prices`.
+
+### job:conditions
+fact: a0939e1837bf
+Records the forward gamma history into `daily_condition` at 16:25. Off by default
+(chain fetches against a vendor that throttles silently); installed with
+`optscan schedule --install conditions`, which the user runs themselves.
 
 ### job:backup
 fact: 510f9e04b569

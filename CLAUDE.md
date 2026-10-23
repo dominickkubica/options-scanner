@@ -214,7 +214,7 @@ under "Archived from CLAUDE.md, 2026-10-22"):
 | 2026-09-13 | the short premium study (`optscan premium`, 0-1 DTE QQQ/SPY option tape) |
 | 2026-09-17 | iron butterfly in the premium engine; open interest and gamma levels |
 | 2026-10-21 | validation metric is return on capital within strategy; `optscan conditions` (forward gamma record); managed vertical spreads + `in_sigmas` in the backtester; overnight entry-edge studies in `scripts/studies/` |
-| 2026-10-22 | call debit spread plans on oversold bounce ideas; study harness; `scripts/check.ps1`; generated wiring map (`optscan map`, `map/`), trap tests, CI workflow, `docs/` + `scripts/build_doc.py` |
+| 2026-10-22 | call debit spread plans on oversold bounce ideas; study harness; `scripts/check.ps1`; generated wiring map (`optscan map`, `map/`), trap tests, CI workflow, `docs/` + `scripts/build_doc.py`; debit positions with planned exits, `optscan forward-test`, `conditions` job, suite on pre-push |
 
 ### Where things stand (2026-10-22)
 

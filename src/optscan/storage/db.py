@@ -589,6 +589,14 @@ MIGRATIONS: tuple[str | Callable[[sqlite3.Connection], None], ...] = (
     );
     CREATE INDEX idx_daily_condition_symbol ON daily_condition (symbol, session_date);
     """,
+    # 15: a position can carry the plan it was opened from. `exit_on` is the session
+    # whose close the plan says to exit at, so `manage` can say so on the day; `plan` is
+    # the plan as the ideas list printed it (JSON), so a forward test can compare the
+    # fill and the outcome against what was planned rather than against memory.
+    """
+    ALTER TABLE position ADD COLUMN exit_on TEXT;
+    ALTER TABLE position ADD COLUMN plan TEXT;
+    """,
 )
 
 

@@ -67,12 +67,14 @@ class TriggerKind(StrEnum):
     ASSIGNMENT_RISK = "assignment_risk"
     EARNINGS = "earnings"
     EXPIRED = "expired"
+    PLANNED_EXIT = "planned_exit"
 
 
 #: How loud each kind is. Used for ordering and for deciding what reaches an alert
 #: sink, never for deciding what to do.
 SEVERITY: dict[TriggerKind, int] = {
     TriggerKind.EXPIRED: 5,
+    TriggerKind.PLANNED_EXIT: 4,
     TriggerKind.ASSIGNMENT_RISK: 4,
     TriggerKind.TESTED: 3,
     TriggerKind.DELTA_BREACH: 3,
@@ -133,6 +135,29 @@ def evaluate(
                 threshold=0.0,
             )
         )
+
+    exit_on = getattr(position, "exit_on", None)
+    if exit_on is not None and asof >= exit_on:
+        late = (asof - exit_on).days
+        triggers.append(
+            Trigger(
+                kind=TriggerKind.PLANNED_EXIT,
+                message=(
+                    "The plan exits at today's close, win or lose."
+                    if late == 0
+                    else f"The plan exited at the {exit_on} close, {late} days ago, and "
+                    "this is still open. A later exit is not the trade that was tested."
+                ),
+                value=float(late),
+                threshold=0.0,
+            )
+        )
+
+    # The rules below were written for premium selling: a net debit position has no
+    # short strike to defend, and its exit is the plan's date rather than the DTE.
+    if position.entry_credit <= 0:
+        triggers.extend(_event_triggers(risk, asof=asof, events=events, window=assignment_window))
+        return sorted(triggers, key=lambda item: (-item.severity, item.kind))
 
     fraction = risk.profit_fraction
     if fraction is not None and fraction >= profit_target:

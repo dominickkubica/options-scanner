@@ -74,5 +74,5 @@ That decides what can be backtested (`trap:what-can-be-backtested` in the notes)
 
 ## Known gaps
 
-- `jobs/conditions.py` is not a scheduled job, so the forward gamma record grows only
-  when someone runs `optscan conditions`.
+- The `conditions` job exists but is off by default; until it is installed the forward
+  gamma record grows only when someone runs `optscan conditions`.

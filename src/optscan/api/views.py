@@ -414,6 +414,7 @@ def _position_view(risk, triggers) -> PositionOut:
         ],
         entry_credit=position.entry_credit,
         net_credit=position.net_credit,
+        exit_on=position.exit_on,
         unrealized=risk.unrealized,
         profit_fraction=risk.profit_fraction,
         delta=risk.delta,

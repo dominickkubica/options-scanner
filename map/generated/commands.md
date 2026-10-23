@@ -10,6 +10,7 @@ Every `optscan` command, its handler in `cli.py`, and the modules the handler im
 | `backup` | `_cmd_backup` | `jobs/backup.py` |
 | `conditions` | `_cmd_conditions` | `jobs/conditions.py`, `storage/conditions.py`, `storage/db.py` |
 | `config` | `_cmd_config` | `screener/config.py` |
+| `forward-test` | `_cmd_forward_test` | `jobs/forward_test.py` |
 | `health` | `_cmd_health` | `console.py`, `jobs/health.py` |
 | `history` | `_cmd_history` | `analytics/ivrank.py`, `console.py`, `storage/db.py`, `storage/vendor.py` |
 | `ideas` | `_cmd_ideas` | `console.py`, `jobs/ideas.py` |
@@ -18,7 +19,7 @@ Every `optscan` command, its handler in `cli.py`, and the modules the handler im
 | `import` | `_cmd_import` | `imports/`, `storage/db.py`, `storage/ledger.py` |
 | `manage` | `_cmd_manage` | `jobs/manage.py`, `providers/`, `screener/config.py` |
 | `map` | `_cmd_map` | `repomap.py` |
-| `position` | `_cmd_position` | `storage/db.py`, `storage/positions.py` |
+| `position` | `_cmd_position` | `jobs/ideas.py`, `storage/db.py`, `storage/positions.py` |
 | `premium` | `_cmd_premium` | `analytics/premium.py`, `console.py`, `jobs/option_tape.py`, `jobs/premium.py`, `providers/` |
 | `prices` | `_cmd_prices` | `console.py`, `jobs/prices.py`, `jobs/vol_indices.py`, `providers/`, `universe.py` |
 | `record` | `_cmd_record` | `jobs/validate.py`, `screener/config.py` |

@@ -14,6 +14,7 @@ import pytest
 
 from optscan.analytics.events import EventWindow
 from optscan.models import ChainSnapshot, Right, Strategy
+from optscan.models.opportunity import POSITION_ONLY
 from optscan.screener.config import DteFilter, Filters, ScreenConfig
 from optscan.screener.context import analyze_snapshot
 from optscan.screener.gaps import (
@@ -98,7 +99,7 @@ class TestContext:
 
 class TestStrategies:
     def test_registry_covers_every_strategy(self) -> None:
-        assert set(GENERATORS) == set(Strategy)
+        assert set(GENERATORS) == set(Strategy) - POSITION_ONLY
 
     def test_unknown_strategy_name_is_an_error(self) -> None:
         """A typo in config must not silently disable a strategy."""

@@ -644,6 +644,9 @@ class PositionOut(ApiModel):
     legs: list[PositionLegOut] = Field(default_factory=list)
     entry_credit: float
     net_credit: float
+    exit_on: date | None = Field(
+        default=None, description="The session whose close the position's plan exits at."
+    )
     unrealized: float | None = Field(
         default=None,
         description="Null when any leg could not be marked. A partial mark is not a P/L.",

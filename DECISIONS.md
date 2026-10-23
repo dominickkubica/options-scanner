@@ -3732,6 +3732,30 @@ served but no dashboard file calls it.
 `scripts/build_doc.py` builds the PDF into `dist/` from it. No "v1/v2" or change history
 in documents an assistant loads: those words are context to read and discard.
 
+## 2026-10-22, evening: debit spreads as positions, and the forward test
+
+The first real fill from a spread plan (RIO 85/95C, 2.20 against a 2.30 mid) could not
+be labelled: `Strategy` had no debit shape, and every position alert was written for
+premium selling. Now:
+
+- `Strategy.CALL_DEBIT_SPREAD`, listed in `POSITION_ONLY` because the screener never
+  builds it; `generators_for` refuses it by name.
+- Migration 15: `position.exit_on` and `position.plan`. `optscan position add
+  --from-idea` attaches today's plan from the ideas list and sets the exit;
+  `optscan position plan` attaches one later (the RIO plan was entered this way, as
+  printed). `manage` raises `PLANNED_EXIT` on the day and every day after it.
+- A net debit position no longer gets the profit-target, DTE, delta-breach or tested
+  triggers: for a call debit spread a crossed short strike is the best case.
+- `optscan forward-test` reads the plans back: fill against mid (the study assumed
+  +5% and lost the edge near +15%), entry and exit against the plan, return on the
+  debit, and how many trades were exactly the tested trade.
+- The full suite moved from every commit to every push (`pre-push`, and CI); commits
+  run lint, format, the map check and the map and trap tests.
+- The `conditions` job is now in the schedule, off by default.
+- `scripts/studies/rsi_depth_study.py` pre-registers whether RSI (20, 25] beats
+  (25, 30] for the spread, on sessions after 2026-10-23 only; it refuses to run before
+  2028-01-24. The exploratory run that motivated it looked at 20 cells uncorrected.
+
 ## Archived from CLAUDE.md, 2026-10-22
 
 Moved verbatim when CLAUDE.md was trimmed for token cost. CLAUDE.md keeps every rule as a
