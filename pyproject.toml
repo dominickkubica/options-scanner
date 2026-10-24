@@ -142,7 +142,7 @@ quote-style = "double"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --strict-markers"
+addopts = "-q --strict-markers --tb=short"
 filterwarnings = ["error::DeprecationWarning:optscan.*"]
 
 [tool.coverage.run]
