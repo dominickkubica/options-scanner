@@ -3756,6 +3756,19 @@ premium selling. Now:
   (25, 30] for the spread, on sessions after 2026-10-23 only; it refuses to run before
   2028-01-24. The exploratory run that motivated it looked at 20 cells uncorrected.
 
+## 2026-10-23: a slim instruction file and a wiring prefetch hook
+
+Measured in the self-verifying-map benchmark: every agent turn re-reads the instruction
+file, and a 26 KB file was most of what a question cost. `CLAUDE.md` now keeps Stack,
+Rules, Layout and Non-goals plus a short "Working efficiently" section (3 KB); Current
+phase, Conventions and Commands moved unchanged to `docs/agent/`, listed so they load on
+demand. On the benchmark's code changes the slim file kept every hidden test passing.
+
+`.claude/hooks/map_prefetch.py` (a `UserPromptSubmit` hook, `.claude/settings.json`) adds
+the generated map's rows and notes for whatever a prompt names. It is safe only because the
+map is checked against the code; on the benchmark it answered 5 of 7 questions with no
+tool calls at half the cost. It applies to sessions started in this repository.
+
 ## Archived from CLAUDE.md, 2026-10-22
 
 Moved verbatim when CLAUDE.md was trimmed for token cost. CLAUDE.md keeps every rule as a
